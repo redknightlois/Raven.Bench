@@ -9,7 +9,7 @@ public sealed class MixedWorkload : IWorkload
     private readonly int _docSizeBytes;
 
     // Keyspace grows with preload; otherwise we keep inserting sequentially
-    private int _maxKey = 0;
+    private long _maxKey = 0;
 
     public MixedWorkload(WorkloadMix mix, IKeyDistribution distribution, int docSizeBytes)
     {
@@ -23,12 +23,13 @@ public sealed class MixedWorkload : IWorkload
         var p = rng.Next(0, 100);
         if (p < _mix.ReadPercent && _maxKey > 0)
         {
-            var k = _distribution.NextKey(rng, _maxKey);
+            var k = _distribution.NextKey(rng, (int)Math.Min(_maxKey, int.MaxValue));
             return new Operation(OperationType.ReadById, IdFor(k), payload: null);
         }
         if (p < _mix.ReadPercent + _mix.WritePercent)
         {
-            var id = IdFor(++_maxKey);
+            var keyValue = Interlocked.Increment(ref _maxKey);
+            var id = IdFor(keyValue);
             var payload = PayloadGenerator.Generate(_docSizeBytes, rng);
             return new Operation(OperationType.Insert, id, payload);
         }
@@ -36,16 +37,17 @@ public sealed class MixedWorkload : IWorkload
         // Update; if no key yet, insert first
         if (_maxKey == 0)
         {
-            var id = IdFor(++_maxKey);
+            var keyValue = Interlocked.Increment(ref _maxKey);
+            var id = IdFor(keyValue);
             var payload = PayloadGenerator.Generate(_docSizeBytes, rng);
             return new Operation(OperationType.Insert, id, payload);
         }
 
-        var id2 = IdFor(_distribution.NextKey(rng, _maxKey));
+        var id2 = IdFor(_distribution.NextKey(rng, (int)Math.Min(_maxKey, int.MaxValue)));
         var payload2 = PayloadGenerator.Generate(_docSizeBytes, rng);
         return new Operation(OperationType.Update, id2, payload2);
     }
 
-    private static string IdFor(int i) => $"bench/{i:D8}";
+    private static string IdFor(long i) => $"bench/{i:D8}";
 }
 
