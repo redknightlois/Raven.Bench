@@ -1,0 +1,275 @@
+using System.Diagnostics;
+using RavenBench.Metrics;
+using RavenBench.Transport;
+using RavenBench.Workload;
+using RavenBench.Util;
+using RavenBench.Reporting;
+
+
+namespace RavenBench;
+
+public class BenchmarkRunner(RunOptions opts)
+{
+    private readonly Random _rng = new(opts.Seed);
+
+    public async Task<BenchmarkRun> RunAsync()
+    {
+        if (opts.ThreadPoolMin is var tp && tp.HasValue)
+        {
+            ThreadPool.SetMinThreads(tp.Value.workers, tp.Value.iocp);
+        }
+
+        var workload = BuildWorkload(opts);
+        using var transport = BuildTransport(opts);
+
+        if (opts.Preload > 0)
+            await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
+
+        var steps = new List<StepResult>();
+        var concurrency = opts.ConcurrencyStart;
+
+        var cpuTracker = new ProcessCpuTracker();
+
+        var maxNetUtil = 0.0;
+        string clientCompression = transport switch
+        {
+            RavenClientTransport rc => rc.EffectiveCompressionMode,
+            RawHttpTransport raw => raw.EffectiveCompressionMode,
+            _ => "unknown"
+        };
+        string httpVersion = transport switch
+        {
+            RawHttpTransport raw => raw.EffectiveHttpVersion,
+            _ => "client-default"
+        };
+
+        await ValidateServerSanityAsync(transport);
+        
+        // Create benchmark context to reduce parameter passing
+        var context = new BenchmarkContext
+        {
+            Transport = transport,
+            Workload = workload,
+            CpuTracker = cpuTracker,
+            Rng = _rng
+        };
+        
+        while (concurrency <= opts.ConcurrencyEnd)
+        {
+            Console.WriteLine($"[Raven.Bench] Warmup @ concurrency={concurrency} for {opts.Warmup.TotalSeconds:F0}s...");
+            await RunClosedLoopAsync(context, new StepParameters 
+            { 
+                Concurrency = concurrency, 
+                Duration = opts.Warmup, 
+                Record = false 
+            });
+
+            Console.WriteLine($"[Raven.Bench] Measure @ concurrency={concurrency} for {opts.Duration.TotalSeconds:F0}s...");
+            var (s, hist) = await RunClosedLoopAsync(context, new StepParameters 
+            { 
+                Concurrency = concurrency, 
+                Duration = opts.Duration, 
+                Record = true 
+            });
+
+            s.P50Ms = hist.GetPercentile(50) / 1000.0;
+            s.P90Ms = hist.GetPercentile(90) / 1000.0;
+            s.P95Ms = hist.GetPercentile(95) / 1000.0;
+            s.P99Ms = hist.GetPercentile(99) / 1000.0;
+
+            steps.Add(s);
+            maxNetUtil = Math.Max(maxNetUtil, s.NetworkUtilization);
+
+            // knee stop if error rate exceeds bound significantly
+            if (s.ErrorRate > Math.Max(opts.MaxErrorRate, 0.05))
+            {
+                Console.WriteLine("[Raven.Bench] High error rate; stopping ramp.");
+                break;
+            }
+
+            concurrency = (int)Math.Max(concurrency * opts.ConcurrencyFactor, concurrency + 1);
+        }
+
+        return new BenchmarkRun
+        {
+            Steps = steps,
+            MaxNetworkUtilization = maxNetUtil,
+            ClientCompression = clientCompression,
+            EffectiveHttpVersion = httpVersion
+        };
+    }
+
+    private static IWorkload BuildWorkload(RunOptions opts)
+    {
+        var r = opts.Reads ?? 75.0;
+        var w = opts.Writes ?? 25.0;
+        var u = opts.Updates ?? 0.0;
+        var mix = WorkloadMix.FromWeights(r, w, u);
+        
+        IKeyDistribution dist = opts.Distribution.ToLowerInvariant() switch
+        {
+            "uniform" => new UniformDistribution(),
+            "zipfian" => new ZipfianDistribution(),
+            "latest" => new LatestDistribution(),
+            _ => throw new NotImplementedException($"Distribution '{opts.Distribution}' is not implemented. Supported distributions: uniform, zipfian, latest")
+        };
+
+        return new MixedWorkload(mix, dist, opts.DocumentSizeBytes);
+    }
+
+    private static ITransport BuildTransport(RunOptions opts)
+    {
+        if (opts.Compression.StartsWith("raw:"))
+        {
+            var mode = opts.Compression.Split(':')[1];
+            return new RawHttpTransport(opts.Url, opts.Database, mode, opts.HttpVersion, opts.RawEndpoint);
+        }
+        
+        if (opts.Compression.StartsWith("client:"))
+        {
+            var mode = opts.Compression.Split(':')[1];
+            return new RavenClientTransport(opts.Url, opts.Database, mode);
+        }
+        
+        return new RawHttpTransport(opts.Url, opts.Database, "identity", opts.HttpVersion);
+    }
+
+    private static async Task PreloadAsync(ITransport transport, RunOptions opts, int count, Random rng, int docSize)
+    {
+        Console.WriteLine($"[Raven.Bench] Preloading {count} documents...");
+        
+        var options = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = 32
+        };
+        
+        await Parallel.ForEachAsync(
+            Enumerable.Range(1, count),
+            options,
+            async (i, ct) =>
+            {
+                try
+                {
+                    var id = IdFor(i);
+                    await transport.PutAsync(id, PayloadGenerator.Generate(docSize, rng));
+                }
+                catch
+                {
+                    // ignore individual preload failures
+                }
+            });
+            
+        Console.WriteLine("[Raven.Bench] Preload complete.");
+    }
+
+    private static string IdFor(int i) => $"bench/{i:D8}";
+
+    /// <summary>
+    /// Runs a closed-loop benchmark step with simplified parameter passing via context objects.
+    /// </summary>
+    internal async Task<(StepResult result, LatencyRecorder hist)> RunClosedLoopAsync(BenchmarkContext context, StepParameters step)
+    {
+        using var cts = new CancellationTokenSource(step.Duration);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        long success = 0, errors = 0, bytesOut = 0, bytesIn = 0;
+        
+        // REVIEW: all this information is from the client. Shoulnt we be able to hit the RavenDB own's endpoints to get data out of it?
+        // You can access an instance at http://98.87.58.180:9082 in case you need it. 
+        var hist = new LatencyRecorder(recordLatencies: step.Record);
+
+        context.CpuTracker.Reset();
+        context.CpuTracker.Start();
+        
+        // Create concurrent worker tasks for closed-loop benchmark execution
+        var tasks = new Task[step.Concurrency];
+        for (int i = 0; i < step.Concurrency; i++)
+        {
+            tasks[i] = Task.Run(async () =>
+            {
+                await started.Task.ConfigureAwait(false);
+                var rnd = new Random(context.Rng.Next());
+                while (cts.IsCancellationRequested == false)
+                {
+                    var op = context.Workload.NextOperation(rnd);
+                    var t0 = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        var res = await context.Transport.ExecuteAsync(op, cts.Token).ConfigureAwait(false);
+                        var us = ElapsedMicros(t0);
+                        if (step.Record)
+                            hist.Record(us);
+
+                        Interlocked.Increment(ref success);
+                        Interlocked.Add(ref bytesOut, res.BytesOut);
+                        Interlocked.Add(ref bytesIn, res.BytesIn);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        // We do not increment errors because we are asking for it. 
+                    }
+                    catch (Exception e)
+                    {
+                        Interlocked.Increment(ref errors);
+                    }
+                }
+            });
+        }
+
+        started.SetResult();
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        context.CpuTracker.Stop();
+        var cpu = context.CpuTracker.AverageCpu;
+
+        var ops = success + errors;
+        var thr = ops / step.Duration.TotalSeconds;
+        var errRate = ops > 0 ? (double)errors / ops : 0.0;
+        var netBps = (bytesOut + bytesIn) / step.Duration.TotalSeconds * 8.0; // bits per second
+        var linkBps = opts.LinkMbps * 1_000_000.0;
+        var netUtil = linkBps > 0 ? netBps / linkBps : 0.0;
+
+        var stepResult = new StepResult
+        {
+            Concurrency = step.Concurrency,
+            Throughput = thr,
+            ErrorRate = errRate,
+            BytesOut = bytesOut,
+            BytesIn = bytesIn,
+            ClientCpu = cpu, // 0..1
+            NetworkUtilization = netUtil,
+        };
+        
+        return (stepResult, hist);
+    }
+
+    private static long ElapsedMicros(long t0)
+    {
+        var ticks = Stopwatch.GetTimestamp() - t0;
+        return (long)(ticks * 1_000_000.0 / Stopwatch.Frequency);
+    }
+
+    /// <summary>
+    /// Validates server configuration matches expectations to catch environment issues early.
+    /// Checks server core limits to ensure benchmark runs in expected conditions.
+    /// </summary>
+    private async Task ValidateServerSanityAsync(ITransport transport)
+    {
+        try
+        { 
+            if (opts.ExpectedCores.HasValue)
+            {
+                var cores = await transport.GetServerMaxCoresAsync();
+                if (cores.HasValue && cores.Value != opts.ExpectedCores.Value)
+                {
+                    Console.WriteLine($"[Raven.Bench] Warning: Server core limit={cores} differs from expected={opts.ExpectedCores}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // non-fatal - continue with benchmark
+            Console.WriteLine($"[Raven.Bench] Warning: Server validation failed: {ex.Message}");
+        }
+    }
+}

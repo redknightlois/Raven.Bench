@@ -1,0 +1,128 @@
+using System.Globalization;
+using RavenBench.Util;
+
+namespace RavenBench.Cli;
+
+// REVIEW: Is it possible to do this better? This code is a lot of boilerplate, I want to be sure that it is 
+// essential and if I have to put it I want it as dense as possible without losing readability. Simplifying the
+// way we passes parameters is not outside the question. Ask questions about your ideas on how to do it. 
+
+/// <summary>
+/// Converts CLI settings to strongly-typed runtime options with validation and parsing.
+/// </summary>
+internal static class CliParsing
+{
+    /// <summary>
+    /// Converts RunSettings from CLI parsing into RunOptions with validated and parsed values.
+    /// </summary>
+    public static RunOptions ToRunOptions(this RunSettings s)
+    {
+        var (concurrencyStart, concurrencyEnd, concurrencyFactor) = ParseConcurrency(s.Concurrency);
+        var (kneeThroughputDelta, kneeP95Delta) = ParseKneeRule(s.KneeRule);
+        
+        return new RunOptions
+        {
+            Url = RequiredString(s.Url, "--url"),
+            Database = RequiredString(s.Database, "--database"),
+            Reads = ParseNullableWeight(s.Reads),
+            Writes = ParseNullableWeight(s.Writes),
+            Updates = ParseNullableWeight(s.Updates),
+            DocumentSizeBytes = ParseSize(s.DocSize),
+            ConcurrencyStart = concurrencyStart,
+            ConcurrencyEnd = concurrencyEnd,
+            ConcurrencyFactor = concurrencyFactor,
+            Warmup = ParseDuration(s.Warmup),
+            Duration = ParseDuration(s.Duration),
+            MaxErrorRate = ParsePercent(s.MaxErrors),
+            KneeThroughputDelta = kneeThroughputDelta,
+            KneeP95Delta = kneeP95Delta,
+            ThreadPoolMin = ParseTpMin(s.TpMin),
+            Distribution = s.Distribution,
+            Compression = s.Compression,
+            Mode = s.Mode,
+            OutJson = s.OutJson,
+            OutCsv = s.OutCsv,
+            Seed = s.Seed,
+            Preload = s.Preload,
+            RawEndpoint = s.RawEndpoint,
+            Notes = s.Notes,
+            ExpectedCores = s.ExpectedCores,
+            NetworkLimitedMode = s.NetworkLimitedMode,
+            LinkMbps = s.LinkMbps,
+            HttpVersion = s.HttpVersion
+        };
+    }
+
+    private static string RequiredString(string? value, string paramName) =>
+        value ?? throw new ArgumentException($"{paramName} is required");
+
+    private static double? ParseNullableWeight(string? s) => s is not null ? ParseWeight(s) : null;
+
+    public static (int,int,double) ParseConcurrency(string s)
+    {
+        var parts = s.Split("..", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2) throw new ArgumentException("Invalid --concurrency format");
+        var start = int.Parse(parts[0], CultureInfo.InvariantCulture);
+        var right = parts[1];
+        var x = right.IndexOf('x');
+        var end = x >= 0 ? int.Parse(right.Substring(0, x), CultureInfo.InvariantCulture) : int.Parse(right, CultureInfo.InvariantCulture);
+        var factor = x >= 0 ? double.Parse(right.Substring(x + 1), CultureInfo.InvariantCulture) : 2.0;
+        return (start, end, factor);
+    }
+
+    public static (double,double) ParseKneeRule(string s)
+    {
+        var parts = s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        double dthr = 0.05, dp95 = 0.20;
+        foreach (var p in parts)
+        {
+            if (p.StartsWith("dthr=")) dthr = ParsePercent(p.Substring(5));
+            else if (p.StartsWith("dp95=")) dp95 = ParsePercent(p.Substring(5));
+        }
+        return (dthr, dp95);
+    }
+
+    public static (int,int)? ParseTpMin(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var parts = s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 2)
+            return (int.Parse(parts[0]), int.Parse(parts[1]));
+        return null;
+    }
+
+    public static int ParseSize(string s)
+    {
+        s = s.Trim().ToUpperInvariant();
+        if (s.EndsWith("KB")) return int.Parse(s.AsSpan(0, s.Length - 2)) * 1024;
+        if (s.EndsWith("MB")) return int.Parse(s.AsSpan(0, s.Length - 2)) * 1024 * 1024;
+        if (s.EndsWith("B")) return int.Parse(s.AsSpan(0, s.Length - 1));
+        return int.Parse(s);
+    }
+
+    public static TimeSpan ParseDuration(string s)
+    {
+        s = s.Trim().ToLowerInvariant();
+        if (s.EndsWith("ms")) return TimeSpan.FromMilliseconds(double.Parse(s[..^2], CultureInfo.InvariantCulture));
+        if (s.EndsWith("s")) return TimeSpan.FromSeconds(double.Parse(s[..^1], CultureInfo.InvariantCulture));
+        if (s.EndsWith("m")) return TimeSpan.FromMinutes(double.Parse(s[..^1], CultureInfo.InvariantCulture));
+        return TimeSpan.FromSeconds(double.Parse(s, CultureInfo.InvariantCulture));
+    }
+
+    public static double ParsePercent(string s)
+    {
+        s = s.Trim();
+        if (s.EndsWith("%"))
+            return double.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture) / 100.0;
+        return double.Parse(s, CultureInfo.InvariantCulture);
+    }
+
+    public static double ParseWeight(string s)
+    {
+        s = s.Trim();
+        if (s.EndsWith("%"))
+            return double.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture);
+        return double.Parse(s, CultureInfo.InvariantCulture);
+    }
+}
+

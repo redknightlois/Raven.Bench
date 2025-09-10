@@ -1,0 +1,41 @@
+using System.Globalization;
+
+namespace RavenBench.Util;
+
+/// <summary>
+/// Configuration options for running a benchmark, including server settings,
+/// workload parameters, concurrency settings, and output options.
+/// </summary>
+public sealed class RunOptions
+{
+    public required string Url { get; init; }
+    public required string Database { get; init; }
+
+    // Mix defined only via numeric flags (weights or percents)
+    public double? Reads { get; init; }
+    public double? Writes { get; init; }
+    public double? Updates { get; init; }
+    public string Distribution { get; init; } = "uniform";
+    public int DocumentSizeBytes { get; init; } = 4096;
+    public string Compression { get; init; } = "raw:identity"; // client:zstd | client:identity | raw:identity | raw:zstd
+    public string Mode { get; init; } = "closed";
+    public int ConcurrencyStart { get; init; } = 8;
+    public int ConcurrencyEnd { get; init; } = 512;
+    public double ConcurrencyFactor { get; init; } = 2.0;
+    public TimeSpan Warmup { get; init; } = TimeSpan.FromSeconds(20);
+    public TimeSpan Duration { get; init; } = TimeSpan.FromSeconds(60);
+    public double MaxErrorRate { get; init; } = 0.005; // 0.5%
+    public double KneeThroughputDelta { get; init; } = 0.05; // 5%
+    public double KneeP95Delta { get; init; } = 0.20; // 20%
+    public string? OutJson { get; init; }
+    public string? OutCsv { get; init; }
+    public int Seed { get; init; } = 42;
+    public int Preload { get; init; } = 0;
+    public string? RawEndpoint { get; init; }
+    public (int workers, int iocp)? ThreadPoolMin { get; init; }
+    public string? Notes { get; init; }
+    public int? ExpectedCores { get; init; }
+    public bool NetworkLimitedMode { get; init; } = false;
+    public double LinkMbps { get; init; } = 1000.0; // default 1 Gb
+    public string HttpVersion { get; init; } = "1.1"; // or "2"
+}

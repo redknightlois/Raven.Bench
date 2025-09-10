@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>RavenBench</RootNamespace>
+    <AssemblyName>Raven.Bench</AssemblyName>
+  </PropertyGroup>
+
+  <!-- Allow referencing RavenDB 7.1 client from source repo if provided -->
+  <PropertyGroup>
+    <RavenDb71Src>$(RAVENDB71_SRC)</RavenDb71Src>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(RavenDb71Src)' != '' and Exists('$(RavenDb71Src)\\src\\Raven.Client\\Raven.Client.csproj')">
+    <ProjectReference Include="$(RavenDb71Src)\src\Raven.Client\Raven.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(RavenDb71Src)' == ''">
+    <PackageReference Include="RavenDB.Client" Version="7.1.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.4" />
+    <PackageReference Include="Spectre.Console" Version="0.51.1" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.51.1" />
+  </ItemGroup>
+</Project>

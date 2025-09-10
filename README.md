@@ -1,4 +1,4 @@
-RavenBench — Knee-finding RavenDB benchmark (v0)
+Raven.Bench — Knee-finding RavenDB benchmark (v0)
 
 What it does (MVP)
 - Closed-loop runner with ramped concurrency to find the knee.
@@ -16,10 +16,10 @@ Build
 
 Run examples
 - Identity first (expose the hose):
-  ravenbench run --url http://localhost:10101 --database ycsb --reads 75 --writes 25 --distribution uniform --compression raw:identity --mode closed --concurrency 8..512x2 --duration 60s --out results.json
+  Raven.Bench run --url http://localhost:10101 --database ycsb --reads 75 --writes 25 --distribution uniform --compression raw:identity --mode closed --concurrency 8..512x2 --duration 60s --out results.json
 
 - Realistic client (zstd via Raven client):
-  ravenbench run --url http://localhost:10101 --database ycsb --compression client:zstd --mode closed --reads 75 --writes 25 --concurrency 8..1024x2 --duration 60s
+  Raven.Bench run --url http://localhost:10101 --database ycsb --compression client:zstd --mode closed --reads 75 --writes 25 --concurrency 8..1024x2 --duration 60s
 
 Mix definition (simpler)
 - Prefer numeric flags: `--reads <weight|%> --writes <weight|%> --updates <weight|%>`
