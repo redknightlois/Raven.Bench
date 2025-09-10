@@ -16,7 +16,6 @@ public sealed class RawHttpTransport : ITransport
     private readonly string _db;
     private readonly string _acceptEncoding;
     private readonly string? _customEndpoint; // optional format with {id}
-    private readonly ServerMetricsCollector _metricsCollector;
     private readonly LockFreeRingBuffer<byte[]> _bufferPool;
     public string EffectiveCompressionMode { get; }
     public string EffectiveHttpVersion { get; }
@@ -63,9 +62,6 @@ public sealed class RawHttpTransport : ITransport
         }
 
         _http = client;
-        
-        // Initialize server metrics collector
-        _metricsCollector = new ServerMetricsCollector(url);
         
         // Initialize buffer pool with 32KB buffers (2x max concurrency)
         _bufferPool = new LockFreeRingBuffer<byte[]>(32768);
@@ -190,13 +186,13 @@ public sealed class RawHttpTransport : ITransport
 
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
-        return await _metricsCollector.CollectAsync();
+        return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db);
     }
+
 
     public void Dispose()
     {
         _http.Dispose();
-        _metricsCollector.Dispose();
     }
 
     private string BuildUrl(string id)

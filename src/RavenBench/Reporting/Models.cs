@@ -36,6 +36,15 @@ public sealed class StepResult
 
     public double ClientCpu { get; init; }
     public double NetworkUtilization { get; init; }
+    
+    // Server-side metrics from RavenDB
+    public double? ServerCpu { get; init; }
+    public long? ServerMemoryMB { get; init; }
+    public double? ServerRequestsPerSec { get; init; }
+    public long? ServerIoReadOps { get; init; }
+    public long? ServerIoWriteOps { get; init; }
+    public long? ServerIoReadKb { get; init; }
+    public long? ServerIoWriteKb { get; init; }
 
     public string? Reason { get; set; }
 }

@@ -8,17 +8,19 @@ namespace RavenBench.Metrics;
 /// </summary>
 public sealed class ServerMetrics
 {
-    public double CpuUsagePercent { get; init; }
-    public long MemoryUsageMB { get; init; }
-    public int ActiveConnections { get; init; }
-    public double RequestsPerSecond { get; init; }
-    public int QueuedRequests { get; init; }
-    public double IoReadOperations { get; init; }
-    public double IoWriteOperations { get; init; }
-    public long ReadThroughputKb { get; init; }
-    public long WriteThroughputKb { get; init; }
+    public double? CpuUsagePercent { get; init; }
+    public long? MemoryUsageMB { get; init; }
+    public int? ActiveConnections { get; init; }
+    public double? RequestsPerSecond { get; init; }
+    public int? QueuedRequests { get; init; }
+    public double? IoReadOperations { get; init; }
+    public double? IoWriteOperations { get; init; }
+    public long? ReadThroughputKb { get; init; }
+    public long? WriteThroughputKb { get; init; }
     public long? QueueLength { get; init; }
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
+    public bool IsValid { get; init; } = true;
+    public string? ErrorMessage { get; init; }
 }
 
 // REVIEW: Not very fond on the way this is going. I would like to have something similar to ProcessCpuTracker

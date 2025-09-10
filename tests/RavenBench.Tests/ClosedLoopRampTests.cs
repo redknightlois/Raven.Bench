@@ -52,11 +52,13 @@ public class ClosedLoopRampTests
             var steps = new List<StepResult>();
             var concurrency = 2;
             var tracker = new RavenBench.Metrics.ProcessCpuTracker();
+            using var serverTracker = new RavenBench.Metrics.ServerMetricsTracker(transport);
             var context = new BenchmarkContext
             {
                 Transport = transport,
                 Workload = _w,
                 CpuTracker = tracker,
+                ServerTracker = serverTracker,
                 Rng = new Random(42)
             };
             

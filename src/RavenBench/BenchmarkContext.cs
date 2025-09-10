@@ -12,6 +12,7 @@ internal sealed class BenchmarkContext
     public required ITransport Transport { get; init; }
     public required IWorkload Workload { get; init; }
     public required ProcessCpuTracker CpuTracker { get; init; }
+    public required ServerMetricsTracker ServerTracker { get; init; }
     public required Random Rng { get; init; }
 }
 

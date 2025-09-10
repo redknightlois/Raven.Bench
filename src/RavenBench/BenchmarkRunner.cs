@@ -31,6 +31,7 @@ public class BenchmarkRunner(RunOptions opts)
         var concurrency = opts.ConcurrencyStart;
 
         var cpuTracker = new ProcessCpuTracker();
+        using var serverTracker = new ServerMetricsTracker(transport);
 
         var maxNetUtil = 0.0;
         string clientCompression = transport switch
@@ -53,6 +54,7 @@ public class BenchmarkRunner(RunOptions opts)
             Transport = transport,
             Workload = workload,
             CpuTracker = cpuTracker,
+            ServerTracker = serverTracker,
             Rng = _rng
         };
         
@@ -183,6 +185,9 @@ public class BenchmarkRunner(RunOptions opts)
         context.CpuTracker.Reset();
         context.CpuTracker.Start();
         
+        // Start server metrics tracking
+        context.ServerTracker.Start();
+        
         // Create concurrent worker tasks for closed-loop benchmark execution
         var tasks = new Task[step.Concurrency];
         for (int i = 0; i < step.Concurrency; i++)
@@ -223,6 +228,10 @@ public class BenchmarkRunner(RunOptions opts)
 
         context.CpuTracker.Stop();
         var cpu = context.CpuTracker.AverageCpu;
+        
+        // Stop server metrics tracking and get final metrics
+        context.ServerTracker.Stop();
+        var serverMetrics = context.ServerTracker.Current;
 
         var ops = success + errors;
         var thr = ops / step.Duration.TotalSeconds;
@@ -240,6 +249,13 @@ public class BenchmarkRunner(RunOptions opts)
             BytesIn = bytesIn,
             ClientCpu = cpu, // 0..1
             NetworkUtilization = netUtil,
+            ServerCpu = serverMetrics.CpuUsagePercent,
+            ServerMemoryMB = serverMetrics.MemoryUsageMB,
+            ServerRequestsPerSec = serverMetrics.RequestsPerSecond,
+            ServerIoReadOps = serverMetrics.IoReadOperations.HasValue ? (long)serverMetrics.IoReadOperations.Value : null,
+            ServerIoWriteOps = serverMetrics.IoWriteOperations.HasValue ? (long)serverMetrics.IoWriteOperations.Value : null,
+            ServerIoReadKb = serverMetrics.ReadThroughputKb,
+            ServerIoWriteKb = serverMetrics.WriteThroughputKb,
         };
         
         return (stepResult, hist);

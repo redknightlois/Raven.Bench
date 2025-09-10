@@ -5,6 +5,7 @@ using Raven.Client.Http;
 using Sparrow.Json;
 using RavenBench.Workload;
 using RavenBench.Metrics;
+using System.Text.Json;
 
 namespace RavenBench.Transport;
 
@@ -16,7 +17,6 @@ public sealed class RavenClientTransport : ITransport
 {
     private readonly IDocumentStore _store;
     private readonly string _compressionMode;
-    private readonly ServerMetricsCollector _metricsCollector;
     public string EffectiveCompressionMode => _compressionMode;
 
     public RavenClientTransport(string url, string database, string compressionMode)
@@ -33,8 +33,6 @@ public sealed class RavenClientTransport : ITransport
             }
         }.Initialize();
 
-        // Initialize server metrics collector for supplementary server-side data
-        _metricsCollector = new ServerMetricsCollector(url);
 
         if (_compressionMode == "identity")
         {
@@ -88,13 +86,14 @@ public sealed class RavenClientTransport : ITransport
 
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
-        return await _metricsCollector.CollectAsync();
+        var baseUrl = _store.Urls[0].TrimEnd('/');
+        return await RavenServerMetricsCollector.CollectAsync(baseUrl, _store.Database);
     }
+
 
     public void Dispose()
     {
         _store.Dispose();
-        _metricsCollector.Dispose();
     }
 
     public async Task<int?> GetServerMaxCoresAsync()
@@ -122,6 +121,5 @@ public sealed class RavenClientTransport : ITransport
         return null;
     }
 
-    // Placeholder class to prevent compiler warnings about unused usings in this file
-    private sealed class _unused { }
 }
+

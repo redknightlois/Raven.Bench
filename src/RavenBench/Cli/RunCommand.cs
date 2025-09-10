@@ -79,8 +79,12 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
         table.AddColumn("p50 ms");
         table.AddColumn("p95 ms");
         table.AddColumn("Errors %");
-        table.AddColumn("CPU %");
-        table.AddColumn("NetUtil %");
+        table.AddColumn("Client CPU %");
+        table.AddColumn("Client Net %");
+        table.AddColumn("Server CPU %");
+        table.AddColumn("Server Mem MB");
+        table.AddColumn("Server IO R");
+        table.AddColumn("Server IO W");
         foreach (var s in summary.Steps)
         {
             table.AddRow(
@@ -90,7 +94,11 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
                 s.P95Ms.ToString("F1"),
                 (s.ErrorRate * 100).ToString("F2"),
                 (s.ClientCpu * 100).ToString("F1"),
-                (s.NetworkUtilization * 100).ToString("F1"));
+                (s.NetworkUtilization * 100).ToString("F1"),
+                s.ServerCpu?.ToString("F1") ?? "N/A",
+                s.ServerMemoryMB?.ToString() ?? "N/A",
+                s.ServerIoReadOps?.ToString() ?? "N/A",
+                s.ServerIoWriteOps?.ToString() ?? "N/A");
         }
         AnsiConsole.Write(table);
 
