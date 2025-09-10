@@ -14,10 +14,12 @@ public class BenchmarkRunner(RunOptions opts)
 
     public async Task<BenchmarkRun> RunAsync()
     {
-        if (opts.ThreadPoolMin is var tp && tp.HasValue)
-        {
-            ThreadPool.SetMinThreads(tp.Value.workers, tp.Value.iocp);
-        }
+        // Set ThreadPool minimum threads based on command-line parameters
+        var workers = opts.ThreadPoolWorkers ?? 8192;
+        var iocp = opts.ThreadPoolIOCP ?? 8192;
+        
+        Console.WriteLine($"[Raven.Bench] Setting ThreadPool: workers={workers}, iocp={iocp}");
+        ThreadPool.SetMinThreads(workers, iocp);
 
         var workload = BuildWorkload(opts);
         using var transport = BuildTransport(opts);

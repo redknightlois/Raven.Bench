@@ -36,7 +36,8 @@ internal static class CliParsing
             MaxErrorRate = ParsePercent(s.MaxErrors),
             KneeThroughputDelta = kneeThroughputDelta,
             KneeP95Delta = kneeP95Delta,
-            ThreadPoolMin = ParseTpMin(s.TpMin),
+            ThreadPoolWorkers = s.TpWorkers,
+            ThreadPoolIOCP = s.TpIOCP,
             Distribution = s.Distribution,
             Compression = s.Compression,
             Mode = s.Mode,
@@ -82,14 +83,6 @@ internal static class CliParsing
         return (dthr, dp95);
     }
 
-    public static (int,int)? ParseTpMin(string? s)
-    {
-        if (string.IsNullOrWhiteSpace(s)) return null;
-        var parts = s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 2)
-            return (int.Parse(parts[0]), int.Parse(parts[1]));
-        return null;
-    }
 
     public static int ParseSize(string s)
     {

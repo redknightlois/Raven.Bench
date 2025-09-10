@@ -62,8 +62,11 @@ public sealed class RunSettings : CommandSettings
     [CommandOption("--raw-endpoint")]
     public string? RawEndpoint { get; init; }
 
-    [CommandOption("--tp-min")]
-    public string? TpMin { get; init; }
+    [CommandOption("--tp-workers")]
+    public int? TpWorkers { get; init; } = 8192;
+
+    [CommandOption("--tp-iocp")]
+    public int? TpIOCP { get; init; } = 8192;
 
     [CommandOption("--notes")]
     public string? Notes { get; init; }

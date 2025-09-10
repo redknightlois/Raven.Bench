@@ -32,7 +32,8 @@ public sealed class RunOptions
     public int Seed { get; init; } = 42;
     public int Preload { get; init; } = 0;
     public string? RawEndpoint { get; init; }
-    public (int workers, int iocp)? ThreadPoolMin { get; init; }
+    public int? ThreadPoolWorkers { get; init; } = 8192;
+    public int? ThreadPoolIOCP { get; init; } = 8192;
     public string? Notes { get; init; }
     public int? ExpectedCores { get; init; }
     public bool NetworkLimitedMode { get; init; } = false;
