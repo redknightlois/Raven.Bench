@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Buffers;
 using RavenBench.Workload;
 using RavenBench.Metrics;
+using RavenBench.Util;
 
 namespace RavenBench.Transport;
 
@@ -15,6 +17,7 @@ public sealed class RawHttpTransport : ITransport
     private readonly string _acceptEncoding;
     private readonly string? _customEndpoint; // optional format with {id}
     private readonly ServerMetricsCollector _metricsCollector;
+    private readonly LockFreeRingBuffer<byte[]> _bufferPool;
     public string EffectiveCompressionMode { get; }
     public string EffectiveHttpVersion { get; }
 
@@ -40,7 +43,9 @@ public sealed class RawHttpTransport : ITransport
         {
             AutomaticDecompression = decompression,
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-            MaxConnectionsPerServer = int.MaxValue
+            MaxConnectionsPerServer = int.MaxValue, // Maximum connection pool
+            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+            EnableMultipleHttp2Connections = true
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
 
@@ -61,6 +66,13 @@ public sealed class RawHttpTransport : ITransport
         
         // Initialize server metrics collector
         _metricsCollector = new ServerMetricsCollector(url);
+        
+        // Initialize buffer pool with 32KB buffers (2x max concurrency)
+        _bufferPool = new LockFreeRingBuffer<byte[]>(32768);
+        for (int i = 0; i < 32768; i++)
+        {
+            _bufferPool.TryEnqueue(new byte[32768]); // 32KB buffers
+        }
     }
 
     public async Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct)
@@ -97,8 +109,23 @@ public sealed class RawHttpTransport : ITransport
         }
         else
         {
-            var data = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            bytesIn = data.Length;
+            await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            
+            byte[] buffer;
+            if (_bufferPool.TryDequeue(out buffer) == false)
+            {
+                buffer = new byte[32768]; // Fallback if pool is empty
+            }
+            
+            int totalRead = 0;
+            int bytesRead;
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+            {
+                totalRead += bytesRead;
+            }
+            bytesIn = totalRead;
+            
+            _bufferPool.TryEnqueue(buffer); // Return to pool
         }
         // crude header bytes estimate
         var bytesOut = 400; // request headers approx
@@ -119,8 +146,23 @@ public sealed class RawHttpTransport : ITransport
             bytesIn = resp.Content.Headers.ContentLength.Value;
         else
         {
-            var buf = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            bytesIn = buf.Length;
+            await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            
+            byte[] buffer;
+            if (_bufferPool.TryDequeue(out buffer) == false)
+            {
+                buffer = new byte[32768]; // Fallback if pool is empty
+            }
+            
+            int totalRead = 0;
+            int bytesRead;
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+            {
+                totalRead += bytesRead;
+            }
+            bytesIn = totalRead;
+            
+            _bufferPool.TryEnqueue(buffer); // Return to pool
         }
         long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(json);
         bytesOut += 400; // headers approx
