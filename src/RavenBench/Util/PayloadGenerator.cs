@@ -1,13 +1,36 @@
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
 
 namespace RavenBench.Util;
 
 public static class PayloadGenerator
 {
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    private static readonly ConcurrentDictionary<int, string[]> _payloadCache = new();
+    private const int CacheSize = 1000; // Pre-generate 1000 payloads per size
     
     public static string Generate(int sizeBytes, Random rng)
+    {
+        // Use cached payloads to avoid constant allocation
+        var cachedPayloads = _payloadCache.GetOrAdd(sizeBytes, size => GeneratePayloadCache(size));
+        return cachedPayloads[rng.Next(cachedPayloads.Length)];
+    }
+    
+    private static string[] GeneratePayloadCache(int sizeBytes)
+    {
+        var payloads = new string[CacheSize];
+        var rng = new Random(42); // Fixed seed for reproducible payloads
+        
+        for (int i = 0; i < CacheSize; i++)
+        {
+            payloads[i] = GenerateUncached(sizeBytes, rng);
+        }
+        
+        return payloads;
+    }
+    
+    private static string GenerateUncached(int sizeBytes, Random rng)
     {
         // Generate YCSB-compatible JSON document with 10 fields (field0-field9)
         // Each field contains up to 100 characters to match YCSB standard format
