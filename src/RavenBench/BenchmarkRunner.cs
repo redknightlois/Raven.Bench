@@ -275,6 +275,10 @@ public class BenchmarkRunner(RunOptions opts)
     {
         try
         { 
+            // Display RavenDB server version
+            var serverVersion = await transport.GetServerVersionAsync();
+            Console.WriteLine($"[Raven.Bench] RavenDB Server Version: {serverVersion}");
+            
             if (opts.ExpectedCores.HasValue)
             {
                 var cores = await transport.GetServerMaxCoresAsync();

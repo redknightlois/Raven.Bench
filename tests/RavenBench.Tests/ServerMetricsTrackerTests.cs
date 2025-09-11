@@ -166,6 +166,8 @@ internal sealed class StubTransport : ITransport
     
     public Task<int?> GetServerMaxCoresAsync() => Task.FromResult<int?>(4);
     
+    public Task<string> GetServerVersionAsync() => Task.FromResult("1.0.0-test");
+    
     public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(new ServerMetrics
     {
         CpuUsagePercent = 25.0,

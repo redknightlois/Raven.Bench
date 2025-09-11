@@ -16,5 +16,6 @@ public interface ITransport : IDisposable
 
     Task<int?> GetServerMaxCoresAsync();
     Task<ServerMetrics> GetServerMetricsAsync();
+    Task<string> GetServerVersionAsync();
 }
 

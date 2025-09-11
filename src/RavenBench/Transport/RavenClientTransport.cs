@@ -2,6 +2,7 @@ using Raven.Client.Documents;
 using Raven.Client.Documents.Commands;
 using Raven.Client.Documents.Session;
 using Raven.Client.Http;
+using Raven.Client.ServerWide.Operations;
 using Sparrow.Json;
 using RavenBench.Workload;
 using RavenBench.Metrics;
@@ -99,6 +100,20 @@ public sealed class RavenClientTransport : ITransport
         return await RavenServerMetricsCollector.CollectAsync(baseUrl, _store.Database);
     }
 
+    public async Task<string> GetServerVersionAsync()
+    {
+        try
+        {
+            var operation = new GetBuildNumberOperation();
+            var buildNumber = await _store.Maintenance.Server.SendAsync(operation).ConfigureAwait(false);
+            return buildNumber.FullVersion ?? buildNumber.ProductVersion ?? "unknown";
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
+
 
     public void Dispose()
     {
@@ -119,10 +134,10 @@ public sealed class RavenClientTransport : ITransport
             var maxIdx = json.IndexOf("MaxCores\":");
             if (maxIdx > 0)
             {
-                var span = json.AsSpan(maxIdx + 10);
-                int i = 0; while (i < span.Length && !char.IsDigit(span[i])) i++;
-                int j = i; while (j < span.Length && char.IsDigit(span[j])) j++;
-                if (int.TryParse(span[i..j], out var cores))
+                var remaining = json.Substring(maxIdx + 10);
+                int i = 0; while (i < remaining.Length && !char.IsDigit(remaining[i])) i++;
+                int j = i; while (j < remaining.Length && char.IsDigit(remaining[j])) j++;
+                if (int.TryParse(remaining.Substring(i, j - i), out var cores))
                     return cores;
             }
         }

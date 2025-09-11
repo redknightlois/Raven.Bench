@@ -215,6 +215,29 @@ public sealed class RawHttpTransport : ITransport
         return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db);
     }
 
+    public async Task<string> GetServerVersionAsync()
+    {
+        try
+        {
+            var url = $"{_baseUrl}/build/version";
+            using var resp = await _http.GetAsync(url).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+            
+            if (doc.RootElement.TryGetProperty("FullVersion", out var fullVersion))
+                return fullVersion.GetString() ?? "unknown";
+            if (doc.RootElement.TryGetProperty("ProductVersion", out var productVersion))
+                return productVersion.GetString() ?? "unknown";
+                
+            return "unknown";
+        }
+        catch 
+        { 
+            return "unknown";
+        }
+    }
+
 
     public void Dispose()
     {
