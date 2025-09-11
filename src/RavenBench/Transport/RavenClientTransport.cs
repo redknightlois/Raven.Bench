@@ -1,4 +1,5 @@
 using Raven.Client.Documents;
+using Raven.Client.Documents.Conventions;
 using Raven.Client.Documents.Commands;
 using Raven.Client.Documents.Session;
 using Raven.Client.Http;
@@ -7,6 +8,8 @@ using Sparrow.Json;
 using RavenBench.Workload;
 using RavenBench.Metrics;
 using System.Text.Json;
+using System.Net;
+using System.Net.Http;
 
 namespace RavenBench.Transport;
 
@@ -31,6 +34,21 @@ public sealed class RavenClientTransport : ITransport
             Database = database
         };
 
+        // Harden client conventions and HTTP handler
+        _store.Conventions = new DocumentConventions
+        {
+            DisableTopologyUpdates = true,
+            RequestTimeout = TimeSpan.FromSeconds(15),
+            MaxNumberOfRequestsPerSession = int.MaxValue,
+            HttpMessageHandlerFactory = _ => new SocketsHttpHandler
+            {
+                MaxConnectionsPerServer = 8192,
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+                AutomaticDecompression = DecompressionMethods.None,
+                UseCookies = false
+            }
+        };
+
         ConfigureCompression();
 
         _store.Initialize();
@@ -46,7 +64,8 @@ public sealed class RavenClientTransport : ITransport
             conventions.UseHttpDecompression = false;
             return;
         }
-        
+
+        // Allow compression modes explicitly requested via CLI
         conventions.UseHttpCompression = true;
         conventions.UseHttpDecompression = true;
         conventions.HttpCompressionAlgorithm = _compressionMode switch
@@ -62,7 +81,7 @@ public sealed class RavenClientTransport : ITransport
         switch (op.Type)
         {
             case OperationType.ReadById:
-                using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true, NoCaching = true, TransactionMode = TransactionMode.SingleNode }))
                 {
                     var _ = await s.LoadAsync<object>(op.Id, ct).ConfigureAwait(false);
                 }
@@ -71,7 +90,7 @@ public sealed class RavenClientTransport : ITransport
             case OperationType.Insert:
             case OperationType.Update:
                 // Use session to store raw JSON - simpler approach
-                using (var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                using (var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true, NoCaching = true, TransactionMode = TransactionMode.SingleNode }))
                 {
                     // Deserialize JSON into a dynamic object and store it
                     var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(op.Payload!);
@@ -146,4 +165,3 @@ public sealed class RavenClientTransport : ITransport
     }
 
 }
-

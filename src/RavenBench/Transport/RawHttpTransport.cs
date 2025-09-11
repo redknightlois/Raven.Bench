@@ -95,6 +95,7 @@ public sealed class RawHttpTransport : ITransport
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.AcceptEncoding.Clear();
         req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+        req.Headers.ExpectContinue = false;
         
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -150,6 +151,7 @@ public sealed class RawHttpTransport : ITransport
         using var req = new HttpRequestMessage(HttpMethod.Put, url);
         req.Headers.AcceptEncoding.Clear();
         req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+        req.Headers.ExpectContinue = false;
         req.Content = new StringContent(json, Encoding.UTF8, "application/json");
         
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
