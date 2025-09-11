@@ -17,8 +17,9 @@ public sealed class RawHttpTransport : ITransport
     private readonly string _acceptEncoding;
     private readonly string? _customEndpoint; // optional format with {id}
     private readonly LockFreeRingBuffer<byte[]> _bufferPool;
+    private string? _negotiatedHttpVersion;
     public string EffectiveCompressionMode { get; }
-    public string EffectiveHttpVersion { get; }
+    public string EffectiveHttpVersion => _negotiatedHttpVersion ?? "unknown";
 
     public RawHttpTransport(string url, string database, string compressionMode, string httpVersion, string? endpoint = null)
     {
@@ -41,25 +42,25 @@ public sealed class RawHttpTransport : ITransport
         var handler = new SocketsHttpHandler
         {
             AutomaticDecompression = decompression,
-            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-            MaxConnectionsPerServer = int.MaxValue, // Maximum connection pool
-            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
-            EnableMultipleHttp2Connections = true
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
+            EnableMultipleHttp2Connections = true,
+            MaxConnectionsPerServer = int.MaxValue,
+            UseCookies = false,
+            AllowAutoRedirect = false,
+            KeepAlivePingDelay = TimeSpan.FromSeconds(60),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(30)
         };
-        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+        
+        var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
 
-        if (httpVersion == "2")
+        (client.DefaultRequestVersion, client.DefaultVersionPolicy, _negotiatedHttpVersion) = httpVersion switch
         {
-            client.DefaultRequestVersion = HttpVersion.Version20;
-            client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact;
-            EffectiveHttpVersion = "2";
-        }
-        else
-        {
-            client.DefaultRequestVersion = HttpVersion.Version11;
-            client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact;
-            EffectiveHttpVersion = "1.1";
-        }
+            "2" => (HttpVersion.Version20, HttpVersionPolicy.RequestVersionExact, "2"),
+            "3" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact, "3"),
+            "auto" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionOrLower, "auto"),
+            _ => (HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact, "1.1")
+        };
 
         _http = client;
         
@@ -94,8 +95,24 @@ public sealed class RawHttpTransport : ITransport
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.AcceptEncoding.Clear();
         req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
+
+        if (_negotiatedHttpVersion == "auto")
+        {
+            _negotiatedHttpVersion = resp.Version.ToString() switch
+            {
+                "3.0" => "3", 
+                "2.0" => "2", 
+                "1.1" => "1.1", 
+                "1.0" => "1.0",
+                _ => resp.Version.ToString()
+            };
+        }
 
         long bytesIn = 0;
         if (resp.Content.Headers.ContentLength.HasValue)
@@ -106,9 +123,8 @@ public sealed class RawHttpTransport : ITransport
         else
         {
             await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            
-            byte[] buffer;
-            if (_bufferPool.TryDequeue(out buffer) == false)
+
+            if (_bufferPool.TryDequeue(out var buffer) == false)
             {
                 buffer = new byte[32768]; // Fallback if pool is empty
             }
@@ -135,20 +151,30 @@ public sealed class RawHttpTransport : ITransport
         req.Headers.AcceptEncoding.Clear();
         req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
         req.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
+        
+        if (_negotiatedHttpVersion == "auto")
+            _negotiatedHttpVersion = resp.Version.ToString() switch
+            {
+                "3.0" => "3", "2.0" => "2", "1.1" => "1.1", "1.0" => "1.0",
+                _ => resp.Version.ToString()
+            };
         long bytesIn = 0;
         if (resp.Content.Headers.ContentLength.HasValue)
+        {
             bytesIn = resp.Content.Headers.ContentLength.Value;
+        }
         else
         {
             await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            
-            byte[] buffer;
-            if (_bufferPool.TryDequeue(out buffer) == false)
-            {
+
+            if (_bufferPool.TryDequeue(out var buffer) == false)
                 buffer = new byte[32768]; // Fallback if pool is empty
-            }
             
             int totalRead = 0;
             int bytesRead;

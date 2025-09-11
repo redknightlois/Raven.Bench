@@ -81,5 +81,5 @@ public sealed class RunSettings : CommandSettings
     public double LinkMbps { get; init; } = 1000;
 
     [CommandOption("--http-version")]
-    public string HttpVersion { get; init; } = "1.1";
+    public string HttpVersion { get; init; } = "auto";
 }

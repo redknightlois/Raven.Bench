@@ -18,33 +18,42 @@ public sealed class RavenClientTransport : ITransport
     private readonly IDocumentStore _store;
     private readonly string _compressionMode;
     public string EffectiveCompressionMode => _compressionMode;
+    public string EffectiveHttpVersion => "client-default";
 
     public RavenClientTransport(string url, string database, string compressionMode)
     {
         _compressionMode = compressionMode.ToLowerInvariant();
+        
         _store = new DocumentStore
         {
             Urls = new[] { url },
-            Database = database,
-            Conventions =
-            {
-                // We keep defaults; RavenDB 7.1 client typically uses zstd
-                // If identity requested, attempt to disable compression if available
-            }
-        }.Initialize();
+            Database = database
+        };
 
+        ConfigureCompression();
 
+        _store.Initialize();
+    }
+
+    private void ConfigureCompression()
+    {
+        var conventions = _store.Conventions;
+        
         if (_compressionMode == "identity")
         {
-            try
-            {
-                // Some 7.x versions expose a Conventions.UseCompression flag; if not, ignore.
-                var prop = _store.Conventions.GetType().GetProperty("UseCompression");
-                if (prop != null && prop.CanWrite)
-                    prop.SetValue(_store.Conventions, false);
-            }
-            catch { /* best effort */ }
+            conventions.UseHttpCompression = false;
+            conventions.UseHttpDecompression = false;
+            return;
         }
+        
+        conventions.UseHttpCompression = true;
+        conventions.UseHttpDecompression = true;
+        conventions.HttpCompressionAlgorithm = _compressionMode switch
+        {
+            "gzip" => HttpCompressionAlgorithm.Gzip,
+            "zstd" => HttpCompressionAlgorithm.Zstd,
+            _ => conventions.HttpCompressionAlgorithm // Keep current default
+        };
     }
 
     public async Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct)

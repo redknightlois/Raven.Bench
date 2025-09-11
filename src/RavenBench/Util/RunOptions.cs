@@ -38,5 +38,5 @@ public sealed class RunOptions
     public int? ExpectedCores { get; init; }
     public bool NetworkLimitedMode { get; init; } = false;
     public double LinkMbps { get; init; } = 1000.0; // default 1 Gb
-    public string HttpVersion { get; init; } = "1.1"; // or "2"
+    public string HttpVersion { get; init; } = "auto"; // "1.1" | "2" | "3" | "auto"
 }
