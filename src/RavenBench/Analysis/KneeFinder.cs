@@ -5,56 +5,93 @@ namespace RavenBench.Analysis;
 public static class KneeFinder
 {
     /// <summary>
-    /// Finds the "knee" point in benchmark results where performance degrades.
-    /// The knee is detected when throughput gains flatten while latency increases significantly,
-    /// indicating the system has reached its optimal concurrency level.
+    /// Finds the knee where added concurrency no longer produces meaningful throughput gains
+    /// and latency rises significantly. Heuristics:
+    /// - Don’t declare a knee before entering a "danger zone" (p50 >= 100 ms)
+    /// - Primary rule: Δthr below threshold while Δp95 above threshold
+    /// - Confirmation: if the next step still increases throughput >3% vs prev, defer knee
+    /// - Always stop on excessive errors
     /// </summary>
-    /// <param name="steps">Benchmark results ordered by increasing concurrency</param>
-    /// <param name="dThr">Minimum relative throughput increase threshold (e.g., 0.05 = 5%)</param>
-    /// <param name="dP95">Maximum relative P95 latency increase threshold (e.g., 0.20 = 20%)</param>
-    /// <param name="maxErr">Maximum acceptable error rate before stopping</param>
-    /// <returns>The step representing the knee point, or null if no knee found</returns>
     public static StepResult? FindKnee(IReadOnlyList<StepResult> steps, double dThr, double dP95, double maxErr)
-    { 
-        
-        if (steps.Count < 2) return steps.LastOrDefault();
-        
+    {
+        const double P50DangerMs = 100.0;
+        const double NextRecoveryThreshold = 0.03; // 3%
+
+        if (steps.Count == 0)
+            return null;
+        if (steps.Count == 1)
+        {
+            var only = steps[0];
+            only.Reason = "single-step";
+            return only;
+        }
+
         for (int i = 1; i < steps.Count; i++)
         {
             var prev = steps[i - 1];
             var cur = steps[i];
-            var dthr = prev.Throughput > 0 ? (cur.Throughput - prev.Throughput) / prev.Throughput : 0;
-            var dp95 = prev.P95Ms > 0 ? (cur.P95Ms - prev.P95Ms) / (prev.P95Ms + 1e-9) : 0;
-            
-            // smoothing: if we have 3 points, use averaged deltas to avoid micro-wiggles
+
+            // Respect error ceiling immediately
+            if (cur.ErrorRate > maxErr)
+            {
+                prev.Reason = $"errors>{maxErr:P1}";
+                return prev;
+            }
+
+            // Don’t consider knees until we are in danger zone
+            var inDanger = prev.P50Ms >= P50DangerMs || cur.P50Ms >= P50DangerMs;
+            if (!inDanger)
+                continue;
+
+            var dthr = prev.Throughput > 0 ? (cur.Throughput - prev.Throughput) / prev.Throughput : 0.0;
+            var dp95 = prev.P95Ms > 0 ? (cur.P95Ms - prev.P95Ms) / (prev.P95Ms + 1e-9) : 0.0;
+
+            // Smoothing with previous deltas if possible
             if (i >= 2)
             {
                 var p2 = steps[i - 2];
-                
-                // Calculate smoothed deltas by averaging current step-to-step delta with 
-                // the delta from 2 steps ago, reducing sensitivity to single-step noise
                 var dthrAvg = 0.5 * ((prev.Throughput - p2.Throughput) / Math.Max(1e-9, p2.Throughput)) + 0.5 * dthr;
                 var dp95Avg = 0.5 * ((prev.P95Ms - p2.P95Ms) / Math.Max(1e-9, p2.P95Ms)) + 0.5 * dp95;
-                if ((dthrAvg < dThr && dp95Avg > dP95) || cur.ErrorRate > maxErr)
+                if (dthrAvg < dThr && dp95Avg > dP95)
                 {
-                    prev.Reason = (cur.ErrorRate > maxErr) ? $"errors>{maxErr:P1}" : $"Δthr<{dThr:P0} & Δp95>{dP95:P0} (smoothed)";
+                    // If the next step still recovers >3% throughput vs prev, defer
+                    if (i + 1 < steps.Count)
+                    {
+                        var next = steps[i + 1];
+                        var rec = prev.Throughput > 0 ? (next.Throughput - prev.Throughput) / prev.Throughput : 0.0;
+                        if (rec > NextRecoveryThreshold)
+                            continue;
+                    }
+                    prev.Reason = $"Δthr<{dThr:P0} & Δp95>{dP95:P0} (smoothed)";
                     return prev;
                 }
             }
-            if ((dthr < dThr && dp95 > dP95) || cur.ErrorRate > maxErr)
+
+            // Direct rule
+            if (dthr < dThr && dp95 > dP95)
             {
-                prev.Reason = (cur.ErrorRate > maxErr) ? $"errors>{maxErr:P1}" : $"Δthr<{dThr:P0} & Δp95>{dP95:P0}";
+                if (i + 1 < steps.Count)
+                {
+                    var next = steps[i + 1];
+                    var rec = prev.Throughput > 0 ? (next.Throughput - prev.Throughput) / prev.Throughput : 0.0;
+                    if (rec > NextRecoveryThreshold)
+                        continue;
+                }
+                prev.Reason = $"Δthr<{dThr:P0} & Δp95>{dP95:P0}";
                 return prev;
             }
-            
+
+            // Monotonic degradation
             if (cur.Throughput < prev.Throughput && cur.P95Ms > prev.P95Ms)
             {
                 prev.Reason = "Thr↓ & p95↑";
                 return prev;
             }
         }
-        var last = steps.Last();
+
+        var last = steps[^1];
         last.Reason = "end-of-range";
         return last;
     }
 }
+
