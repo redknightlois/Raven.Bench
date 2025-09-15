@@ -33,24 +33,55 @@ public static class PayloadGenerator
     private static string GenerateUncached(int sizeBytes, Random rng)
     {
         // Generate YCSB-compatible JSON document with 10 fields (field0-field9)
-        // Each field contains up to 100 characters to match YCSB standard format
+        // Calculate accurate JSON overhead for: {"field0":"value","field1":"value",...,"field9":"value"}
+        const int jsonOverhead = 2 +       // Opening and closing braces: {}
+                                 9 +       // 9 commas between fields
+                                 10 * 2 +  // 10 sets of quotes around values: ""
+                                 10 * 1 +  // 10 colons and quotes around field names: ":"
+                                 10 * 8;   // Field names: "field0" through "field9" total chars
+
         var document = new YcsbDocument();
-        
-        var fieldSize = Math.Min(100, Math.Max(10, sizeBytes / 12)); // Distribute size across fields
-        var remainingBytes = sizeBytes;
-        
-        // Fill fields 0-9 with random data
-        for (int i = 0; i < 10 && remainingBytes > 50; i++)
+
+        // Ensure we have enough space for the JSON structure
+        if (sizeBytes <= jsonOverhead)
         {
-            var currentFieldSize = Math.Min(fieldSize, remainingBytes / (10 - i));
-            document.SetField(i, GenerateRandomString(currentFieldSize, rng));
-            remainingBytes -= currentFieldSize + 20; // Account for JSON overhead
+            // For very small sizes, create minimal document with empty or very short fields
+            for (int i = 0; i < 10; i++)
+            {
+                document.SetField(i, "x"); // 1 character per field
+            }
         }
-        
+        else
+        {
+            var availableContentSize = sizeBytes - jsonOverhead;
+            var fieldsToFill = Math.Min(10, Math.Max(1, availableContentSize / 10));
+            var fieldSize = availableContentSize / fieldsToFill;
+
+            // Fill the calculated number of fields
+            for (int i = 0; i < fieldsToFill; i++)
+            {
+                var currentFieldSize = fieldSize;
+                // For the last field, use any remaining space
+                if (i == fieldsToFill - 1)
+                {
+                    var usedContent = i * fieldSize;
+                    currentFieldSize = availableContentSize - usedContent;
+                }
+
+                document.SetField(i, GenerateRandomString(Math.Max(1, currentFieldSize), rng));
+            }
+
+            // Fill remaining fields with minimal content if needed
+            for (int i = fieldsToFill; i < 10; i++)
+            {
+                document.SetField(i, "");
+            }
+        }
+
         // Serialize to JSON string
-        return JsonSerializer.Serialize(document, new JsonSerializerOptions 
-        { 
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
+        return JsonSerializer.Serialize(document, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
     }
     

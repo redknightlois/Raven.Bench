@@ -24,7 +24,7 @@ public sealed class RunSettings : CommandSettings
     public string Distribution { get; init; } = "uniform";
 
     [CommandOption("--doc-size")]
-    public string DocSize { get; init; } = "4KB";
+    public string DocSize { get; init; } = "1KB";
 
     [CommandOption("--compression")]
     public string Compression { get; init; } = "raw:identity";

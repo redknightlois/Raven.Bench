@@ -3,10 +3,6 @@ using RavenBench.Util;
 
 namespace RavenBench.Cli;
 
-// REVIEW: Is it possible to do this better? This code is a lot of boilerplate, I want to be sure that it is 
-// essential and if I have to put it I want it as dense as possible without losing readability. Simplifying the
-// way we passes parameters is not outside the question. Ask questions about your ideas on how to do it. 
-
 /// <summary>
 /// Converts CLI settings to strongly-typed runtime options with validation and parsing.
 /// </summary>

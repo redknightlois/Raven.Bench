@@ -10,7 +10,7 @@ namespace RavenBench.Util
 
         // Explicit layout to control the exact memory layout
         [StructLayout(LayoutKind.Sequential, Size = 2 * CacheLine)]
-        internal unsafe struct Cell
+        private unsafe struct Cell
         {
             // Sequence number at offset 0
             internal long Sequence;
