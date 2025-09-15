@@ -21,52 +21,47 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             return -2;
         }
 
-        BenchmarkRun run;
-        await AnsiConsole.Status()
-            .StartAsync("Running ramp…", async _ =>
-            {
-                var runner = new BenchmarkRunner(opts);
-                run = await runner.RunAsync();
+        var runner = new BenchmarkRunner(opts);
+        var run = await runner.RunAsync();
 
-                // Knee detection and analysis
-                var knee = KneeFinder.FindKnee(run.Steps, opts.KneeThroughputDelta, opts.KneeP95Delta, opts.MaxErrorRate);
-                
-                // Create a temporary summary for analysis
-                var tempSummary = new BenchmarkSummary
-                {
-                    Options = opts,
-                    Steps = run.Steps,
-                    Knee = knee,
-                    Verdict = "temporary",
-                    ClientCompression = run.ClientCompression,
-                    EffectiveHttpVersion = run.EffectiveHttpVersion,
-                    Notes = opts.Notes
-                };
+        // Knee detection and analysis
+        var knee = KneeFinder.FindKnee(run.Steps, opts.KneeThroughputDelta, opts.KneeP95Delta, opts.MaxErrorRate);
 
-                // Perform complete result analysis
-                var analysis = ResultAnalyzer.Analyze(run, knee, opts, tempSummary);
-                
-                // Create final summary with analysis results
-                var summary = new BenchmarkSummary
-                {
-                    Options = opts,
-                    Steps = run.Steps,
-                    Knee = knee,
-                    Verdict = analysis.Verdict,
-                    ClientCompression = run.ClientCompression,
-                    EffectiveHttpVersion = run.EffectiveHttpVersion,
-                    Notes = opts.Notes
-                };
+        // Create a temporary summary for analysis
+        var tempSummary = new BenchmarkSummary
+        {
+            Options = opts,
+            Steps = run.Steps,
+            Knee = knee,
+            Verdict = "temporary",
+            ClientCompression = run.ClientCompression,
+            EffectiveHttpVersion = run.EffectiveHttpVersion,
+            Notes = opts.Notes
+        };
 
-                // Write outputs
-                if (!string.IsNullOrWhiteSpace(opts.OutJson))
-                    JsonResultsWriter.Write(opts.OutJson!, summary);
-                if (!string.IsNullOrWhiteSpace(opts.OutCsv))
-                    CsvResultsWriter.Write(opts.OutCsv!, summary);
+        // Perform complete result analysis
+        var analysis = ResultAnalyzer.Analyze(run, knee, opts, tempSummary);
 
-                // Render console report
-                RenderResults(summary, run.MaxNetworkUtilization, analysis);
-            });
+        // Create final summary with analysis results
+        var summary = new BenchmarkSummary
+        {
+            Options = opts,
+            Steps = run.Steps,
+            Knee = knee,
+            Verdict = analysis.Verdict,
+            ClientCompression = run.ClientCompression,
+            EffectiveHttpVersion = run.EffectiveHttpVersion,
+            Notes = opts.Notes
+        };
+
+        // Write outputs
+        if (!string.IsNullOrWhiteSpace(opts.OutJson))
+            JsonResultsWriter.Write(opts.OutJson!, summary);
+        if (!string.IsNullOrWhiteSpace(opts.OutCsv))
+            CsvResultsWriter.Write(opts.OutCsv!, summary);
+
+        // Render console report
+        RenderResults(summary, run.MaxNetworkUtilization, analysis);
 
         return 0;
     }
