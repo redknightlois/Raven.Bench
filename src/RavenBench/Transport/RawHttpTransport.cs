@@ -22,24 +22,6 @@ public sealed class RawHttpTransport : ITransport
     public string EffectiveCompressionMode { get; }
     public string EffectiveHttpVersion => _negotiatedHttpVersion ?? "unknown";
 
-    private static string FormatHttpVersion(Version version) => version.ToString() switch
-    {
-        "3.0" => "3",
-        "2.0" => "2",
-        "1.1" => "1.1",
-        "1.0" => "1.0",
-        _ => version.ToString()
-    };
-
-    private static string NormalizeHttpVersion(string httpVersion) => httpVersion.ToLowerInvariant() switch
-    {
-        "http2" or "2.0" => "2",
-        "http3" or "3.0" => "3",
-        "http1.1" or "1.1" => "1.1",
-        "http1.0" or "1.0" => "1.0",
-        "auto" => "auto",
-        _ => httpVersion // Pass through other values like "2", "3", etc.
-    };
 
     public RawHttpTransport(string url, string database, string compressionMode, string httpVersion, string? endpoint = null)
     {
@@ -48,7 +30,7 @@ public sealed class RawHttpTransport : ITransport
         _acceptEncoding = compressionMode.Equals("identity", StringComparison.OrdinalIgnoreCase) ? "identity" : compressionMode;
         EffectiveCompressionMode = _acceptEncoding;
         _customEndpoint = string.IsNullOrWhiteSpace(endpoint) ? null : endpoint;
-        _requestedHttpVersion = NormalizeHttpVersion(httpVersion);
+        _requestedHttpVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
 
         // Configure automatic decompression for supported formats
         // Note: Zstd requires third-party library as it's not supported in .NET's DecompressionMethods
@@ -116,6 +98,12 @@ public sealed class RawHttpTransport : ITransport
         {
             var url = BuildUrl(id);
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
+
+            // Set HTTP version and policy for proper HTTP/2 h2c support
+            var (version, policy) = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
+            req.Version = version;
+            req.VersionPolicy = policy;
+
             req.Headers.AcceptEncoding.Clear();
             req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
             req.Headers.ExpectContinue = false;
@@ -135,7 +123,7 @@ public sealed class RawHttpTransport : ITransport
             // Update negotiated version if not yet set (fallback for when validation was skipped)
             if (_negotiatedHttpVersion == null)
             {
-                _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
+                _negotiatedHttpVersion = HttpHelper.FormatHttpVersion(resp.Version);
             }
 
             long bytesIn = 0;
@@ -180,6 +168,12 @@ public sealed class RawHttpTransport : ITransport
         {
             var url = BuildUrl(id);
             using var req = new HttpRequestMessage(HttpMethod.Put, url);
+
+            // Set HTTP version and policy for proper HTTP/2 h2c support
+            var (version, policy) = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
+            req.Version = version;
+            req.VersionPolicy = policy;
+
             req.Headers.AcceptEncoding.Clear();
             req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
             req.Headers.ExpectContinue = false;
@@ -200,7 +194,7 @@ public sealed class RawHttpTransport : ITransport
             // Update negotiated version if not yet set (fallback for when validation was skipped)
             if (_negotiatedHttpVersion == null)
             {
-                _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
+                _negotiatedHttpVersion = HttpHelper.FormatHttpVersion(resp.Version);
             }
             long bytesIn = 0;
             if (resp.Content.Headers.ContentLength.HasValue)
@@ -330,7 +324,7 @@ public sealed class RawHttpTransport : ITransport
             }
 
             // Always detect actual HTTP version during validation
-            var actualVersion = FormatHttpVersion(response.Version);
+            var actualVersion = HttpHelper.FormatHttpVersion(response.Version);
 
             // Update negotiated version for auto mode or set it if not already set
             if (_requestedHttpVersion == "auto" || _negotiatedHttpVersion == null)

@@ -8,6 +8,7 @@ using Raven.Client.ServerWide.Operations;
 using Sparrow.Json;
 using RavenBench.Workload;
 using RavenBench.Metrics;
+using RavenBench.Util;
 using System.Text.Json;
 using System.Net;
 using System.Net.Http;
@@ -22,13 +23,18 @@ public sealed class RavenClientTransport : ITransport
 {
     private readonly IDocumentStore _store;
     private readonly string _compressionMode;
-    public string EffectiveCompressionMode => _compressionMode;
-    public string EffectiveHttpVersion => "client-default";
+    private readonly string _requestedHttpVersion;
+    private string? _negotiatedHttpVersion;
 
-    public RavenClientTransport(string url, string database, string compressionMode)
+    public string EffectiveCompressionMode => _compressionMode;
+    public string EffectiveHttpVersion => _negotiatedHttpVersion ?? "unknown";
+
+
+    public RavenClientTransport(string url, string database, string compressionMode, string httpVersion = "1.1")
     {
         _compressionMode = compressionMode.ToLowerInvariant();
-        
+        _requestedHttpVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
+
         _store = new DocumentStore
         {
             Urls = new[] { url },
@@ -36,6 +42,7 @@ public sealed class RavenClientTransport : ITransport
         };
 
         ConfigureCompression();
+        ConfigureHttpVersion();
 
         _store.Initialize();
     }
@@ -61,6 +68,29 @@ public sealed class RavenClientTransport : ITransport
             _ => conventions.HttpCompressionAlgorithm // Keep current default
         };
     }
+
+    private void ConfigureHttpVersion()
+    {
+        if (_requestedHttpVersion == "1.1" || _requestedHttpVersion == "1.0")
+        {
+            // Default HTTP/1.x configuration - no special handling needed
+            return;
+        }
+
+        // Configure HTTP/2 and HTTP/3 through DocumentConventions.CreateHttpClient
+        var conventions = _store.Conventions;
+        var versionInfo = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
+
+        conventions.CreateHttpClient = (handler) =>
+        {
+            var client = new HttpClient(new HttpHelper.HttpVersionHandler(handler, versionInfo))
+            {
+                Timeout = Timeout.InfiniteTimeSpan
+            };
+            return client;
+        };
+    }
+
 
     public async Task<TransportResult> ExecuteAsync(RavenBench.Workload.Operation op, CancellationToken ct)
     {
@@ -96,6 +126,11 @@ public sealed class RavenClientTransport : ITransport
             // TaskCanceledException from timeout is expected during benchmark runs
             // Return a result without error details to avoid logging as error
             return new TransportResult(0, 0);
+        }
+        catch (HttpRequestException httpEx)
+        {
+            var errorMsg = $"HTTP {httpEx.Data["StatusCode"] ?? "Error"}: {httpEx.Message}";
+            return new TransportResult(0, 0, errorMsg);
         }
         catch (Exception ex)
         {
@@ -161,12 +196,39 @@ public sealed class RavenClientTransport : ITransport
     {
         try
         {
+            // Test connection and capture HTTP version if possible
             using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true });
             await session.LoadAsync<object>("validation-test-key-that-does-not-exist").ConfigureAwait(false);
+
+            // Set negotiated version based on request (we can't easily capture actual negotiated version from RavenDB client)
+            if (_negotiatedHttpVersion == null)
+            {
+                _negotiatedHttpVersion = _requestedHttpVersion;
+            }
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException($"Client validation failed: Unable to connect to RavenDB server. {ex.Message}", ex);
+        }
+    }
+
+    public async Task ValidateClientAsync(bool strictHttpVersion)
+    {
+        await ValidateClientAsync().ConfigureAwait(false);
+
+        // Note: RavenDB client doesn't provide easy access to negotiated HTTP version
+        // We assume the requested version was negotiated successfully
+        if (strictHttpVersion && _requestedHttpVersion != "auto")
+        {
+            var requestedForDisplay = _requestedHttpVersion switch
+            {
+                "2" => "HTTP/2",
+                "3" => "HTTP/3",
+                "1.1" => "HTTP/1.1",
+                "1.0" => "HTTP/1.0",
+                _ => $"HTTP/{_requestedHttpVersion}"
+            };
+            Console.WriteLine($"[Raven.Bench] Client validation: Requested {requestedForDisplay} (client-managed)");
         }
     }
 

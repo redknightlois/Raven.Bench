@@ -188,7 +188,7 @@ public class BenchmarkRunner(RunOptions opts)
         if (opts.Compression.StartsWith("client:"))
         {
             var mode = opts.Compression.Split(':')[1];
-            return new RavenClientTransport(opts.Url, opts.Database, mode);
+            return new RavenClientTransport(opts.Url, opts.Database, mode, opts.HttpVersion);
         }
         
         return new RawHttpTransport(opts.Url, opts.Database, "identity", opts.HttpVersion);
