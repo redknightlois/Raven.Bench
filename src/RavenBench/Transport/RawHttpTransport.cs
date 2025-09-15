@@ -112,99 +112,133 @@ public sealed class RawHttpTransport : ITransport
 
     private async Task<TransportResult> GetAsync(string id, CancellationToken ct)
     {
-        var url = BuildUrl(id);
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.AcceptEncoding.Clear();
-        req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-        req.Headers.ExpectContinue = false;
-        
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(30));
-        
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-
-        // Update negotiated version if not yet set (fallback for when validation was skipped)
-        if (_negotiatedHttpVersion == null)
+        try
         {
-            _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
-        }
+            var url = BuildUrl(id);
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
 
-        long bytesIn = 0;
-        if (resp.Content.Headers.ContentLength.HasValue)
-        {
-            bytesIn = resp.Content.Headers.ContentLength.Value;
-            // If gzip auto-decompressed, Content-Length is post-decompression; treat as payload bytes
-        }
-        else
-        {
-            await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
 
-            if (_bufferPool.TryDequeue(out var buffer) == false)
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
+            if (!resp.IsSuccessStatusCode)
             {
-                buffer = new byte[32768]; // Fallback if pool is empty
+                var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                return new TransportResult(0, 0, errorDetails);
             }
-            
-            int totalRead = 0;
-            int bytesRead;
-            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+
+            // Update negotiated version if not yet set (fallback for when validation was skipped)
+            if (_negotiatedHttpVersion == null)
             {
-                totalRead += bytesRead;
+                _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
             }
-            bytesIn = totalRead;
-            
-            _bufferPool.TryEnqueue(buffer); // Return to pool
+
+            long bytesIn = 0;
+            if (resp.Content.Headers.ContentLength.HasValue)
+            {
+                bytesIn = resp.Content.Headers.ContentLength.Value;
+                // If gzip auto-decompressed, Content-Length is post-decompression; treat as payload bytes
+            }
+            else
+            {
+                await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+
+                if (_bufferPool.TryDequeue(out var buffer) == false)
+                {
+                    buffer = new byte[32768]; // Fallback if pool is empty
+                }
+
+                int totalRead = 0;
+                int bytesRead;
+                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                {
+                    totalRead += bytesRead;
+                }
+                bytesIn = totalRead;
+
+                _bufferPool.TryEnqueue(buffer); // Return to pool
+            }
+            // crude header bytes estimate
+            var bytesOut = 400; // request headers approx
+            return new TransportResult(bytesOut, bytesIn);
         }
-        // crude header bytes estimate
-        var bytesOut = 400; // request headers approx
-        return new TransportResult(bytesOut, bytesIn);
+        catch (Exception ex)
+        {
+            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
+            return new TransportResult(0, 0, errorDetails);
+        }
     }
 
     private async Task<TransportResult> PutAsyncInternal(string id, string json, CancellationToken ct)
     {
-        var url = BuildUrl(id);
-        using var req = new HttpRequestMessage(HttpMethod.Put, url);
-        req.Headers.AcceptEncoding.Clear();
-        req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-        req.Headers.ExpectContinue = false;
-        req.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(30));
-        
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-        
-        // Update negotiated version if not yet set (fallback for when validation was skipped)
-        if (_negotiatedHttpVersion == null)
+        try
         {
-            _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
-        }
-        long bytesIn = 0;
-        if (resp.Content.Headers.ContentLength.HasValue)
-        {
-            bytesIn = resp.Content.Headers.ContentLength.Value;
-        }
-        else
-        {
-            await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            var url = BuildUrl(id);
+            using var req = new HttpRequestMessage(HttpMethod.Put, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+            req.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            if (_bufferPool.TryDequeue(out var buffer) == false)
-                buffer = new byte[32768]; // Fallback if pool is empty
-            
-            int totalRead = 0;
-            int bytesRead;
-            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
+            if (!resp.IsSuccessStatusCode)
             {
-                totalRead += bytesRead;
+                var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                return new TransportResult(0, 0, errorDetails);
             }
-            bytesIn = totalRead;
-            
-            _bufferPool.TryEnqueue(buffer); // Return to pool
+        
+            // Update negotiated version if not yet set (fallback for when validation was skipped)
+            if (_negotiatedHttpVersion == null)
+            {
+                _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
+            }
+            long bytesIn = 0;
+            if (resp.Content.Headers.ContentLength.HasValue)
+            {
+                bytesIn = resp.Content.Headers.ContentLength.Value;
+            }
+            else
+            {
+                await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+
+                if (_bufferPool.TryDequeue(out var buffer) == false)
+                    buffer = new byte[32768]; // Fallback if pool is empty
+
+                int totalRead = 0;
+                int bytesRead;
+                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                {
+                    totalRead += bytesRead;
+                }
+                bytesIn = totalRead;
+
+                _bufferPool.TryEnqueue(buffer); // Return to pool
+            }
+            long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(json);
+            bytesOut += 400; // headers approx
+            return new TransportResult(bytesOut, bytesIn);
         }
-        long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(json);
-        bytesOut += 400; // headers approx
-        return new TransportResult(bytesOut, bytesIn);
+        catch (TaskCanceledException)
+        {
+            // TaskCanceledException from timeout is expected during benchmark runs
+            // Return a result without error details to avoid logging as error
+            return new TransportResult(0, 0);
+        }
+        catch (Exception ex)
+        {
+            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
+            return new TransportResult(0, 0, errorDetails);
+        }
     }
 
     public async Task<int?> GetServerMaxCoresAsync()

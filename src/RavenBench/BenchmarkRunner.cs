@@ -263,9 +263,20 @@ public class BenchmarkRunner(RunOptions opts)
                         if (step.Record)
                             hist.Record(us);
 
-                        Interlocked.Increment(ref success);
-                        Interlocked.Add(ref bytesOut, res.BytesOut);
-                        Interlocked.Add(ref bytesIn, res.BytesIn);
+                        if (res.IsSuccess)
+                        {
+                            Interlocked.Increment(ref success);
+                            Interlocked.Add(ref bytesOut, res.BytesOut);
+                            Interlocked.Add(ref bytesIn, res.BytesIn);
+                        }
+                        else
+                        {
+                            Interlocked.Increment(ref errors);
+                            if (opts.Verbose && res.ErrorDetails != null)
+                            {
+                                Console.WriteLine($"[Raven.Bench] Verbose Error: {res.ErrorDetails}");
+                            }
+                        }
                     }
                     catch (TaskCanceledException)
                     {

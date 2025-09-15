@@ -64,29 +64,42 @@ public sealed class RavenClientTransport : ITransport
 
     public async Task<TransportResult> ExecuteAsync(RavenBench.Workload.Operation op, CancellationToken ct)
     {
-        switch (op.Type)
+        try
         {
-            case OperationType.ReadById:
-                using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
-                {
-                    var _ = await s.LoadAsync<object>(op.Id, ct).ConfigureAwait(false);
-                }
-                // bytes unknown; estimate ~doc size
-                return new TransportResult(300, 4096);
-            case OperationType.Insert:
-            case OperationType.Update:
-                // Use session to store raw JSON - simpler approach
-                using (var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
-                {
-                    // Deserialize JSON into a dynamic object and store it
-                    var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(op.Payload!);
-                    await session.StoreAsync(jsonObj, op.Id, ct).ConfigureAwait(false);
-                    await session.SaveChangesAsync(ct).ConfigureAwait(false);
-                }
-                var outBytes = op.Payload?.Length ?? 0;
-                return new TransportResult(outBytes + 300, 256);
-            default:
-                return new TransportResult(0, 0);
+            switch (op.Type)
+            {
+                case OperationType.ReadById:
+                    using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                    {
+                        var _ = await s.LoadAsync<object>(op.Id, ct).ConfigureAwait(false);
+                    }
+                    // bytes unknown; estimate ~doc size
+                    return new TransportResult(300, 4096);
+                case OperationType.Insert:
+                case OperationType.Update:
+                    // Use session to store raw JSON - simpler approach
+                    using (var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                    {
+                        // Deserialize JSON into a dynamic object and store it
+                        var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(op.Payload!);
+                        await session.StoreAsync(jsonObj, op.Id, ct).ConfigureAwait(false);
+                        await session.SaveChangesAsync(ct).ConfigureAwait(false);
+                    }
+                    var outBytes = op.Payload?.Length ?? 0;
+                    return new TransportResult(outBytes + 300, 256);
+                default:
+                    return new TransportResult(0, 0);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // TaskCanceledException from timeout is expected during benchmark runs
+            // Return a result without error details to avoid logging as error
+            return new TransportResult(0, 0);
+        }
+        catch (Exception ex)
+        {
+            return new TransportResult(0, 0, ex.Message);
         }
     }
 

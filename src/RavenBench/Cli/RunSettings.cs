@@ -85,4 +85,7 @@ public sealed class RunSettings : CommandSettings
 
     [CommandOption("--strict-http-version")]
     public bool StrictHttpVersion { get; init; }
+
+    [CommandOption("--verbose")]
+    public bool Verbose { get; init; }
 }

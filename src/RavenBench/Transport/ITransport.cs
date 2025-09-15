@@ -3,10 +3,12 @@ using RavenBench.Metrics;
 
 namespace RavenBench.Transport;
 
-public readonly struct TransportResult(long bytesOut, long bytesIn)
+public readonly struct TransportResult(long bytesOut, long bytesIn, string? errorDetails = null)
 {
     public long BytesOut { get; } = bytesOut;
     public long BytesIn { get; } = bytesIn;
+    public string? ErrorDetails { get; } = errorDetails;
+    public bool IsSuccess => ErrorDetails == null;
 }
 
 public interface ITransport : IDisposable

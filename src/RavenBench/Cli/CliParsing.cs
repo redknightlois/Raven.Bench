@@ -47,7 +47,8 @@ internal static class CliParsing
             NetworkLimitedMode = s.NetworkLimitedMode,
             LinkMbps = s.LinkMbps,
             HttpVersion = s.HttpVersion,
-            StrictHttpVersion = s.StrictHttpVersion
+            StrictHttpVersion = s.StrictHttpVersion,
+            Verbose = s.Verbose
         };
     }
 
