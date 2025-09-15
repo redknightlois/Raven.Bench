@@ -4,6 +4,7 @@ using RavenBench.Transport;
 using RavenBench.Workload;
 using RavenBench.Util;
 using RavenBench.Reporting;
+using Spectre.Console;
 
 
 namespace RavenBench;
@@ -46,6 +47,7 @@ public class BenchmarkRunner(RunOptions opts)
             _ => "client-default"
         };
 
+        await ValidateClientAsync(transport);
         await ValidateServerSanityAsync(transport);
         
         // Create benchmark context to reduce parameter passing
@@ -60,20 +62,18 @@ public class BenchmarkRunner(RunOptions opts)
         
         while (concurrency <= opts.ConcurrencyEnd)
         {
-            Console.WriteLine($"[Raven.Bench] Warmup @ concurrency={concurrency} for {opts.Warmup.TotalSeconds:F0}s...");
-            await RunClosedLoopAsync(context, new StepParameters 
-            { 
-                Concurrency = concurrency, 
-                Duration = opts.Warmup, 
-                Record = false 
+            await WarmupWithProgress(context, new StepParameters
+            {
+                Concurrency = concurrency,
+                Duration = opts.Warmup,
+                Record = false
             });
 
-            Console.WriteLine($"[Raven.Bench] Measure @ concurrency={concurrency} for {opts.Duration.TotalSeconds:F0}s...");
-            var (s, hist) = await RunClosedLoopAsync(context, new StepParameters 
-            { 
-                Concurrency = concurrency, 
-                Duration = opts.Duration, 
-                Record = true 
+            var (s, hist) = await MeasureWithProgress(context, new StepParameters
+            {
+                Concurrency = concurrency,
+                Duration = opts.Duration,
+                Record = true
             });
 
             s.P50Ms = hist.GetPercentile(50) / 1000.0;
@@ -101,6 +101,60 @@ public class BenchmarkRunner(RunOptions opts)
             ClientCompression = clientCompression,
             EffectiveHttpVersion = httpVersion
         };
+    }
+
+    private async Task WarmupWithProgress(BenchmarkContext context, StepParameters step)
+    {
+        await AnsiConsole.Progress()
+            .AutoClear(true)
+            .Columns(new ProgressColumn[]
+            {
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new ElapsedTimeColumn(),
+                new RemainingTimeColumn()
+            })
+            .StartAsync(async ctx =>
+            {
+                var t = ctx.AddTask($"Warmup @ C={step.Concurrency}", maxValue: step.Duration.TotalSeconds);
+                var run = RunClosedLoopAsync(context, step);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (!run.IsCompleted)
+                {
+                    t.Value = Math.Min(step.Duration.TotalSeconds, sw.Elapsed.TotalSeconds);
+                    await Task.Delay(200);
+                }
+                t.Value = t.MaxValue;
+                await run;
+            });
+    }
+
+    private async Task<(StepResult result, LatencyRecorder hist)> MeasureWithProgress(BenchmarkContext context, StepParameters step)
+    {
+        (StepResult, LatencyRecorder) res = default;
+        await AnsiConsole.Progress()
+            .AutoClear(true)
+            .Columns(new ProgressColumn[]
+            {
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new ElapsedTimeColumn(),
+                new RemainingTimeColumn()
+            })
+            .StartAsync(async ctx =>
+            {
+                var t = ctx.AddTask($"Measure @ C={step.Concurrency}", maxValue: step.Duration.TotalSeconds);
+                var run = RunClosedLoopAsync(context, step);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (!run.IsCompleted)
+                {
+                    t.Value = Math.Min(step.Duration.TotalSeconds, sw.Elapsed.TotalSeconds);
+                    await Task.Delay(200);
+                }
+                t.Value = t.MaxValue;
+                res = await run;
+            });
+        return res;
     }
 
     private static IWorkload BuildWorkload(RunOptions opts)
@@ -268,6 +322,23 @@ public class BenchmarkRunner(RunOptions opts)
     }
 
     /// <summary>
+    /// Validates client can connect to the server and rejects invalid clients.
+    /// This is a hard validation that will terminate the benchmark if the client is not valid.
+    /// </summary>
+    private async Task ValidateClientAsync(ITransport transport)
+    {
+        try
+        {
+            await transport.ValidateClientAsync();
+            Console.WriteLine("[Raven.Bench] Client validation successful");
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Client validation failed. Benchmark cannot proceed with invalid client: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
     /// Validates server configuration matches expectations to catch environment issues early.
     /// Checks server core limits to ensure benchmark runs in expected conditions.
     /// </summary>
@@ -275,9 +346,11 @@ public class BenchmarkRunner(RunOptions opts)
     {
         try
         { 
-            // Display RavenDB server version
+            // Display RavenDB server version and license type
             var serverVersion = await transport.GetServerVersionAsync();
+            var licenseType = await transport.GetServerLicenseTypeAsync();
             Console.WriteLine($"[Raven.Bench] RavenDB Server Version: {serverVersion}");
+            Console.WriteLine($"[Raven.Bench] License Type: {licenseType}");
             
             if (opts.ExpectedCores.HasValue)
             {

@@ -240,6 +240,47 @@ public sealed class RawHttpTransport : ITransport
         }
     }
 
+    public async Task<string> GetServerLicenseTypeAsync()
+    {
+        try
+        {
+            var url = $"{_baseUrl}/admin/license/status";
+            using var resp = await _http.GetAsync(url).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+            
+            if (doc.RootElement.TryGetProperty("Type", out var licenseType))
+                return licenseType.GetString() ?? "unknown";
+            if (doc.RootElement.TryGetProperty("LicenseType", out var altLicenseType))
+                return altLicenseType.GetString() ?? "unknown";
+                
+            return "unknown";
+        }
+        catch 
+        { 
+            return "unknown";
+        }
+    }
+
+
+    public async Task ValidateClientAsync()
+    {
+        try
+        {
+            var url = $"{_baseUrl}/databases/{_db}/stats";
+            using var response = await _http.GetAsync(url).ConfigureAwait(false);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException($"Server returned {response.StatusCode}: {response.ReasonPhrase}");
+            }
+        }
+        catch (Exception ex) when (!(ex is InvalidOperationException))
+        {
+            throw new InvalidOperationException($"Client validation failed: Unable to connect to RavenDB server. {ex.Message}", ex);
+        }
+    }
 
     public void Dispose()
     {

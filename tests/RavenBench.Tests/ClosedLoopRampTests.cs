@@ -90,6 +90,8 @@ public class ClosedLoopRampTests
         public void Dispose() { }
         public Task<int?> GetServerMaxCoresAsync() => Task.FromResult<int?>(null);
         public Task<string> GetServerVersionAsync() => Task.FromResult("1.0.0-test");
+        public Task<string> GetServerLicenseTypeAsync() => Task.FromResult("Developer");
+        public Task ValidateClientAsync() => Task.CompletedTask;
         public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(new ServerMetrics 
         { 
             CpuUsagePercent = 25.0, 

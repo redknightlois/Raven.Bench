@@ -2,6 +2,7 @@ using Raven.Client.Documents;
 using Raven.Client.Documents.Conventions;
 using Raven.Client.Documents.Commands;
 using Raven.Client.Documents.Session;
+using Raven.Client.Documents.Operations;
 using Raven.Client.Http;
 using Raven.Client.ServerWide.Operations;
 using Sparrow.Json;
@@ -34,21 +35,6 @@ public sealed class RavenClientTransport : ITransport
             Database = database
         };
 
-        // Harden client conventions and HTTP handler
-        _store.Conventions = new DocumentConventions
-        {
-            DisableTopologyUpdates = true,
-            RequestTimeout = TimeSpan.FromSeconds(15),
-            MaxNumberOfRequestsPerSession = int.MaxValue,
-            HttpMessageHandlerFactory = _ => new SocketsHttpHandler
-            {
-                MaxConnectionsPerServer = 8192,
-                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-                AutomaticDecompression = DecompressionMethods.None,
-                UseCookies = false
-            }
-        };
-
         ConfigureCompression();
 
         _store.Initialize();
@@ -76,12 +62,12 @@ public sealed class RavenClientTransport : ITransport
         };
     }
 
-    public async Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct)
+    public async Task<TransportResult> ExecuteAsync(RavenBench.Workload.Operation op, CancellationToken ct)
     {
         switch (op.Type)
         {
             case OperationType.ReadById:
-                using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true, NoCaching = true, TransactionMode = TransactionMode.SingleNode }))
+                using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                 {
                     var _ = await s.LoadAsync<object>(op.Id, ct).ConfigureAwait(false);
                 }
@@ -90,7 +76,7 @@ public sealed class RavenClientTransport : ITransport
             case OperationType.Insert:
             case OperationType.Update:
                 // Use session to store raw JSON - simpler approach
-                using (var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true, NoCaching = true, TransactionMode = TransactionMode.SingleNode }))
+                using (var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                 {
                     // Deserialize JSON into a dynamic object and store it
                     var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(op.Payload!);
@@ -133,6 +119,43 @@ public sealed class RavenClientTransport : ITransport
         }
     }
 
+    public async Task<string> GetServerLicenseTypeAsync()
+    {
+        try
+        {
+            using var http = new HttpClient();
+            var url = _store.Urls[0].TrimEnd('/') + "/admin/license/status";
+            using var resp = await http.GetAsync(url).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+
+            if (doc.RootElement.TryGetProperty("Type", out var licenseType))
+                return licenseType.GetString() ?? "unknown";
+            if (doc.RootElement.TryGetProperty("LicenseType", out var altLicenseType))
+                return altLicenseType.GetString() ?? "unknown";
+
+            return "unknown";
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
+
+
+    public async Task ValidateClientAsync()
+    {
+        try
+        {
+            using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true });
+            await session.LoadAsync<object>("validation-test-key-that-does-not-exist").ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Client validation failed: Unable to connect to RavenDB server. {ex.Message}", ex);
+        }
+    }
 
     public void Dispose()
     {

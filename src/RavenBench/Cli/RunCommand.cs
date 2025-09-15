@@ -73,6 +73,8 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
 
     private static void RenderResults(BenchmarkSummary summary, double maxNetUtil, ResultAnalyzer.Report analysis)
     {
+        AnsiConsole.WriteLine();
+        AnsiConsole.WriteLine();
         var table = new Table().Border(TableBorder.Rounded).Caption("[grey]Per-step metrics[/]");
         table.AddColumn("Concurrency");
         table.AddColumn("Thr/s");
@@ -122,4 +124,3 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             AnsiConsole.MarkupLine("[italic]Beyond limits = unreliable.[/]");
     }
 }
-
