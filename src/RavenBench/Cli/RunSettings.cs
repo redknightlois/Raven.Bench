@@ -82,4 +82,7 @@ public sealed class RunSettings : CommandSettings
 
     [CommandOption("--http-version")]
     public string HttpVersion { get; init; } = "auto";
+
+    [CommandOption("--strict-http-version")]
+    public bool StrictHttpVersion { get; init; }
 }

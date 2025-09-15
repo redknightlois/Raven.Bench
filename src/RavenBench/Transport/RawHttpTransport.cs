@@ -17,9 +17,29 @@ public sealed class RawHttpTransport : ITransport
     private readonly string _acceptEncoding;
     private readonly string? _customEndpoint; // optional format with {id}
     private readonly LockFreeRingBuffer<byte[]> _bufferPool;
+    private readonly string _requestedHttpVersion;
     private string? _negotiatedHttpVersion;
     public string EffectiveCompressionMode { get; }
     public string EffectiveHttpVersion => _negotiatedHttpVersion ?? "unknown";
+
+    private static string FormatHttpVersion(Version version) => version.ToString() switch
+    {
+        "3.0" => "3",
+        "2.0" => "2",
+        "1.1" => "1.1",
+        "1.0" => "1.0",
+        _ => version.ToString()
+    };
+
+    private static string NormalizeHttpVersion(string httpVersion) => httpVersion.ToLowerInvariant() switch
+    {
+        "http2" or "2.0" => "2",
+        "http3" or "3.0" => "3",
+        "http1.1" or "1.1" => "1.1",
+        "http1.0" or "1.0" => "1.0",
+        "auto" => "auto",
+        _ => httpVersion // Pass through other values like "2", "3", etc.
+    };
 
     public RawHttpTransport(string url, string database, string compressionMode, string httpVersion, string? endpoint = null)
     {
@@ -28,6 +48,7 @@ public sealed class RawHttpTransport : ITransport
         _acceptEncoding = compressionMode.Equals("identity", StringComparison.OrdinalIgnoreCase) ? "identity" : compressionMode;
         EffectiveCompressionMode = _acceptEncoding;
         _customEndpoint = string.IsNullOrWhiteSpace(endpoint) ? null : endpoint;
+        _requestedHttpVersion = NormalizeHttpVersion(httpVersion);
 
         // Configure automatic decompression for supported formats
         // Note: Zstd requires third-party library as it's not supported in .NET's DecompressionMethods
@@ -54,7 +75,7 @@ public sealed class RawHttpTransport : ITransport
         
         var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
 
-        (client.DefaultRequestVersion, client.DefaultVersionPolicy, _negotiatedHttpVersion) = httpVersion switch
+        (client.DefaultRequestVersion, client.DefaultVersionPolicy, _negotiatedHttpVersion) = _requestedHttpVersion switch
         {
             "2" => (HttpVersion.Version20, HttpVersionPolicy.RequestVersionExact, "2"),
             "3" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact, "3"),
@@ -103,16 +124,10 @@ public sealed class RawHttpTransport : ITransport
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
-        if (_negotiatedHttpVersion == "auto")
+        // Update negotiated version if not yet set (fallback for when validation was skipped)
+        if (_negotiatedHttpVersion == null)
         {
-            _negotiatedHttpVersion = resp.Version.ToString() switch
-            {
-                "3.0" => "3", 
-                "2.0" => "2", 
-                "1.1" => "1.1", 
-                "1.0" => "1.0",
-                _ => resp.Version.ToString()
-            };
+            _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
         }
 
         long bytesIn = 0;
@@ -160,12 +175,11 @@ public sealed class RawHttpTransport : ITransport
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         
-        if (_negotiatedHttpVersion == "auto")
-            _negotiatedHttpVersion = resp.Version.ToString() switch
-            {
-                "3.0" => "3", "2.0" => "2", "1.1" => "1.1", "1.0" => "1.0",
-                _ => resp.Version.ToString()
-            };
+        // Update negotiated version if not yet set (fallback for when validation was skipped)
+        if (_negotiatedHttpVersion == null)
+        {
+            _negotiatedHttpVersion = FormatHttpVersion(resp.Version);
+        }
         long bytesIn = 0;
         if (resp.Content.Headers.ContentLength.HasValue)
         {
@@ -266,14 +280,45 @@ public sealed class RawHttpTransport : ITransport
 
     public async Task ValidateClientAsync()
     {
+        await ValidateClientAsync(false);
+    }
+
+    public async Task ValidateClientAsync(bool strictHttpVersion)
+    {
         try
         {
             var url = $"{_baseUrl}/databases/{_db}/stats";
             using var response = await _http.GetAsync(url).ConfigureAwait(false);
-            
+
             if (!response.IsSuccessStatusCode)
             {
                 throw new HttpRequestException($"Server returned {response.StatusCode}: {response.ReasonPhrase}");
+            }
+
+            // Always detect actual HTTP version during validation
+            var actualVersion = FormatHttpVersion(response.Version);
+
+            // Update negotiated version for auto mode or set it if not already set
+            if (_requestedHttpVersion == "auto" || _negotiatedHttpVersion == null)
+            {
+                _negotiatedHttpVersion = actualVersion;
+            }
+
+            // Validate HTTP version match if strict mode is enabled
+            if (strictHttpVersion && _requestedHttpVersion != "auto")
+            {
+                if (actualVersion != _requestedHttpVersion)
+                {
+                    var requestedForDisplay = _requestedHttpVersion switch
+                    {
+                        "2" => "2",
+                        "3" => "3",
+                        "1.1" => "1.1",
+                        "1.0" => "1.0",
+                        _ => _requestedHttpVersion
+                    };
+                    throw new InvalidOperationException($"HTTP version mismatch: requested HTTP/{requestedForDisplay} but server negotiated HTTP/{actualVersion}. Use --http-version=auto or configure server to support HTTP/{requestedForDisplay}.");
+                }
             }
         }
         catch (Exception ex) when (!(ex is InvalidOperationException))

@@ -46,7 +46,8 @@ internal static class CliParsing
             ExpectedCores = s.ExpectedCores,
             NetworkLimitedMode = s.NetworkLimitedMode,
             LinkMbps = s.LinkMbps,
-            HttpVersion = s.HttpVersion
+            HttpVersion = s.HttpVersion,
+            StrictHttpVersion = s.StrictHttpVersion
         };
     }
 

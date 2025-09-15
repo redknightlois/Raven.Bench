@@ -39,4 +39,5 @@ public sealed class RunOptions
     public bool NetworkLimitedMode { get; init; } = false;
     public double LinkMbps { get; init; } = 1000.0; // default 1 Gb
     public string HttpVersion { get; init; } = "auto"; // "1.1" | "2" | "3" | "auto"
+    public bool StrictHttpVersion { get; init; } = false; // fail if requested HTTP version is not available
 }

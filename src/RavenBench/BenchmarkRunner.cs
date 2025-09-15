@@ -116,7 +116,8 @@ public class BenchmarkRunner(RunOptions opts)
             })
             .StartAsync(async ctx =>
             {
-                var t = ctx.AddTask($"Warmup @ C={step.Concurrency}", maxValue: step.Duration.TotalSeconds);
+                var httpVersionInfo = context.Transport is RawHttpTransport raw ? $" HTTP/{raw.EffectiveHttpVersion}" : "";
+                var t = ctx.AddTask($"Warmup @ C={step.Concurrency}{httpVersionInfo}", maxValue: step.Duration.TotalSeconds);
                 var run = RunClosedLoopAsync(context, step);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 while (!run.IsCompleted)
@@ -143,7 +144,8 @@ public class BenchmarkRunner(RunOptions opts)
             })
             .StartAsync(async ctx =>
             {
-                var t = ctx.AddTask($"Measure @ C={step.Concurrency}", maxValue: step.Duration.TotalSeconds);
+                var httpVersionInfo = context.Transport is RawHttpTransport raw ? $" HTTP/{raw.EffectiveHttpVersion}" : "";
+                var t = ctx.AddTask($"Measure @ C={step.Concurrency}{httpVersionInfo}", maxValue: step.Duration.TotalSeconds);
                 var run = RunClosedLoopAsync(context, step);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 while (!run.IsCompleted)
@@ -329,7 +331,14 @@ public class BenchmarkRunner(RunOptions opts)
     {
         try
         {
-            await transport.ValidateClientAsync();
+            if (transport is RawHttpTransport rawTransport)
+            {
+                await rawTransport.ValidateClientAsync(opts.StrictHttpVersion);
+            }
+            else
+            {
+                await transport.ValidateClientAsync();
+            }
             Console.WriteLine("[Raven.Bench] Client validation successful");
         }
         catch (Exception ex)
@@ -351,6 +360,12 @@ public class BenchmarkRunner(RunOptions opts)
             var licenseType = await transport.GetServerLicenseTypeAsync();
             Console.WriteLine($"[Raven.Bench] RavenDB Server Version: {serverVersion}");
             Console.WriteLine($"[Raven.Bench] License Type: {licenseType}");
+
+            // Display effective HTTP version
+            if (transport is RawHttpTransport rawTransport)
+            {
+                Console.WriteLine($"[Raven.Bench] HTTP Version: {rawTransport.EffectiveHttpVersion}");
+            }
             
             if (opts.ExpectedCores.HasValue)
             {
