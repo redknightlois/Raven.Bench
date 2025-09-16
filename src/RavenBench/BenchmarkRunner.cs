@@ -215,12 +215,21 @@ public class BenchmarkRunner(RunOptions opts)
         
         while (concurrency <= opts.ConcurrencyEnd)
         {
-            await WarmupWithProgress(context, new StepParameters
+            var warmupResult = await WarmupWithProgress(context, new StepParameters
             {
                 Concurrency = concurrency,
                 Duration = opts.Warmup,
                 Record = false
             });
+
+            // Check if warmup failed with high error rate - terminate gracefully
+            if (warmupResult.ErrorRate > 0.5)
+            {
+                Console.WriteLine($"[Raven.Bench] Warmup failed with {warmupResult.ErrorRate:P1} error rate (>{50:P0}).");
+                var httpVersionInfo = negotiatedHttpVersion.Major == 1 ? " (common with HTTP/1 socket exhaustion)" : "";
+                Console.WriteLine($"[Raven.Bench] Stopping benchmark - system appears unstable{httpVersionInfo}.");
+                break;
+            }
 
             var (s, hist) = await MeasureWithProgress(context, new StepParameters
             {
@@ -291,9 +300,9 @@ public class BenchmarkRunner(RunOptions opts)
         };
     }
 
-    private async Task WarmupWithProgress(BenchmarkContext context, StepParameters step)
+    private async Task<StepResult> WarmupWithProgress(BenchmarkContext context, StepParameters step)
     {
-        await AnsiConsole.Progress()
+        var (result, _) = await AnsiConsole.Progress()
             .AutoClear(true)
             .Columns(new ProgressColumn[]
             {
@@ -314,8 +323,10 @@ public class BenchmarkRunner(RunOptions opts)
                     await Task.Delay(200);
                 }
                 t.Value = t.MaxValue;
-                await run;
+                return await run;
             });
+
+        return result;
     }
 
     private async Task<(StepResult result, LatencyRecorder hist)> MeasureWithProgress(BenchmarkContext context, StepParameters step)
