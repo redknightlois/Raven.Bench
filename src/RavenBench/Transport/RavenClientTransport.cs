@@ -110,12 +110,12 @@ public sealed class RavenClientTransport : ITransport
                     return new TransportResult(300, 4096);
                 case OperationType.Insert:
                 case OperationType.Update:
-                    // Use session to store raw JSON - simpler approach
+                    // Store raw JSON to maintain consistency with RawHttpTransport
                     using (var session = _store.OpenAsyncSession())
                     {
-                        // Deserialize JSON into a dynamic object and store it
-                        var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(op.Payload!);
-                        await session.StoreAsync(jsonObj, op.Id, ct).ConfigureAwait(false);
+                        // Store as raw JSON document to match RawHttpTransport behavior
+                        var doc = new { Json = op.Payload };
+                        await session.StoreAsync(doc, op.Id, ct).ConfigureAwait(false);
                         await session.SaveChangesAsync(ct).ConfigureAwait(false);
                     }
                     var outBytes = op.Payload?.Length ?? 0;
@@ -143,10 +143,10 @@ public sealed class RavenClientTransport : ITransport
 
     public async Task PutAsync(string id, string json)
     {
-        // Use session to store raw JSON - simpler approach
+        // Store raw JSON to maintain consistency with RawHttpTransport
         using var session = _store.OpenAsyncSession();
-        var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(json);
-        await session.StoreAsync(jsonObj, id).ConfigureAwait(false);
+        var doc = new { Json = json };
+        await session.StoreAsync(doc, id).ConfigureAwait(false);
         await session.SaveChangesAsync().ConfigureAwait(false);
     }
 
