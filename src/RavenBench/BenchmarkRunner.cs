@@ -369,8 +369,10 @@ public class BenchmarkRunner(RunOptions opts)
             // Display RavenDB server version and license type
             var serverVersion = await transport.GetServerVersionAsync();
             var licenseType = await transport.GetServerLicenseTypeAsync();
+            var maxCores = await transport.GetServerMaxCoresAsync();
             Console.WriteLine($"[Raven.Bench] RavenDB Server Version: {serverVersion}");
             Console.WriteLine($"[Raven.Bench] License Type: {licenseType}");
+            Console.WriteLine($"[Raven.Bench] Max CPU Cores: {(maxCores?.ToString() ?? "unlimited")}");
 
             // Display effective HTTP version
             if (transport is RawHttpTransport rawTransport)
@@ -380,10 +382,9 @@ public class BenchmarkRunner(RunOptions opts)
             
             if (opts.ExpectedCores.HasValue)
             {
-                var cores = await transport.GetServerMaxCoresAsync();
-                if (cores.HasValue && cores.Value != opts.ExpectedCores.Value)
+                if (maxCores.HasValue && maxCores.Value != opts.ExpectedCores.Value)
                 {
-                    Console.WriteLine($"[Raven.Bench] Warning: Server core limit={cores} differs from expected={opts.ExpectedCores}");
+                    Console.WriteLine($"[Raven.Bench] Warning: Server core limit={maxCores} differs from expected={opts.ExpectedCores}");
                 }
             }
         }

@@ -12,6 +12,7 @@ using RavenBench.Util;
 using System.Text.Json;
 using System.Net;
 using System.Net.Http;
+using System.Collections.Generic;
 
 namespace RavenBench.Transport;
 
@@ -24,6 +25,7 @@ public sealed class RavenClientTransport : ITransport
     private readonly IDocumentStore _store;
     private readonly string _compressionMode;
     private readonly string _requestedHttpVersion;
+    private readonly (Version version, HttpVersionPolicy policy) _httpVersionInfo;
     private string? _negotiatedHttpVersion;
 
     public string EffectiveCompressionMode => _compressionMode;
@@ -34,10 +36,11 @@ public sealed class RavenClientTransport : ITransport
     {
         _compressionMode = compressionMode.ToLowerInvariant();
         _requestedHttpVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
+        _httpVersionInfo = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
 
         _store = new DocumentStore
         {
-            Urls = new[] { url },
+            Urls = [url],
             Database = database
         };
 
@@ -79,11 +82,11 @@ public sealed class RavenClientTransport : ITransport
 
         // Configure HTTP/2 and HTTP/3 through DocumentConventions.CreateHttpClient
         var conventions = _store.Conventions;
-        var versionInfo = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
-
         conventions.CreateHttpClient = (handler) =>
         {
-            var client = new HttpClient(new HttpHelper.HttpVersionHandler(handler, versionInfo))
+            // Use configured handler with HTTP/2 settings
+            var configuredHandler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
+            var client = new HttpClient(new HttpHelper.HttpVersionHandler(configuredHandler, _httpVersionInfo))
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
@@ -92,7 +95,7 @@ public sealed class RavenClientTransport : ITransport
     }
 
 
-    public async Task<TransportResult> ExecuteAsync(RavenBench.Workload.Operation op, CancellationToken ct)
+    public async Task<TransportResult> ExecuteAsync(Workload.Operation op, CancellationToken ct)
     {
         try
         {
@@ -108,7 +111,7 @@ public sealed class RavenClientTransport : ITransport
                 case OperationType.Insert:
                 case OperationType.Update:
                     // Use session to store raw JSON - simpler approach
-                    using (var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                    using (var session = _store.OpenAsyncSession())
                     {
                         // Deserialize JSON into a dynamic object and store it
                         var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(op.Payload!);
@@ -141,7 +144,7 @@ public sealed class RavenClientTransport : ITransport
     public async Task PutAsync(string id, string json)
     {
         // Use session to store raw JSON - simpler approach
-        using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true });
+        using var session = _store.OpenAsyncSession();
         var jsonObj = Newtonsoft.Json.JsonConvert.DeserializeObject(json);
         await session.StoreAsync(jsonObj, id).ConfigureAwait(false);
         await session.SaveChangesAsync().ConfigureAwait(false);
@@ -150,7 +153,7 @@ public sealed class RavenClientTransport : ITransport
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
         var baseUrl = _store.Urls[0].TrimEnd('/');
-        return await RavenServerMetricsCollector.CollectAsync(baseUrl, _store.Database);
+        return await RavenServerMetricsCollector.CollectAsync(baseUrl, _store.Database, _requestedHttpVersion);
     }
 
     public async Task<string> GetServerVersionAsync()
@@ -171,8 +174,11 @@ public sealed class RavenClientTransport : ITransport
     {
         try
         {
-            using var http = new HttpClient();
-            var url = _store.Urls[0].TrimEnd('/') + "/admin/license/status";
+            // Create HTTP client with same configuration as the store
+            var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
+            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, _httpVersionInfo));
+
+            var url = _store.Urls[0].TrimEnd('/') + "/license/status";
             using var resp = await http.GetAsync(url).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -185,8 +191,9 @@ public sealed class RavenClientTransport : ITransport
 
             return "unknown";
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"[Raven.Bench] Warning: Failed to get license type: {ex.GetType().Name}: {ex.Message}");
             return "unknown";
         }
     }
@@ -242,23 +249,24 @@ public sealed class RavenClientTransport : ITransport
         try
         {
             // Use maintenance operation if exposed; fallback to HTTP endpoint via server URL.
-            // We don’t depend on server admin permissions here; non-fatal if denied.
-            using var http = new HttpClient();
-            var url = _store.Urls[0].TrimEnd('/') + "/admin/license/status";
+            // We don't depend on server admin permissions here; non-fatal if denied.
+            // Create HTTP client with same configuration as the store
+            var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
+            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, _httpVersionInfo));
+
+            var url = _store.Urls[0].TrimEnd('/') + "/license/status";
             using var resp = await http.GetAsync(url).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
-            var json = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var maxIdx = json.IndexOf("MaxCores\":");
-            if (maxIdx > 0)
-            {
-                var remaining = json.Substring(maxIdx + 10);
-                int i = 0; while (i < remaining.Length && !char.IsDigit(remaining[i])) i++;
-                int j = i; while (j < remaining.Length && char.IsDigit(remaining[j])) j++;
-                if (int.TryParse(remaining.Substring(i, j - i), out var cores))
-                    return cores;
-            }
+            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+
+            if (doc.RootElement.TryGetProperty("MaxCores", out var maxCores) && maxCores.TryGetInt32(out var cores))
+                return cores;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Raven.Bench] Warning: Failed to get max cores: {ex.GetType().Name}: {ex.Message}");
+        }
         return null;
     }
 

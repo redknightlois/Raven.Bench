@@ -1,3 +1,4 @@
+using System.Net;
 using Spectre.Console.Cli;
 using RavenBench.Cli;
 
@@ -7,6 +8,13 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        // Configure before any HttpClient usage
+        ServicePointManager.DefaultConnectionLimit = int.MaxValue;
+        ServicePointManager.Expect100Continue = false;
+        ServicePointManager.UseNagleAlgorithm = false;
+        ServicePointManager.EnableDnsRoundRobin = true;
+        ServicePointManager.DnsRefreshTimeout = 60000; // 1 minute
+        
         var app = new CommandApp();
         app.Configure(cfg =>
         {

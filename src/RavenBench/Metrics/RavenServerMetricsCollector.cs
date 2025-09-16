@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Raven.Client.Documents;
+using RavenBench.Util;
 
 namespace RavenBench.Metrics;
 
@@ -15,7 +16,7 @@ public static class RavenServerMetricsCollector
     private static readonly ConcurrentDictionary<string, CpuSample> _previousCpuSamples = new();
     private static readonly ConcurrentDictionary<string, IoSample> _previousIoSamples = new();
 
-    public static async Task<ServerMetrics> CollectAsync(string baseUrl, string database)
+    public static async Task<ServerMetrics> CollectAsync(string baseUrl, string database, string? httpVersion = null)
     {
         try
         {
@@ -24,8 +25,25 @@ public static class RavenServerMetricsCollector
             {
                 Urls = new[] { baseUrl },
                 Database = database
-            }.Initialize();
-            
+            };
+
+            // Configure HTTP version if specified
+            if (!string.IsNullOrEmpty(httpVersion))
+            {
+                var normalizedVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
+                var httpVersionInfo = HttpHelper.GetRequestVersionInfo(normalizedVersion);
+
+                tempStore.Conventions.CreateHttpClient = (handler) =>
+                {
+                    var client = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
+                    {
+                        Timeout = Timeout.InfiniteTimeSpan
+                    };
+                    return client;
+                };
+            }
+
+            tempStore.Initialize();
             var httpClient = tempStore.GetRequestExecutor().HttpClient;
             
             // Collect server metrics from correct endpoints using authenticated client

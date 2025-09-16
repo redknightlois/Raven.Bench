@@ -18,6 +18,7 @@ public sealed class RawHttpTransport : ITransport
     private readonly string? _customEndpoint; // optional format with {id}
     private readonly LockFreeRingBuffer<byte[]> _bufferPool;
     private readonly string _requestedHttpVersion;
+    private readonly (Version version, HttpVersionPolicy policy) _httpVersionInfo;
     private string? _negotiatedHttpVersion;
     public string EffectiveCompressionMode { get; }
     public string EffectiveHttpVersion => _negotiatedHttpVersion ?? "unknown";
@@ -31,6 +32,7 @@ public sealed class RawHttpTransport : ITransport
         EffectiveCompressionMode = _acceptEncoding;
         _customEndpoint = string.IsNullOrWhiteSpace(endpoint) ? null : endpoint;
         _requestedHttpVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
+        _httpVersionInfo = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
 
         // Configure automatic decompression for supported formats
         // Note: Zstd requires third-party library as it's not supported in .NET's DecompressionMethods
@@ -42,18 +44,8 @@ public sealed class RawHttpTransport : ITransport
             _ => DecompressionMethods.None
         };
         
-        var handler = new SocketsHttpHandler
-        {
-            AutomaticDecompression = decompression,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
-            EnableMultipleHttp2Connections = true,
-            MaxConnectionsPerServer = int.MaxValue,
-            UseCookies = false,
-            AllowAutoRedirect = false,
-            KeepAlivePingDelay = TimeSpan.FromSeconds(60),
-            KeepAlivePingTimeout = TimeSpan.FromSeconds(30)
-        };
+        var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
+        handler.AutomaticDecompression = decompression;
         
         var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
 
@@ -97,12 +89,7 @@ public sealed class RawHttpTransport : ITransport
         try
         {
             var url = BuildUrl(id);
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-
-            // Set HTTP version and policy for proper HTTP/2 h2c support
-            var (version, policy) = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
-            req.Version = version;
-            req.VersionPolicy = policy;
+            using var req = CreateRequest(HttpMethod.Get, url);
 
             req.Headers.AcceptEncoding.Clear();
             req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
@@ -121,10 +108,7 @@ public sealed class RawHttpTransport : ITransport
             }
 
             // Update negotiated version if not yet set (fallback for when validation was skipped)
-            if (_negotiatedHttpVersion == null)
-            {
-                _negotiatedHttpVersion = HttpHelper.FormatHttpVersion(resp.Version);
-            }
+            _negotiatedHttpVersion ??= HttpHelper.FormatHttpVersion(resp.Version);
 
             long bytesIn = 0;
             if (resp.Content.Headers.ContentLength.HasValue)
@@ -155,6 +139,17 @@ public sealed class RawHttpTransport : ITransport
             var bytesOut = 400; // request headers approx
             return new TransportResult(bytesOut, bytesIn);
         }
+        catch (TaskCanceledException)
+        {
+            // If the external token (from benchmark) is cancelled, it's end-of-run, not an error
+            if (ct.IsCancellationRequested)
+            {
+                // External cancellation (benchmark ending) - not an error
+                return new TransportResult(0, 0);
+            }
+            // If we get here, it was likely our internal 30-second timeout
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
         catch (Exception ex)
         {
             var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
@@ -167,13 +162,8 @@ public sealed class RawHttpTransport : ITransport
         try
         {
             var url = BuildUrl(id);
-            using var req = new HttpRequestMessage(HttpMethod.Put, url);
-
-            // Set HTTP version and policy for proper HTTP/2 h2c support
-            var (version, policy) = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
-            req.Version = version;
-            req.VersionPolicy = policy;
-
+            
+            using var req = CreateRequest(HttpMethod.Put, url);
             req.Headers.AcceptEncoding.Clear();
             req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
             req.Headers.ExpectContinue = false;
@@ -190,12 +180,9 @@ public sealed class RawHttpTransport : ITransport
                 var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
                 return new TransportResult(0, 0, errorDetails);
             }
-        
+
             // Update negotiated version if not yet set (fallback for when validation was skipped)
-            if (_negotiatedHttpVersion == null)
-            {
-                _negotiatedHttpVersion = HttpHelper.FormatHttpVersion(resp.Version);
-            }
+            _negotiatedHttpVersion ??= HttpHelper.FormatHttpVersion(resp.Version);
             long bytesIn = 0;
             if (resp.Content.Headers.ContentLength.HasValue)
             {
@@ -224,9 +211,14 @@ public sealed class RawHttpTransport : ITransport
         }
         catch (TaskCanceledException)
         {
-            // TaskCanceledException from timeout is expected during benchmark runs
-            // Return a result without error details to avoid logging as error
-            return new TransportResult(0, 0);
+            // If the external token (from benchmark) is cancelled, it's end-of-run, not an error
+            if (ct.IsCancellationRequested)
+            {
+                // External cancellation (benchmark ending) - not an error
+                return new TransportResult(0, 0);
+            }
+            // If we get here, it was likely our internal 30-second timeout
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
         }
         catch (Exception ex)
         {
@@ -239,24 +231,26 @@ public sealed class RawHttpTransport : ITransport
     {
         try
         {
-            var url = $"{_baseUrl}/admin/license/status";
-            using var resp = await _http.GetAsync(url).ConfigureAwait(false);
+            var url = $"{_baseUrl}/license/status";
+            using var req = CreateRequest(HttpMethod.Get, url);
+
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-            if (doc.RootElement.TryGetProperty("Details", out var details))
-            {
-                if (details.TryGetProperty("MaxCores", out var cores) && cores.TryGetInt32(out var c))
-                    return c;
-            }
+            if (doc.RootElement.TryGetProperty("MaxCores", out var cores) && cores.TryGetInt32(out var c))
+                return c;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Client validation failed: Unable to retrieve server max cores. {ex.Message}", ex);
+        }
         return null;
     }
 
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
-        return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db);
+        return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db, _requestedHttpVersion);
     }
 
     public async Task<string> GetServerVersionAsync()
@@ -264,7 +258,9 @@ public sealed class RawHttpTransport : ITransport
         try
         {
             var url = $"{_baseUrl}/build/version";
-            using var resp = await _http.GetAsync(url).ConfigureAwait(false);
+            using var req = CreateRequest(HttpMethod.Get, url);
+
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
@@ -276,9 +272,9 @@ public sealed class RawHttpTransport : ITransport
                 
             return "unknown";
         }
-        catch 
+        catch (Exception ex) 
         { 
-            return "unknown";
+            throw new InvalidOperationException($"Client validation failed: Unable to retrieve server version. {ex.Message}", ex);
         }
     }
 
@@ -286,22 +282,22 @@ public sealed class RawHttpTransport : ITransport
     {
         try
         {
-            var url = $"{_baseUrl}/admin/license/status";
-            using var resp = await _http.GetAsync(url).ConfigureAwait(false);
+            var url = $"{_baseUrl}/license/status";
+            using var req = CreateRequest(HttpMethod.Get, url);
+
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-            
+
             if (doc.RootElement.TryGetProperty("Type", out var licenseType))
                 return licenseType.GetString() ?? "unknown";
-            if (doc.RootElement.TryGetProperty("LicenseType", out var altLicenseType))
-                return altLicenseType.GetString() ?? "unknown";
-                
+
             return "unknown";
         }
-        catch 
+        catch (Exception ex) 
         { 
-            return "unknown";
+            throw new InvalidOperationException($"Client validation failed: Unable to retrieve server type. {ex.Message}", ex);
         }
     }
 
@@ -316,7 +312,9 @@ public sealed class RawHttpTransport : ITransport
         try
         {
             var url = $"{_baseUrl}/databases/{_db}/stats";
-            using var response = await _http.GetAsync(url).ConfigureAwait(false);
+            using var req = CreateRequest(HttpMethod.Get, url);
+
+            using var response = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -360,6 +358,8 @@ public sealed class RawHttpTransport : ITransport
         _http.Dispose();
     }
 
+
+
     private string BuildUrl(string id)
     {
         if (_customEndpoint is { } e)
@@ -370,5 +370,16 @@ public sealed class RawHttpTransport : ITransport
             return _baseUrl + "/" + path;
         }
         return $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(id)}";
+    }
+
+    /// <summary>
+    /// Creates an HttpRequestMessage with proper HTTP version and policy settings.
+    /// </summary>
+    private HttpRequestMessage CreateRequest(HttpMethod method, string url)
+    {
+        var req = new HttpRequestMessage(method, url);
+        req.Version = _httpVersionInfo.version;
+        req.VersionPolicy = _httpVersionInfo.policy;
+        return req;
     }
 }

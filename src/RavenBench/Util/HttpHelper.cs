@@ -50,8 +50,8 @@ public static class HttpHelper
     /// </summary>
     public static (Version version, HttpVersionPolicy policy) GetRequestVersionInfo(string requestedHttpVersion) => requestedHttpVersion switch
     {
-        "2" => (HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrHigher),
-        "3" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionOrHigher),
+        "2" => (HttpVersion.Version20, HttpVersionPolicy.RequestVersionExact),
+        "3" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact),
         "auto" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionOrLower),
         "1.1" => (HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact),
         "1.0" => (HttpVersion.Version10, HttpVersionPolicy.RequestVersionExact),
@@ -71,6 +71,29 @@ public static class HttpHelper
         {
             _versionInfo = versionInfo;
         }
+
+        public static SocketsHttpHandler CreateConfiguredHandler()
+        {
+            var handler = new SocketsHttpHandler
+            {
+                // Raise per-stream receive window (range: 65_535 .. 16_777_216 by default)
+                InitialHttp2StreamWindowSize = 16 * 1024 * 1024,
+
+                // Let handler open >1 HTTP/2 connection if stream limits are reached
+                EnableMultipleHttp2Connections = true,
+
+                PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
+                MaxConnectionsPerServer = int.MaxValue,
+                UseCookies = false,
+                AllowAutoRedirect = false,
+                KeepAlivePingDelay = TimeSpan.FromSeconds(60),
+                KeepAlivePingTimeout = TimeSpan.FromSeconds(30)
+            };
+            
+            return handler;
+        }
+
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
