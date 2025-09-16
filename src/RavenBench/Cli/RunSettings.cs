@@ -26,8 +26,11 @@ public sealed class RunSettings : CommandSettings
     [CommandOption("--doc-size")]
     public string DocSize { get; init; } = "1KB";
 
+    [CommandOption("--transport")]
+    public string Transport { get; init; } = "raw";
+
     [CommandOption("--compression")]
-    public string Compression { get; init; } = "raw:identity";
+    public string Compression { get; init; } = "identity";
 
     [CommandOption("--mode")]
     public string Mode { get; init; } = "closed";

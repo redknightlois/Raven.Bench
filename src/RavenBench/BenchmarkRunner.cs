@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using RavenBench.Metrics;
 using RavenBench.Transport;
@@ -10,12 +11,62 @@ using Spectre.Console;
 
 namespace RavenBench;
 
+/// <summary>
+/// Simple error deduplication for verbose logging to prevent spam.
+/// </summary>
+internal static class VerboseErrorTracker
+{
+    private static readonly ConcurrentDictionary<string, int> ErrorCounts = new();
+
+    public static void LogError(string errorMessage, bool verbose)
+    {
+        if (!verbose || string.IsNullOrEmpty(errorMessage))
+            return;
+
+        // Just count the error, don't print it immediately
+        ErrorCounts.AddOrUpdate(errorMessage, 1, (key, oldValue) => oldValue + 1);
+    }
+
+    public static void Reset()
+    {
+        ErrorCounts.Clear();
+    }
+
+    public static void PrintSummary()
+    {
+        if (ErrorCounts.IsEmpty)
+            return;
+
+        Console.WriteLine("[Raven.Bench] Verbose Error Summary:");
+        var sortedErrors = ErrorCounts.OrderByDescending(kvp => kvp.Value).Take(10);
+        foreach (var (error, count) in sortedErrors)
+        {
+            Console.WriteLine($"[Raven.Bench]   {count}× {error}");
+        }
+
+        var totalErrors = ErrorCounts.Values.Sum();
+        var errorTypes = ErrorCounts.Count;
+        if (errorTypes > 10)
+        {
+            var moreTypes = errorTypes - 10;
+            Console.WriteLine($"[Raven.Bench]   ... and {moreTypes} more error type{(moreTypes == 1 ? "" : "s")} (total: {totalErrors} errors)");
+        }
+        else if (totalErrors > 0)
+        {
+            Console.WriteLine($"[Raven.Bench]   Total: {totalErrors} error{(totalErrors == 1 ? "" : "s")} across {errorTypes} type{(errorTypes == 1 ? "" : "s")}");
+        }
+    }
+}
+
 public class BenchmarkRunner(RunOptions opts)
 {
     private readonly Random _rng = new(opts.Seed);
 
     public async Task<BenchmarkRun> RunAsync()
     {
+        // Reset error tracking for this benchmark run
+        VerboseErrorTracker.Reset();
+
         // Set ThreadPool minimum threads based on command-line parameters
         var workers = opts.ThreadPoolWorkers ?? 8192;
         var iocp = opts.ThreadPoolIOCP ?? 8192;
@@ -70,9 +121,9 @@ public class BenchmarkRunner(RunOptions opts)
                     task.MaxValue = 100;
 
                     var endpoints = transport.GetCalibrationEndpoints();
-                    var endpointData = await EndpointCalibrator.CalibrateEndpointsAsync(transport, endpoints,
+                    var (endpointData, diagnostics) = await EndpointCalibrator.CalibrateEndpointsWithDiagnosticsAsync(transport, endpoints,
                         progress => task.Value = progress).ConfigureAwait(false);
-                    return new StartupCalibration { Endpoints = endpointData };
+                    return new StartupCalibration { Endpoints = endpointData, Diagnostics = diagnostics };
                 }).ConfigureAwait(false);
             
             if (startupCalibration.Endpoints.Count > 0)
@@ -85,7 +136,64 @@ public class BenchmarkRunner(RunOptions opts)
             }
             else
             {
-                Console.WriteLine("[Raven.Bench] ERROR: Startup calibration returned invalid or empty data");
+                Console.WriteLine("[Raven.Bench] ERROR: Startup calibration failed - no successful measurements obtained");
+
+                if (startupCalibration.Diagnostics != null)
+                {
+                    var diag = startupCalibration.Diagnostics;
+                    Console.WriteLine($"[Raven.Bench]   Server: {opts.Url}");
+                    Console.WriteLine($"[Raven.Bench]   Database: {opts.Database}");
+                    Console.WriteLine($"[Raven.Bench]   Total attempts: {diag.TotalAttempts} ({diag.SuccessfulAttempts} succeeded, {diag.FailedAttempts} failed)");
+                    Console.WriteLine($"[Raven.Bench]   Endpoints tested: {diag.TotalEndpoints}");
+
+                    foreach (var endpoint in diag.EndpointDetails)
+                    {
+                        Console.WriteLine($"[Raven.Bench]   {endpoint.Name} ({endpoint.Path}): {endpoint.SuccessCount}/{endpoint.AttemptCount} successful");
+                        if (endpoint.FailureCount > 0)
+                        {
+                            var errorGroups = endpoint.FailureReasons
+                                .GroupBy(r => r)
+                                .OrderByDescending(g => g.Count())
+                                .Take(3)
+                                .ToList();
+
+                            foreach (var errorGroup in errorGroups)
+                            {
+                                var errorMessage = errorGroup.Key;
+                                var countSuffix = errorGroup.Count() == 1 ? "" : $" (×{errorGroup.Count()})";
+
+                                // Add helpful context for common errors
+                                if (errorMessage.Contains("invalid request URI") || errorMessage.Contains("BaseAddress"))
+                                {
+                                    Console.WriteLine($"[Raven.Bench]     - URL construction error: {errorMessage}{countSuffix}");
+                                    Console.WriteLine($"[Raven.Bench]       → Check if server URL is correct: {opts.Url}");
+                                }
+                                else if (errorMessage.Contains("404") || errorMessage.Contains("Not Found"))
+                                {
+                                    Console.WriteLine($"[Raven.Bench]     - Endpoint not found: {errorMessage}{countSuffix}");
+                                    Console.WriteLine($"[Raven.Bench]       → Server may be older version or different RavenDB edition");
+                                }
+                                else if (errorMessage.Contains("Connection") || errorMessage.Contains("connect"))
+                                {
+                                    Console.WriteLine($"[Raven.Bench]     - Connection failed: {errorMessage}{countSuffix}");
+                                    Console.WriteLine($"[Raven.Bench]       → Check if server is running at {opts.Url}");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"[Raven.Bench]     - {errorMessage}{countSuffix}");
+                                }
+                            }
+
+                            var totalShown = errorGroups.Sum(g => g.Count());
+                            if (endpoint.FailureReasons.Count > totalShown)
+                            {
+                                Console.WriteLine($"[Raven.Bench]     - ... and {endpoint.FailureReasons.Count - totalShown} more errors");
+                            }
+                        }
+                    }
+                }
+
+                Console.WriteLine("[Raven.Bench] NOTE: Benchmark will continue but latency baselines will not be available");
                 startupCalibration = null;
             }
         }
@@ -165,6 +273,12 @@ public class BenchmarkRunner(RunOptions opts)
             }
 
             concurrency = (int)Math.Max(concurrency * opts.ConcurrencyFactor, concurrency + 1);
+        }
+
+        // Print verbose error summary if there were any errors
+        if (opts.Verbose)
+        {
+            VerboseErrorTracker.PrintSummary();
         }
 
         return new BenchmarkRun
@@ -253,18 +367,19 @@ public class BenchmarkRunner(RunOptions opts)
 
     private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion)
     {
-        if (opts.Compression.StartsWith("raw:"))
+        if (opts.Transport == "raw")
         {
-            var mode = opts.Compression.Split(':')[1];
-            return new RawHttpTransport(opts.Url, opts.Database, mode, negotiatedHttpVersion, opts.RawEndpoint);
+            Console.WriteLine($"[Raven.Bench] Transport: Raw HTTP with {opts.Compression} compression");
+            return new RawHttpTransport(opts.Url, opts.Database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint);
         }
 
-        if (opts.Compression.StartsWith("client:"))
+        if (opts.Transport == "client")
         {
-            var mode = opts.Compression.Split(':')[1];
-            return new RavenClientTransport(opts.Url, opts.Database, mode, negotiatedHttpVersion);
+            Console.WriteLine($"[Raven.Bench] Transport: RavenDB Client with {opts.Compression} compression");
+            return new RavenClientTransport(opts.Url, opts.Database, opts.Compression, negotiatedHttpVersion);
         }
 
+        Console.WriteLine("[Raven.Bench] Transport: Raw HTTP with identity compression (default)");
         return new RawHttpTransport(opts.Url, opts.Database, "identity", negotiatedHttpVersion);
     }
 
@@ -344,17 +459,14 @@ public class BenchmarkRunner(RunOptions opts)
                         else
                         {
                             Interlocked.Increment(ref errors);
-                            if (opts.Verbose && res.ErrorDetails != null)
-                            {
-                                Console.WriteLine($"[Raven.Bench] Verbose Error: {res.ErrorDetails}");
-                            }
+                            VerboseErrorTracker.LogError(res.ErrorDetails, opts.Verbose);
                         }
                     }
                     catch (TaskCanceledException)
                     {
                         // We do not increment errors because we are asking for it. 
                     }
-                    catch (Exception e)
+                    catch (Exception)
                     {
                         Interlocked.Increment(ref errors);
                     }

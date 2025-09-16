@@ -35,6 +35,7 @@ internal static class CliParsing
             ThreadPoolWorkers = s.TpWorkers,
             ThreadPoolIOCP = s.TpIOCP,
             Distribution = s.Distribution,
+            Transport = s.Transport,
             Compression = s.Compression,
             Mode = s.Mode,
             OutJson = s.OutJson,

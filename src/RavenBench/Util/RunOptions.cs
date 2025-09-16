@@ -24,7 +24,8 @@ public sealed class RunOptions
     public double? Updates { get; init; }
     public string Distribution { get; init; } = "uniform";
     public int DocumentSizeBytes { get; init; } = 1024;
-    public string Compression { get; init; } = "raw:identity"; // client:zstd | client:identity | raw:identity | raw:zstd
+    public string Transport { get; init; } = "raw";
+    public string Compression { get; init; } = "identity";
     public string Mode { get; init; } = "closed";
     public int ConcurrencyStart { get; init; } = 8;
     public int ConcurrencyEnd { get; init; } = 512;

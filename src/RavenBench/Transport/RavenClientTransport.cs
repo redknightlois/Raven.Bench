@@ -259,14 +259,19 @@ public sealed class RavenClientTransport : ITransport
     {
         return await CalibrationHelper.ExecuteCalibrationAsync(async cancellationToken =>
         {
-            var url = BuildCalibrationUrl(endpoint);
+            // Prepare endpoint path (ensure it starts with /)
+            if (!endpoint.StartsWith('/'))
+                endpoint = "/" + endpoint;
 
             // Create HTTP client with same configuration as the store
             var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
             var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
-            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo));
+            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
+            {
+                BaseAddress = new Uri(_store.Urls[0])
+            };
 
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            using var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
             req.Version = _httpVersion;
             req.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
             req.Headers.ExpectContinue = false;
@@ -285,7 +290,9 @@ public sealed class RavenClientTransport : ITransport
 
     private string BuildCalibrationUrl(string endpoint)
     {
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out _))
+        // Check if endpoint is truly absolute (has a scheme like http:// or https://)
+        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
+            uri.Scheme != null && (uri.Scheme == "http" || uri.Scheme == "https"))
             return endpoint;
 
         if (!endpoint.StartsWith('/'))

@@ -339,7 +339,9 @@ public sealed class RawHttpTransport : ITransport
 
     private string BuildCalibrationUrl(string endpoint)
     {
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out _))
+        // Check if endpoint is truly absolute (has a scheme like http:// or https://)
+        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
+            uri.Scheme != null && (uri.Scheme == "http" || uri.Scheme == "https"))
             return endpoint;
 
         if (!endpoint.StartsWith('/'))

@@ -12,6 +12,33 @@ namespace RavenBench.Diagnostics;
 public sealed class StartupCalibration
 {
     public required IReadOnlyList<EndpointCalibration> Endpoints { get; init; }
+    public CalibrationDiagnostics? Diagnostics { get; init; }
+}
+
+/// <summary>
+/// Diagnostic information collected during calibration for troubleshooting failures.
+/// </summary>
+public sealed class CalibrationDiagnostics
+{
+    public required int TotalEndpoints { get; init; }
+    public required int TotalAttempts { get; init; }
+    public required int SuccessfulAttempts { get; init; }
+    public required int FailedAttempts { get; init; }
+    public required IReadOnlyList<string> FailureReasons { get; init; }
+    public required IReadOnlyList<EndpointDiagnostics> EndpointDetails { get; init; }
+}
+
+/// <summary>
+/// Per-endpoint diagnostic information.
+/// </summary>
+public sealed class EndpointDiagnostics
+{
+    public required string Name { get; init; }
+    public required string Path { get; init; }
+    public required int AttemptCount { get; init; }
+    public required int SuccessCount { get; init; }
+    public required int FailureCount { get; init; }
+    public required IReadOnlyList<string> FailureReasons { get; init; }
 }
 
 /// <summary>
@@ -38,24 +65,11 @@ public static class EndpointCalibrator
     private const int DefaultAttempts = 32;
     private const double TargetDelayMeanMs = 150.0;
     private const double TargetDelayStdDevMs = 25.0;
-
+    
     /// <summary>
-    /// Executes calibration for the specified endpoints using a simple unified algorithm.
-    /// Follows the common runner pattern: ask transport what endpoints it needs, then execute a simple algorithm.
+    /// Executes calibration for the specified endpoints and returns both results and diagnostic information.
     /// </summary>
-    public static async Task<IReadOnlyList<EndpointCalibration>> CalibrateEndpointsAsync(
-        Transport.ITransport transport,
-        IReadOnlyList<(string name, string path)> endpoints,
-        CancellationToken ct = default)
-    {
-        return await CalibrateEndpointsAsync(transport, endpoints, null, ct);
-    }
-
-    /// <summary>
-    /// Executes calibration for the specified endpoints using a simple unified algorithm.
-    /// Follows the common runner pattern: ask transport what endpoints it needs, then execute a simple algorithm.
-    /// </summary>
-    public static async Task<IReadOnlyList<EndpointCalibration>> CalibrateEndpointsAsync(
+    public static async Task<(IReadOnlyList<EndpointCalibration> results, CalibrationDiagnostics diagnostics)> CalibrateEndpointsWithDiagnosticsAsync(
         Transport.ITransport transport,
         IReadOnlyList<(string name, string path)> endpoints,
         Action<double>? progressCallback,
@@ -64,12 +78,19 @@ public static class EndpointCalibrator
         var results = new List<EndpointCalibration>();
         var totalOperations = endpoints.Count * DefaultAttempts;
         var completedOperations = 0;
+        var endpointDiagnostics = new List<EndpointDiagnostics>();
+        var allFailureReasons = new List<string>();
+        var totalSuccessful = 0;
+        var totalFailed = 0;
 
         for (int endpointIndex = 0; endpointIndex < endpoints.Count; endpointIndex++)
         {
             var (name, path) = endpoints[endpointIndex];
             ct.ThrowIfCancellationRequested();
             var samples = new List<Transport.CalibrationResult>(DefaultAttempts);
+            var endpointFailures = new List<string>();
+            var endpointSuccessCount = 0;
+            var endpointFailureCount = 0;
 
             for (int i = 0; i < DefaultAttempts; i++)
             {
@@ -78,11 +99,27 @@ public static class EndpointCalibrator
                 {
                     var sample = await transport.ExecuteCalibrationRequestAsync(path, ct).ConfigureAwait(false);
                     if (sample.IsSuccess)
+                    {
                         samples.Add(sample);
+                        endpointSuccessCount++;
+                        totalSuccessful++;
+                    }
+                    else
+                    {
+                        var errorMsg = $"{path}: {sample.ErrorDetails ?? "Unknown error"}";
+                        endpointFailures.Add(errorMsg);
+                        allFailureReasons.Add(errorMsg);
+                        endpointFailureCount++;
+                        totalFailed++;
+                    }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Ignore individual failures so a flaky endpoint does not break startup entirely
+                    var errorMsg = $"{path}: Exception - {ex.Message}";
+                    endpointFailures.Add(errorMsg);
+                    allFailureReasons.Add(errorMsg);
+                    endpointFailureCount++;
+                    totalFailed++;
                 }
 
                 completedOperations++;
@@ -93,6 +130,17 @@ public static class EndpointCalibrator
                     await Task.Delay(GenerateRandomDelayMs(), ct).ConfigureAwait(false);
                 }
             }
+
+            // Add endpoint diagnostics
+            endpointDiagnostics.Add(new EndpointDiagnostics
+            {
+                Name = name,
+                Path = path,
+                AttemptCount = DefaultAttempts,
+                SuccessCount = endpointSuccessCount,
+                FailureCount = endpointFailureCount,
+                FailureReasons = endpointFailures
+            });
 
             if (samples.Count == 0)
                 continue;
@@ -120,7 +168,17 @@ public static class EndpointCalibrator
             });
         }
 
-        return results;
+        var diagnostics = new CalibrationDiagnostics
+        {
+            TotalEndpoints = endpoints.Count,
+            TotalAttempts = totalOperations,
+            SuccessfulAttempts = totalSuccessful,
+            FailedAttempts = totalFailed,
+            FailureReasons = allFailureReasons,
+            EndpointDetails = endpointDiagnostics
+        };
+
+        return (results, diagnostics);
     }
 
     /// <summary>

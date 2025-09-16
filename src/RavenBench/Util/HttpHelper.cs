@@ -100,9 +100,14 @@ public static class HttpHelper
                 UseCookies = false,
                 AllowAutoRedirect = false,
                 KeepAlivePingDelay = TimeSpan.FromSeconds(60),
-                KeepAlivePingTimeout = TimeSpan.FromSeconds(30)
+                KeepAlivePingTimeout = TimeSpan.FromSeconds(30),
+
+                // Cross-platform settings (replaces ServicePointManager which only works on Windows)
+                ConnectTimeout = TimeSpan.FromSeconds(30),
+                ResponseDrainTimeout = TimeSpan.FromSeconds(10),
+                Expect100ContinueTimeout = TimeSpan.Zero // Disable Expect 100-Continue
             };
-            
+
             return handler;
         }
 
