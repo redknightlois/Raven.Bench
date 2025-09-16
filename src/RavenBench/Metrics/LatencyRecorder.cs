@@ -62,4 +62,28 @@ public sealed class LatencyRecorder
         var rank = Math.Clamp((int)Math.Ceiling((p / 100.0) * samples.Length) - 1, 0, samples.Length - 1);
         return samples[rank];
     }
+
+    public double GetNormalizedPercentile(int p, double ttfbAdjustedMs, double beta, double floorRttMs)
+    {
+        if (!_record) return 0;
+
+        var currentCount = Volatile.Read(ref _count);
+        if (currentCount == 0) return 0;
+
+        // Copy samples for sorting (up to filled capacity)
+        var sampleCount = Math.Min((int)currentCount, _maxSamples);
+        var normalizedSamples = new double[sampleCount];
+
+        // Convert microseconds to milliseconds and normalize
+        for (int i = 0; i < sampleCount; i++)
+        {
+            var rawMs = Volatile.Read(ref _reservoir[i]) / 1000.0;
+            // Normalize: remove estimated network RTT component and add back 1ms baseline
+            normalizedSamples[i] = Math.Max(0.0, rawMs - beta * floorRttMs) + beta * 1.0;
+        }
+
+        Array.Sort(normalizedSamples);
+        var rank = Math.Clamp((int)Math.Ceiling((p / 100.0) * normalizedSamples.Length) - 1, 0, normalizedSamples.Length - 1);
+        return normalizedSamples[rank];
+    }
 }

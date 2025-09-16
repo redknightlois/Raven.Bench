@@ -16,7 +16,7 @@ public class ServerMetricsTrackerTests
     {
         // INVARIANT: Constructor should not throw with valid transport
         // INVARIANT: Initial state should be valid
-        using var transport = new StubTransport();
+        using var transport = new TestTransport();
         using var tracker = new ServerMetricsTracker(transport);
         
         tracker.Should().NotBeNull();
@@ -32,7 +32,7 @@ public class ServerMetricsTrackerTests
     {
         // INVARIANT: Start and stop should work without exceptions
         // INVARIANT: Current should always return valid metrics
-        using var transport = new StubTransport();
+        using var transport = new TestTransport();
         using var tracker = new ServerMetricsTracker(transport);
         
         // Should be able to start
@@ -53,7 +53,7 @@ public class ServerMetricsTrackerTests
     {
         // INVARIANT: Current property should be thread-safe
         // INVARIANT: Should never return null or invalid metrics
-        using var transport = new StubTransport();
+        using var transport = new TestTransport();
         using var tracker = new ServerMetricsTracker(transport);
         tracker.Start();
         
@@ -92,7 +92,7 @@ public class ServerMetricsTrackerTests
     {
         // INVARIANT: Should handle multiple start/stop cycles
         // INVARIANT: Should remain stable across cycles
-        using var transport = new StubTransport();
+        using var transport = new TestTransport();
         using var tracker = new ServerMetricsTracker(transport);
         
         for (int cycle = 0; cycle < 3; cycle++)
@@ -115,7 +115,7 @@ public class ServerMetricsTrackerTests
     {
         // INVARIANT: Dispose should work without exceptions
         // INVARIANT: Should handle disposal in any state
-        var transport = new StubTransport();
+        var transport = new TestTransport();
         var tracker = new ServerMetricsTracker(transport);
         
         tracker.Start();
@@ -135,7 +135,7 @@ public class ServerMetricsTrackerTests
     {
         // INVARIANT: Metrics should be updated periodically when started
         // INVARIANT: Should use transport's GetServerMetricsAsync method
-        using var transport = new StubTransport();
+        using var transport = new TestTransport();
         using var tracker = new ServerMetricsTracker(transport);
         
         tracker.Start();
@@ -154,40 +154,4 @@ public class ServerMetricsTrackerTests
         
         tracker.Stop();
     }
-}
-
-// Stub transport for testing - returns predictable metrics
-internal sealed class StubTransport : ITransport
-{
-    public string EffectiveCompressionMode => "identity";
-    public string EffectiveHttpVersion => "1.1";
-    
-    public void Dispose() { }
-    
-    public Task<int?> GetServerMaxCoresAsync() => Task.FromResult<int?>(4);
-    
-    public Task<string> GetServerVersionAsync() => Task.FromResult("1.0.0-test");
-    
-    public Task<string> GetServerLicenseTypeAsync() => Task.FromResult("Developer");
-    
-    public Task ValidateClientAsync() => Task.CompletedTask;
-    
-    public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(new ServerMetrics
-    {
-        CpuUsagePercent = 25.0,
-        MemoryUsageMB = 512,
-        ActiveConnections = 10,
-        RequestsPerSecond = 100.0,
-        QueuedRequests = 2,
-        IoReadOperations = 50.0,
-        IoWriteOperations = 30.0,
-        ReadThroughputKb = 1024,
-        WriteThroughputKb = 512,
-        QueueLength = 1
-    });
-    
-    public Task PutAsync(string id, string json) => Task.CompletedTask;
-    
-    public Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct) =>
-        Task.FromResult(new TransportResult(bytesOut: 200, bytesIn: 150));
 }

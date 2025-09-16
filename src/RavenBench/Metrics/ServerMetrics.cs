@@ -23,13 +23,9 @@ public sealed class ServerMetrics
     public string? ErrorMessage { get; init; }
 }
 
-// REVIEW: Not very fond on the way this is going. I would like to have something similar to ProcessCpuTracker
-// in which I can start a polling mechanism that will check these numbers on intervals and allow me to get the
-// actual data and hide the async complication from the analysis code.
-
 /// <summary>
 /// Polls server-side metrics from RavenDB endpoints during benchmark execution.
-/// Similar to ProcessCpuTracker - provides synchronous access to metrics without async complexity.
+/// Follows ProcessCpuTracker pattern - provides synchronous access to metrics without async complexity.
 /// </summary>
 public sealed class ServerMetricsTracker : IDisposable
 {

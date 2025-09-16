@@ -22,6 +22,18 @@ public static class HttpHelper
     };
 
     /// <summary>
+    /// Parses a standard HTTP version string back to a .NET Version object.
+    /// </summary>
+    public static Version ParseHttpVersion(string httpVersionString) => httpVersionString switch
+    {
+        "1.0" => HttpVersion.Version10,
+        "1.1" => HttpVersion.Version11,
+        "2" => HttpVersion.Version20,
+        "3" => HttpVersion.Version30,
+        _ => HttpVersion.Version11 // Fallback to HTTP/1.1
+    };
+
+    /// <summary>
     /// Normalizes various HTTP version string formats to a standard format.
     /// Combines patterns from both RawHttpTransport and RavenClientTransport.
     /// </summary>

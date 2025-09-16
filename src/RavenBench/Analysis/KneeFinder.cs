@@ -39,19 +39,19 @@ public static class KneeFinder
             }
 
             // Don’t consider knees until we are in danger zone
-            var inDanger = prev.P50Ms >= P50DangerMs || cur.P50Ms >= P50DangerMs;
+            var inDanger = prev.Raw.P50 >= P50DangerMs || cur.Raw.P50 >= P50DangerMs;
             if (!inDanger)
                 continue;
 
             var dthr = prev.Throughput > 0 ? (cur.Throughput - prev.Throughput) / prev.Throughput : 0.0;
-            var dp95 = prev.P95Ms > 0 ? (cur.P95Ms - prev.P95Ms) / (prev.P95Ms + 1e-9) : 0.0;
+            var dp95 = prev.Raw.P95 > 0 ? (cur.Raw.P95 - prev.Raw.P95) / (prev.Raw.P95 + 1e-9) : 0.0;
 
             // Smoothing with previous deltas if possible
             if (i >= 2)
             {
                 var p2 = steps[i - 2];
                 var dthrAvg = 0.5 * ((prev.Throughput - p2.Throughput) / Math.Max(1e-9, p2.Throughput)) + 0.5 * dthr;
-                var dp95Avg = 0.5 * ((prev.P95Ms - p2.P95Ms) / Math.Max(1e-9, p2.P95Ms)) + 0.5 * dp95;
+                var dp95Avg = 0.5 * ((prev.Raw.P95 - p2.Raw.P95) / Math.Max(1e-9, p2.Raw.P95)) + 0.5 * dp95;
                 if (dthrAvg < dThr && dp95Avg > dP95)
                 {
                     // If the next step still recovers >3% throughput vs prev, defer
@@ -82,7 +82,7 @@ public static class KneeFinder
             }
 
             // Monotonic degradation
-            if (cur.Throughput < prev.Throughput && cur.P95Ms > prev.P95Ms)
+            if (cur.Throughput < prev.Throughput && cur.Raw.P95 > prev.Raw.P95)
             {
                 prev.Reason = "Thr↓ & p95↑";
                 return prev;

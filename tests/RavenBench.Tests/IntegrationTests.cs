@@ -35,9 +35,12 @@ public class IntegrationTests
         {
             step.Throughput.Should().BeGreaterThan(0);
             step.ErrorRate.Should().BeInRange(0, 1);
-            step.P50Ms.Should().BeGreaterThan(0);
-            step.P95Ms.Should().BeGreaterOrEqualTo(step.P50Ms);
-            step.P99Ms.Should().BeGreaterOrEqualTo(step.P95Ms);
+            step.Raw.P50.Should().BeGreaterThan(0);
+            step.Raw.P95.Should().BeGreaterOrEqualTo(step.Raw.P50);
+            step.Raw.P99.Should().BeGreaterOrEqualTo(step.Raw.P95);
+            step.Normalized.P50.Should().BeGreaterThan(0);
+            step.Normalized.P95.Should().BeGreaterOrEqualTo(step.Normalized.P50);
+            step.Normalized.P99.Should().BeGreaterOrEqualTo(step.Normalized.P95);
             step.ClientCpu.Should().BeGreaterOrEqualTo(0);
             step.NetworkUtilization.Should().BeGreaterOrEqualTo(0);
             step.BytesOut.Should().BeGreaterThan(0);
@@ -56,7 +59,7 @@ public class IntegrationTests
         // INVARIANT: Transport should provide server metrics correctly
         // INVARIANT: Server metrics should have valid values
         
-        using var transport = new StubTransport();
+        using var transport = new TestTransport();
         
         var metrics = await transport.GetServerMetricsAsync();
         
@@ -138,9 +141,8 @@ internal static class IntegrationTestHelper
                 ErrorRate = 0.01, // 1% error rate
                 BytesOut = 1000 + i * 100,
                 BytesIn = 800 + i * 80,
-                P50Ms = 10.0 + i,
-                P95Ms = 20.0 + i,
-                P99Ms = 30.0 + i,
+                Raw = new Percentiles(10.0 + i, 15.0 + i, 20.0 + i, 30.0 + i),
+                Normalized = new Percentiles(9.0 + i, 14.0 + i, 18.0 + i, 28.0 + i),
                 ClientCpu = 0.25 + i * 0.1,
                 NetworkUtilization = 0.1 + i * 0.05
             });

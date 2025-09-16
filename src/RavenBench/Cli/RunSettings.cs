@@ -88,4 +88,7 @@ public sealed class RunSettings : CommandSettings
 
     [CommandOption("--verbose")]
     public bool Verbose { get; init; }
+
+    [CommandOption("--latencies")]
+    public string Latencies { get; init; } = "normalized";
 }

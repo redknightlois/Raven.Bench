@@ -2,6 +2,7 @@ using System.Diagnostics;
 using RavenBench.Metrics;
 using RavenBench.Transport;
 using RavenBench.Workload;
+using RavenBench.Diagnostics;
 using RavenBench.Util;
 using RavenBench.Reporting;
 using Spectre.Console;
@@ -23,7 +24,16 @@ public class BenchmarkRunner(RunOptions opts)
         ThreadPool.SetMinThreads(workers, iocp);
 
         var workload = BuildWorkload(opts);
-        using var transport = BuildTransport(opts);
+
+        // Negotiate HTTP version before creating transport
+        Console.WriteLine("[Raven.Bench] Negotiating HTTP version...");
+        var negotiatedHttpVersion = await HttpVersionNegotiator.NegotiateVersionAsync(
+            opts.Url,
+            opts.HttpVersion,
+            opts.StrictHttpVersion);
+        Console.WriteLine($"[Raven.Bench] Using HTTP/{HttpHelper.FormatHttpVersion(negotiatedHttpVersion)}");
+
+        using var transport = BuildTransport(opts, negotiatedHttpVersion);
 
         if (opts.Preload > 0)
             await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
@@ -35,20 +45,55 @@ public class BenchmarkRunner(RunOptions opts)
         using var serverTracker = new ServerMetricsTracker(transport);
 
         var maxNetUtil = 0.0;
+        StartupCalibration? startupCalibration = null;
         string clientCompression = transport switch
         {
             RavenClientTransport rc => rc.EffectiveCompressionMode,
             RawHttpTransport raw => raw.EffectiveCompressionMode,
             _ => "unknown"
         };
-        string httpVersion = transport switch
-        {
-            RawHttpTransport raw => raw.EffectiveHttpVersion,
-            _ => "client-default"
-        };
+        // Use the negotiated HTTP version directly
+        string httpVersion = HttpHelper.FormatHttpVersion(negotiatedHttpVersion);
 
         await ValidateClientAsync(transport);
         await ValidateServerSanityAsync(transport);
+        
+        try
+        {
+            Console.WriteLine("[Raven.Bench] Running startup calibration...");
+
+            // Show progress bar during calibration
+            startupCalibration = await AnsiConsole.Progress()
+                .StartAsync(async ctx =>
+                {
+                    var task = ctx.AddTask("[green]Startup calibration[/]");
+                    task.MaxValue = 100;
+
+                    var endpoints = transport.GetCalibrationEndpoints();
+                    var endpointData = await EndpointCalibrator.CalibrateEndpointsAsync(transport, endpoints,
+                        progress => task.Value = progress).ConfigureAwait(false);
+                    return new StartupCalibration { Endpoints = endpointData };
+                }).ConfigureAwait(false);
+            
+            if (startupCalibration.Endpoints.Count > 0)
+            {
+                Console.WriteLine("[Raven.Bench] Startup calibration completed:");
+                foreach (var endpoint in startupCalibration.Endpoints)
+                {
+                    Console.WriteLine($"[Raven.Bench]   {endpoint.Name}: TTFB={endpoint.TtfbMs:F2} ms, Total={endpoint.ObservedMs:F2} ms, HTTP/{endpoint.HttpVersion}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("[Raven.Bench] ERROR: Startup calibration returned invalid or empty data");
+                startupCalibration = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Raven.Bench] ERROR: Startup calibration failed: {ex.Message}");
+            startupCalibration = null;
+        }
         
         // Create benchmark context to reduce parameter passing
         var context = new BenchmarkContext
@@ -76,10 +121,38 @@ public class BenchmarkRunner(RunOptions opts)
                 Record = true
             });
 
-            s.P50Ms = hist.GetPercentile(50) / 1000.0;
-            s.P90Ms = hist.GetPercentile(90) / 1000.0;
-            s.P95Ms = hist.GetPercentile(95) / 1000.0;
-            s.P99Ms = hist.GetPercentile(99) / 1000.0;
+            // Calculate percentiles
+            int[] percentiles = { 50, 90, 95, 99 };
+            var rawValues = new double[4];
+            for (int i = 0; i < percentiles.Length; i++)
+            {
+                rawValues[i] = hist.GetPercentile(percentiles[i]) / 1000.0;
+            }
+
+            var rawPercentiles = new Percentiles(rawValues[0], rawValues[1], rawValues[2], rawValues[3]);
+
+            // Apply RTT-based normalization using baseline latency from calibration
+            Percentiles normalizedPercentiles;
+            if (startupCalibration?.Endpoints.Count > 0)
+            {
+                // Use minimum observed latency from calibration as baseline RTT
+                var baselineRttMs = startupCalibration.Endpoints.Min(e => e.ObservedMs);
+                var normalizedValues = new double[4];
+                for (int i = 0; i < rawValues.Length; i++)
+                {
+                    // Subtract baseline RTT to get normalized latency (additional latency due to load)
+                    normalizedValues[i] = Math.Max(0, rawValues[i] - baselineRttMs);
+                }
+                normalizedPercentiles = new Percentiles(normalizedValues[0], normalizedValues[1], normalizedValues[2], normalizedValues[3]);
+            }
+            else
+            {
+                // Fallback when calibration is unavailable
+                normalizedPercentiles = rawPercentiles;
+            }
+            
+            s.Raw = rawPercentiles;
+            s.Normalized = normalizedPercentiles;
 
             steps.Add(s);
             maxNetUtil = Math.Max(maxNetUtil, s.NetworkUtilization);
@@ -99,7 +172,8 @@ public class BenchmarkRunner(RunOptions opts)
             Steps = steps,
             MaxNetworkUtilization = maxNetUtil,
             ClientCompression = clientCompression,
-            EffectiveHttpVersion = httpVersion
+            EffectiveHttpVersion = httpVersion,
+            StartupCalibration = startupCalibration
         };
     }
 
@@ -177,21 +251,21 @@ public class BenchmarkRunner(RunOptions opts)
         return new MixedWorkload(mix, dist, opts.DocumentSizeBytes);
     }
 
-    private static ITransport BuildTransport(RunOptions opts)
+    private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion)
     {
         if (opts.Compression.StartsWith("raw:"))
         {
             var mode = opts.Compression.Split(':')[1];
-            return new RawHttpTransport(opts.Url, opts.Database, mode, opts.HttpVersion, opts.RawEndpoint);
+            return new RawHttpTransport(opts.Url, opts.Database, mode, negotiatedHttpVersion, opts.RawEndpoint);
         }
-        
+
         if (opts.Compression.StartsWith("client:"))
         {
             var mode = opts.Compression.Split(':')[1];
-            return new RavenClientTransport(opts.Url, opts.Database, mode, opts.HttpVersion);
+            return new RavenClientTransport(opts.Url, opts.Database, mode, negotiatedHttpVersion);
         }
-        
-        return new RawHttpTransport(opts.Url, opts.Database, "identity", opts.HttpVersion);
+
+        return new RawHttpTransport(opts.Url, opts.Database, "identity", negotiatedHttpVersion);
     }
 
     private static async Task PreloadAsync(ITransport transport, RunOptions opts, int count, Random rng, int docSize)
@@ -233,9 +307,7 @@ public class BenchmarkRunner(RunOptions opts)
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         long success = 0, errors = 0, bytesOut = 0, bytesIn = 0;
-        
-        // REVIEW: all this information is from the client. Shoulnt we be able to hit the RavenDB own's endpoints to get data out of it?
-        // You can access an instance at http://98.87.58.180:9082 in case you need it. 
+
         var hist = new LatencyRecorder(recordLatencies: step.Record);
 
         context.CpuTracker.Reset();

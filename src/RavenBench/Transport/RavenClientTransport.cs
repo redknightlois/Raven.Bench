@@ -9,10 +9,13 @@ using Sparrow.Json;
 using RavenBench.Workload;
 using RavenBench.Metrics;
 using RavenBench.Util;
+using RavenBench.Diagnostics;
 using System.Text.Json;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace RavenBench.Transport;
 
@@ -24,19 +27,16 @@ public sealed class RavenClientTransport : ITransport
 {
     private readonly IDocumentStore _store;
     private readonly string _compressionMode;
-    private readonly string _requestedHttpVersion;
-    private readonly (Version version, HttpVersionPolicy policy) _httpVersionInfo;
-    private string? _negotiatedHttpVersion;
+    private readonly Version _httpVersion;
 
     public string EffectiveCompressionMode => _compressionMode;
-    public string EffectiveHttpVersion => _negotiatedHttpVersion ?? "unknown";
+    public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
 
-    public RavenClientTransport(string url, string database, string compressionMode, string httpVersion = "1.1")
+    public RavenClientTransport(string url, string database, string compressionMode, Version httpVersion)
     {
         _compressionMode = compressionMode.ToLowerInvariant();
-        _requestedHttpVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
-        _httpVersionInfo = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
+        _httpVersion = httpVersion;
 
         _store = new DocumentStore
         {
@@ -74,7 +74,7 @@ public sealed class RavenClientTransport : ITransport
 
     private void ConfigureHttpVersion()
     {
-        if (_requestedHttpVersion == "1.1" || _requestedHttpVersion == "1.0")
+        if (_httpVersion.Equals(HttpVersion.Version11) || _httpVersion.Equals(HttpVersion.Version10))
         {
             // Default HTTP/1.x configuration - no special handling needed
             return;
@@ -84,9 +84,9 @@ public sealed class RavenClientTransport : ITransport
         var conventions = _store.Conventions;
         conventions.CreateHttpClient = (handler) =>
         {
-            // Use configured handler with HTTP/2 settings
             var configuredHandler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-            var client = new HttpClient(new HttpHelper.HttpVersionHandler(configuredHandler, _httpVersionInfo))
+            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
+            var client = new HttpClient(new HttpHelper.HttpVersionHandler(configuredHandler, httpVersionInfo))
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
@@ -153,7 +153,7 @@ public sealed class RavenClientTransport : ITransport
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
         var baseUrl = _store.Urls[0].TrimEnd('/');
-        return await RavenServerMetricsCollector.CollectAsync(baseUrl, _store.Database, _requestedHttpVersion);
+        return await RavenServerMetricsCollector.CollectAsync(baseUrl, _store.Database, HttpHelper.FormatHttpVersion(_httpVersion));
     }
 
     public async Task<string> GetServerVersionAsync()
@@ -176,7 +176,8 @@ public sealed class RavenClientTransport : ITransport
         {
             // Create HTTP client with same configuration as the store
             var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, _httpVersionInfo));
+            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
+            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo));
 
             var url = _store.Urls[0].TrimEnd('/') + "/license/status";
             using var resp = await http.GetAsync(url).ConfigureAwait(false);
@@ -207,11 +208,6 @@ public sealed class RavenClientTransport : ITransport
             using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true });
             await session.LoadAsync<object>("validation-test-key-that-does-not-exist").ConfigureAwait(false);
 
-            // Set negotiated version based on request (we can't easily capture actual negotiated version from RavenDB client)
-            if (_negotiatedHttpVersion == null)
-            {
-                _negotiatedHttpVersion = _requestedHttpVersion;
-            }
         }
         catch (Exception ex)
         {
@@ -223,20 +219,7 @@ public sealed class RavenClientTransport : ITransport
     {
         await ValidateClientAsync().ConfigureAwait(false);
 
-        // Note: RavenDB client doesn't provide easy access to negotiated HTTP version
-        // We assume the requested version was negotiated successfully
-        if (strictHttpVersion && _requestedHttpVersion != "auto")
-        {
-            var requestedForDisplay = _requestedHttpVersion switch
-            {
-                "2" => "HTTP/2",
-                "3" => "HTTP/3",
-                "1.1" => "HTTP/1.1",
-                "1.0" => "HTTP/1.0",
-                _ => $"HTTP/{_requestedHttpVersion}"
-            };
-            Console.WriteLine($"[Raven.Bench] Client validation: Requested {requestedForDisplay} (client-managed)");
-        }
+        Console.WriteLine($"[Raven.Bench] Client validation: Using HTTP/{HttpHelper.FormatHttpVersion(_httpVersion)}");
     }
 
     public void Dispose()
@@ -252,7 +235,8 @@ public sealed class RavenClientTransport : ITransport
             // We don't depend on server admin permissions here; non-fatal if denied.
             // Create HTTP client with same configuration as the store
             var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, _httpVersionInfo));
+            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
+            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo));
 
             var url = _store.Urls[0].TrimEnd('/') + "/license/status";
             using var resp = await http.GetAsync(url).ConfigureAwait(false);
@@ -268,6 +252,67 @@ public sealed class RavenClientTransport : ITransport
             Console.WriteLine($"[Raven.Bench] Warning: Failed to get max cores: {ex.GetType().Name}: {ex.Message}");
         }
         return null;
+    }
+
+    
+    public async Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default)
+    {
+        return await CalibrationHelper.ExecuteCalibrationAsync(async cancellationToken =>
+        {
+            var url = BuildCalibrationUrl(endpoint);
+
+            // Create HTTP client with same configuration as the store
+            var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
+            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
+            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo));
+
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Version = _httpVersion;
+            req.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
+            req.Headers.ExpectContinue = false;
+            req.Headers.ConnectionClose = false;
+
+            var acceptEncoding = ExtractAcceptEncoding(_compressionMode);
+            if (!string.IsNullOrWhiteSpace(acceptEncoding))
+            {
+                req.Headers.AcceptEncoding.Clear();
+                req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(acceptEncoding));
+            }
+
+            return await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }, ct, fallbackHttpVersion: _httpVersion).ConfigureAwait(false);
+    }
+
+    private string BuildCalibrationUrl(string endpoint)
+    {
+        if (Uri.TryCreate(endpoint, UriKind.Absolute, out _))
+            return endpoint;
+
+        if (!endpoint.StartsWith('/'))
+            endpoint = "/" + endpoint;
+
+        return _store.Urls[0].TrimEnd('/') + endpoint;
+    }
+
+    public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints()
+    {
+        return new List<(string, string)>
+        {
+            ("server-version", "/build/version"),
+            ("license-status", "/license/status")
+        };
+    }
+
+    private static string? ExtractAcceptEncoding(string compression)
+    {
+        if (string.IsNullOrWhiteSpace(compression))
+            return null;
+
+        var parts = compression.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+            return null;
+
+        return parts[1].ToLowerInvariant();
     }
 
 }

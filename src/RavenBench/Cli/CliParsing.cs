@@ -48,7 +48,8 @@ internal static class CliParsing
             LinkMbps = s.LinkMbps,
             HttpVersion = s.HttpVersion,
             StrictHttpVersion = s.StrictHttpVersion,
-            Verbose = s.Verbose
+            Verbose = s.Verbose,
+            LatencyDisplay = ParseLatencyDisplayType(s.Latencies)
         };
     }
 
@@ -114,6 +115,17 @@ internal static class CliParsing
         if (s.EndsWith("%"))
             return double.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture);
         return double.Parse(s, CultureInfo.InvariantCulture);
+    }
+
+    private static LatencyDisplayType ParseLatencyDisplayType(string latencies)
+    {
+        return latencies.ToLowerInvariant() switch
+        {
+            "normalized" => LatencyDisplayType.Normalized,
+            "raw" => LatencyDisplayType.Raw,
+            "both" => LatencyDisplayType.Both,
+            _ => throw new ArgumentException($"Invalid latency display type: {latencies}. Valid options: normalized, raw, both")
+        };
     }
 }
 

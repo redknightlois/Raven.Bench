@@ -1,6 +1,23 @@
+using RavenBench.Diagnostics;
 using RavenBench.Util;
 
 namespace RavenBench.Reporting;
+
+public readonly struct Percentiles
+{
+    public double P50 { get; }
+    public double P90 { get; }
+    public double P95 { get; }
+    public double P99 { get; }
+
+    public Percentiles(double p50, double p90, double p95, double p99)
+    {
+        P50 = p50;
+        P90 = p90;
+        P95 = p95;
+        P99 = p99;
+    }
+}
 
 public sealed class BenchmarkRun
 {
@@ -8,6 +25,7 @@ public sealed class BenchmarkRun
     public required double MaxNetworkUtilization { get; init; }
     public required string ClientCompression { get; init; }
     public required string EffectiveHttpVersion { get; init; }
+    public StartupCalibration? StartupCalibration { get; init; }
 }
 
 public sealed class BenchmarkSummary
@@ -18,6 +36,7 @@ public sealed class BenchmarkSummary
     public required string Verdict { get; init; }
     public required string ClientCompression { get; init; }
     public required string EffectiveHttpVersion { get; init; }
+    public StartupCalibration? StartupCalibration { get; init; }
     public string? Notes { get; init; }
 }
 
@@ -29,10 +48,8 @@ public sealed class StepResult
     public long BytesOut { get; init; }
     public long BytesIn { get; init; }
 
-    public double P50Ms { get; set; }
-    public double P90Ms { get; set; }
-    public double P95Ms { get; set; }
-    public double P99Ms { get; set; }
+    public Percentiles Raw { get; set; }
+    public Percentiles Normalized { get; set; }
 
     public double ClientCpu { get; init; }
     public double NetworkUtilization { get; init; }
@@ -48,4 +65,3 @@ public sealed class StepResult
 
     public string? Reason { get; set; }
 }
-

@@ -2,6 +2,13 @@ using System.Globalization;
 
 namespace RavenBench.Util;
 
+public enum LatencyDisplayType
+{
+    Normalized,
+    Raw,
+    Both
+}
+
 /// <summary>
 /// Configuration options for running a benchmark, including server settings,
 /// workload parameters, concurrency settings, and output options.
@@ -41,4 +48,5 @@ public sealed class RunOptions
     public string HttpVersion { get; init; } = "auto"; // "1.1" | "2" | "3" | "auto"
     public bool StrictHttpVersion { get; init; } = false; // fail if requested HTTP version is not available
     public bool Verbose { get; init; } = false; // enable detailed error logging
+    public LatencyDisplayType LatencyDisplay { get; init; } = LatencyDisplayType.Normalized; // which latencies to display
 }

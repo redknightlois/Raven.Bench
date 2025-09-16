@@ -1,11 +1,14 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Buffers;
+using System.Diagnostics;
 using RavenBench.Workload;
 using RavenBench.Metrics;
 using RavenBench.Util;
+using RavenBench.Diagnostics;
 
 namespace RavenBench.Transport;
 
@@ -17,22 +20,19 @@ public sealed class RawHttpTransport : ITransport
     private readonly string _acceptEncoding;
     private readonly string? _customEndpoint; // optional format with {id}
     private readonly LockFreeRingBuffer<byte[]> _bufferPool;
-    private readonly string _requestedHttpVersion;
-    private readonly (Version version, HttpVersionPolicy policy) _httpVersionInfo;
-    private string? _negotiatedHttpVersion;
+    private readonly Version _httpVersion;
     public string EffectiveCompressionMode { get; }
-    public string EffectiveHttpVersion => _negotiatedHttpVersion ?? "unknown";
+    public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
 
-    public RawHttpTransport(string url, string database, string compressionMode, string httpVersion, string? endpoint = null)
+    public RawHttpTransport(string url, string database, string compressionMode, Version httpVersion, string? endpoint = null)
     {
         _db = database;
         _baseUrl = url.TrimEnd('/');
         _acceptEncoding = compressionMode.Equals("identity", StringComparison.OrdinalIgnoreCase) ? "identity" : compressionMode;
         EffectiveCompressionMode = _acceptEncoding;
         _customEndpoint = string.IsNullOrWhiteSpace(endpoint) ? null : endpoint;
-        _requestedHttpVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
-        _httpVersionInfo = HttpHelper.GetRequestVersionInfo(_requestedHttpVersion);
+        _httpVersion = httpVersion;
 
         // Configure automatic decompression for supported formats
         // Note: Zstd requires third-party library as it's not supported in .NET's DecompressionMethods
@@ -43,18 +43,15 @@ public sealed class RawHttpTransport : ITransport
             "br" or "brotli" => DecompressionMethods.Brotli,
             _ => DecompressionMethods.None
         };
-        
+
         var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
         handler.AutomaticDecompression = decompression;
-        
-        var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
 
-        (client.DefaultRequestVersion, client.DefaultVersionPolicy, _negotiatedHttpVersion) = _requestedHttpVersion switch
+        // Set up HTTP client with the specific negotiated version
+        var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
+        var client = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
         {
-            "2" => (HttpVersion.Version20, HttpVersionPolicy.RequestVersionExact, "2"),
-            "3" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact, "3"),
-            "auto" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionOrLower, "auto"),
-            _ => (HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact, "1.1")
+            Timeout = Timeout.InfiniteTimeSpan
         };
 
         _http = client;
@@ -106,9 +103,6 @@ public sealed class RawHttpTransport : ITransport
                 var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
                 return new TransportResult(0, 0, errorDetails);
             }
-
-            // Update negotiated version if not yet set (fallback for when validation was skipped)
-            _negotiatedHttpVersion ??= HttpHelper.FormatHttpVersion(resp.Version);
 
             long bytesIn = 0;
             if (resp.Content.Headers.ContentLength.HasValue)
@@ -181,8 +175,6 @@ public sealed class RawHttpTransport : ITransport
                 return new TransportResult(0, 0, errorDetails);
             }
 
-            // Update negotiated version if not yet set (fallback for when validation was skipped)
-            _negotiatedHttpVersion ??= HttpHelper.FormatHttpVersion(resp.Version);
             long bytesIn = 0;
             if (resp.Content.Headers.ContentLength.HasValue)
             {
@@ -250,7 +242,7 @@ public sealed class RawHttpTransport : ITransport
 
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
-        return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db, _requestedHttpVersion);
+        return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db, HttpHelper.FormatHttpVersion(_httpVersion));
     }
 
     public async Task<string> GetServerVersionAsync()
@@ -311,7 +303,7 @@ public sealed class RawHttpTransport : ITransport
     {
         try
         {
-            var url = $"{_baseUrl}/databases/{_db}/stats";
+            var url = $"{_baseUrl}/build/version";
             using var req = CreateRequest(HttpMethod.Get, url);
 
             using var response = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
@@ -321,36 +313,55 @@ public sealed class RawHttpTransport : ITransport
                 throw new HttpRequestException($"Server returned {response.StatusCode}: {response.ReasonPhrase}");
             }
 
-            // Always detect actual HTTP version during validation
-            var actualVersion = HttpHelper.FormatHttpVersion(response.Version);
-
-            // Update negotiated version for auto mode or set it if not already set
-            if (_requestedHttpVersion == "auto" || _negotiatedHttpVersion == null)
-            {
-                _negotiatedHttpVersion = actualVersion;
-            }
-
-            // Validate HTTP version match if strict mode is enabled
-            if (strictHttpVersion && _requestedHttpVersion != "auto")
-            {
-                if (actualVersion != _requestedHttpVersion)
-                {
-                    var requestedForDisplay = _requestedHttpVersion switch
-                    {
-                        "2" => "2",
-                        "3" => "3",
-                        "1.1" => "1.1",
-                        "1.0" => "1.0",
-                        _ => _requestedHttpVersion
-                    };
-                    throw new InvalidOperationException($"HTTP version mismatch: requested HTTP/{requestedForDisplay} but server negotiated HTTP/{actualVersion}. Use --http-version=auto or configure server to support HTTP/{requestedForDisplay}.");
-                }
-            }
         }
         catch (Exception ex) when (!(ex is InvalidOperationException))
         {
             throw new InvalidOperationException($"Client validation failed: Unable to connect to RavenDB server. {ex.Message}", ex);
         }
+    }
+
+
+    public async Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default)
+    {
+        return await CalibrationHelper.ExecuteCalibrationAsync(async cancellationToken =>
+        {
+            var url = BuildCalibrationUrl(endpoint);
+            using var req = CreateRequest(HttpMethod.Get, url);
+
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+            req.Headers.ConnectionClose = false;
+
+            return await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }, ct, fallbackHttpVersion: _httpVersion).ConfigureAwait(false);
+    }
+
+    private string BuildCalibrationUrl(string endpoint)
+    {
+        if (Uri.TryCreate(endpoint, UriKind.Absolute, out _))
+            return endpoint;
+
+        if (!endpoint.StartsWith('/'))
+            endpoint = "/" + endpoint;
+
+        return _baseUrl + endpoint;
+    }
+
+    public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints()
+    {
+        var list = new List<(string, string)>
+        {
+            ("server-version", "/build/version"),
+            ("license-status", "/license/status")
+        };
+
+        if (!string.IsNullOrWhiteSpace(_customEndpoint))
+        {
+            list.Add(("raw-endpoint", _customEndpoint!));
+        }
+
+        return list;
     }
 
     public void Dispose()
@@ -378,8 +389,8 @@ public sealed class RawHttpTransport : ITransport
     private HttpRequestMessage CreateRequest(HttpMethod method, string url)
     {
         var req = new HttpRequestMessage(method, url);
-        req.Version = _httpVersionInfo.version;
-        req.VersionPolicy = _httpVersionInfo.policy;
+        req.Version = _httpVersion;
+        req.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
         return req;
     }
 }

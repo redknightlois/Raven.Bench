@@ -1,5 +1,6 @@
 using RavenBench.Workload;
 using RavenBench.Metrics;
+using RavenBench.Diagnostics;
 
 namespace RavenBench.Transport;
 
@@ -9,6 +10,16 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     public long BytesIn { get; } = bytesIn;
     public string? ErrorDetails { get; } = errorDetails;
     public bool IsSuccess => ErrorDetails == null;
+}
+
+public readonly struct CalibrationResult(double ttfbMs, double totalMs, long bytesDown, Version httpVersion, bool isSuccess = true, string? errorDetails = null)
+{
+    public double TtfbMs { get; } = ttfbMs;
+    public double TotalMs { get; } = totalMs;
+    public long BytesDown { get; } = bytesDown;
+    public Version HttpVersion { get; } = httpVersion;
+    public bool IsSuccess { get; } = isSuccess;
+    public string? ErrorDetails { get; } = errorDetails;
 }
 
 public interface ITransport : IDisposable
@@ -21,5 +32,11 @@ public interface ITransport : IDisposable
     Task<string> GetServerVersionAsync();
     Task<string> GetServerLicenseTypeAsync();
     Task ValidateClientAsync();
+    Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the endpoints this transport wants to calibrate during startup.
+    /// </summary>
+    IReadOnlyList<(string name, string path)> GetCalibrationEndpoints();
 }
 

@@ -47,7 +47,7 @@ public static class ResultAnalyzer
         if (knee == null) return "unknown";
 
         var s = knee;
-        if (s.NetworkUtilization >= 0.85 && s.P95Ms > 0 && s.Throughput > 0)
+        if (s.NetworkUtilization >= 0.85 && s.Raw.P95 > 0 && s.Throughput > 0)
             return $"network-limited at ~{opts.LinkMbps:F0} Mb/s (est.)";
         if (s.ClientCpu >= 0.85)
             return "client-limited (CPU)";
