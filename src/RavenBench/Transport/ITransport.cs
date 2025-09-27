@@ -29,6 +29,7 @@ public interface ITransport : IDisposable
 
     Task<int?> GetServerMaxCoresAsync();
     Task<ServerMetrics> GetServerMetricsAsync();
+    Task<(double? machineCpu, double? processCpu, long? managedMemoryMb, long? unmanagedMemoryMb)> GetSnmpMetricsAsync();
     Task<string> GetServerVersionAsync();
     Task<string> GetServerLicenseTypeAsync();
     Task ValidateClientAsync();

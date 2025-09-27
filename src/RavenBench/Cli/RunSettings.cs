@@ -94,4 +94,15 @@ public sealed class RunSettings : CommandSettings
 
     [CommandOption("--latencies")]
     public string Latencies { get; init; } = "normalized";
+
+    [CommandOption("--snmp-enabled")]
+    public bool SnmpEnabled { get; init; } = true;
+
+
+    [CommandOption("--snmp-port")]
+    public int SnmpPort { get; init; } = 161;
+
+    [CommandOption("--snmp-interval")]
+    public string? SnmpInterval { get; init; }
+
 }

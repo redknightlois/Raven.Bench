@@ -63,5 +63,10 @@ public sealed class StepResult
     public long? ServerIoReadKb { get; init; }
     public long? ServerIoWriteKb { get; init; }
 
+    public double? MachineCpu { get; init; }
+    public double? ProcessCpu { get; init; }
+    public long? ManagedMemoryMb { get; init; }
+    public long? UnmanagedMemoryMb { get; init; }
+
     public string? Reason { get; set; }
 }

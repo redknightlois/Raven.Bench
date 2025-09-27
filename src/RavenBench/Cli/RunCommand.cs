@@ -16,7 +16,7 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             return -1;
         }
         var opts = settings.ToRunOptions();
-        if (!string.Equals(opts.Mode, "closed", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(opts.Mode, "closed", StringComparison.OrdinalIgnoreCase) == false)
         {
             AnsiConsole.MarkupLine("[yellow]Only closed-loop mode implemented in v0. Use --mode closed.[/]");
             return -2;
@@ -58,10 +58,10 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
         };
 
         // Write outputs
-        if (!string.IsNullOrWhiteSpace(opts.OutJson))
+        if (string.IsNullOrWhiteSpace(opts.OutJson) == false)
             JsonResultsWriter.Write(opts.OutJson!, summary);
-        if (!string.IsNullOrWhiteSpace(opts.OutCsv))
-            CsvResultsWriter.Write(opts.OutCsv!, summary);
+        if (string.IsNullOrWhiteSpace(opts.OutCsv) == false)
+            CsvResultsWriter.Write(opts.OutCsv!, summary, opts.SnmpEnabled);
 
         // Render console report
         RenderResults(summary, run.MaxNetworkUtilization, analysis, opts.LatencyDisplay);
@@ -85,24 +85,51 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             normalizedTable.AddColumn("Errors %");
             normalizedTable.AddColumn("Client CPU %");
             normalizedTable.AddColumn("Client Net %");
-            normalizedTable.AddColumn("Server CPU %");
-            normalizedTable.AddColumn("Server Mem MB");
+            if (summary.Options.SnmpEnabled == false)
+            {
+                normalizedTable.AddColumn("Server CPU %");
+                normalizedTable.AddColumn("Server Mem MB");
+            }
             normalizedTable.AddColumn("Server IO R");
             normalizedTable.AddColumn("Server IO W");
+            if (summary.Options.SnmpEnabled)
+            {
+                normalizedTable.AddColumn("Machine CPU %");
+                normalizedTable.AddColumn("Process CPU %");
+                normalizedTable.AddColumn("Managed Mem MB");
+                normalizedTable.AddColumn("Unmanaged Mem MB");
+            }
             foreach (var s in summary.Steps)
             {
-                normalizedTable.AddRow(
+                var row = new List<string>
+                {
                     s.Concurrency.ToString(),
                     s.Throughput.ToString("F0"),
                     s.Normalized.P50.ToString("F1"),
                     s.Normalized.P95.ToString("F1"),
-                    (s.ErrorRate * 100).ToString("F2"),
-                    (s.ClientCpu * 100).ToString("F1"),
-                    (s.NetworkUtilization * 100).ToString("F1"),
-                    s.ServerCpu?.ToString("F1") ?? "N/A",
-                    s.ServerMemoryMB?.ToString() ?? "N/A",
-                    s.ServerIoReadOps?.ToString() ?? "N/A",
-                    s.ServerIoWriteOps?.ToString() ?? "N/A");
+                    s.ErrorRate == 0 ? "N/A" : (s.ErrorRate * 100).ToString("F1"),
+                    (s.ClientCpu * 100).ToString("F0"),
+                    (s.NetworkUtilization * 100).ToString("F1")
+                };
+
+                if (summary.Options.SnmpEnabled == false)
+                {
+                    row.Add(s.ServerCpu?.ToString("F1") ?? "N/A");
+                    row.Add(s.ServerMemoryMB?.ToString() ?? "N/A");
+                }
+
+                row.Add(s.ServerIoReadOps?.ToString() ?? "N/A");
+                row.Add(s.ServerIoWriteOps?.ToString() ?? "N/A");
+
+                if (summary.Options.SnmpEnabled)
+                {
+                    row.Add(s.MachineCpu?.ToString("F1") ?? "N/A");
+                    row.Add(s.ProcessCpu?.ToString("F1") ?? "N/A");
+                    row.Add(s.ManagedMemoryMb?.ToString("F1") ?? "N/A");
+                    row.Add(s.UnmanagedMemoryMb?.ToString("F1") ?? "N/A");
+                }
+
+                normalizedTable.AddRow(row.ToArray());
             }
             AnsiConsole.Write(normalizedTable);
         }
@@ -120,24 +147,51 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             rawTable.AddColumn("Errors %");
             rawTable.AddColumn("Client CPU %");
             rawTable.AddColumn("Client Net %");
-            rawTable.AddColumn("Server CPU %");
-            rawTable.AddColumn("Server Mem MB");
+            if (summary.Options.SnmpEnabled == false)
+            {
+                rawTable.AddColumn("Server CPU %");
+                rawTable.AddColumn("Server Mem MB");
+            }
             rawTable.AddColumn("Server IO R");
             rawTable.AddColumn("Server IO W");
+            if (summary.Options.SnmpEnabled)
+            {
+                rawTable.AddColumn("Machine CPU %");
+                rawTable.AddColumn("Process CPU %");
+                rawTable.AddColumn("Managed Mem MB");
+                rawTable.AddColumn("Unmanaged Mem MB");
+            }
             foreach (var s in summary.Steps)
             {
-                rawTable.AddRow(
+                var rawRow = new List<string>
+                {
                     s.Concurrency.ToString(),
                     s.Throughput.ToString("F0"),
                     s.Raw.P50.ToString("F1"),
                     s.Raw.P95.ToString("F1"),
                     (s.ErrorRate * 100).ToString("F2"),
                     (s.ClientCpu * 100).ToString("F1"),
-                    (s.NetworkUtilization * 100).ToString("F1"),
-                    s.ServerCpu?.ToString("F1") ?? "N/A",
-                    s.ServerMemoryMB?.ToString() ?? "N/A",
-                    s.ServerIoReadOps?.ToString() ?? "N/A",
-                    s.ServerIoWriteOps?.ToString() ?? "N/A");
+                    (s.NetworkUtilization * 100).ToString("F1")
+                };
+
+                if (summary.Options.SnmpEnabled == false)
+                {
+                    rawRow.Add(s.ServerCpu?.ToString("F1") ?? "N/A");
+                    rawRow.Add(s.ServerMemoryMB?.ToString() ?? "N/A");
+                }
+
+                rawRow.Add(s.ServerIoReadOps?.ToString() ?? "N/A");
+                rawRow.Add(s.ServerIoWriteOps?.ToString() ?? "N/A");
+
+                if (summary.Options.SnmpEnabled)
+                {
+                    rawRow.Add(s.MachineCpu?.ToString("F1") ?? "N/A");
+                    rawRow.Add(s.ProcessCpu?.ToString("F1") ?? "N/A");
+                    rawRow.Add(s.ManagedMemoryMb?.ToString("F1") ?? "N/A");
+                    rawRow.Add(s.UnmanagedMemoryMb?.ToString("F1") ?? "N/A");
+                }
+
+                rawTable.AddRow(rawRow.ToArray());
             }
             AnsiConsole.Write(rawTable);
         }
@@ -155,17 +209,16 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             AnsiConsole.Write(panel);
         }
 
-        AnsiConsole.MarkupLine($"[bold]Verdict:[/] {summary.Verdict}");
+        AnsiConsole.MarkupLine($"[bold]Verdict:[/]\n {summary.Verdict}");
 
-        if (maxNetUtil >= 0.80 && !summary.Options.NetworkLimitedMode)
+        if (maxNetUtil >= 0.80 && summary.Options.NetworkLimitedMode == false)
         {
             AnsiConsole.MarkupLine("[yellow]WARNING: Network-limited. >80% link utilization. Identity runs may be hose-limited.[/]");
         }
 
         foreach (var w in analysis.Warnings)
-            AnsiConsole.MarkupLine($"[yellow]WARNING:[/] {w}");
+            AnsiConsole.MarkupLine($"[yellow]WARNING:[/]\n {w}");
         if (analysis.UnreliableBeyondKnee)
             AnsiConsole.MarkupLine("[italic]Beyond limits = unreliable.[/]");
     }
 }
-

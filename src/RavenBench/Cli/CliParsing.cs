@@ -1,25 +1,21 @@
 using System.Globalization;
 using RavenBench.Util;
+using System;
 
 namespace RavenBench.Cli;
 
-/// <summary>
-/// Converts CLI settings to strongly-typed runtime options with validation and parsing.
-/// </summary>
+#nullable disable
 internal static class CliParsing
 {
-    /// <summary>
-    /// Converts RunSettings from CLI parsing into RunOptions with validated and parsed values.
-    /// </summary>
     public static RunOptions ToRunOptions(this RunSettings s)
     {
         var (concurrencyStart, concurrencyEnd, concurrencyFactor) = ParseConcurrency(s.Concurrency);
         var (kneeThroughputDelta, kneeP95Delta) = ParseKneeRule(s.KneeRule);
-        
+
         return new RunOptions
         {
-            Url = RequiredString(s.Url, "--url"),
-            Database = RequiredString(s.Database, "--database"),
+            Url = RequiredString(s.Url!, "--url"),
+            Database = RequiredString(s.Database!, "--database"),
             Reads = ParseNullableWeight(s.Reads),
             Writes = ParseNullableWeight(s.Writes),
             Updates = ParseNullableWeight(s.Updates),
@@ -50,16 +46,25 @@ internal static class CliParsing
             HttpVersion = s.HttpVersion,
             StrictHttpVersion = s.StrictHttpVersion,
             Verbose = s.Verbose,
+            SnmpEnabled = s.SnmpEnabled,
+            SnmpPort = s.SnmpEnabled ? s.SnmpPort : 161,
+            SnmpPollInterval = s.SnmpEnabled ? ParseDuration(s.SnmpInterval ?? "5s") : TimeSpan.FromSeconds(5),
             LatencyDisplay = ParseLatencyDisplayType(s.Latencies)
         };
     }
 
-    private static string RequiredString(string? value, string paramName) =>
-        value ?? throw new ArgumentException($"{paramName} is required");
+    private static string RequiredString(string value, string paramName)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new ArgumentException($"{paramName} is required");
+        }
+        return value;
+    }
 
-    private static double? ParseNullableWeight(string? s) => s is not null ? ParseWeight(s) : null;
+    private static double ParseNullableWeight(string s) => s is not null ? ParseWeight(s) : 0.0;
 
-    public static (int,int,double) ParseConcurrency(string s)
+    public static (int, int, double) ParseConcurrency(string s)
     {
         var parts = s.Split("..", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length != 2) throw new ArgumentException("Invalid --concurrency format");
@@ -71,7 +76,7 @@ internal static class CliParsing
         return (start, end, factor);
     }
 
-    public static (double,double) ParseKneeRule(string s)
+    public static (double, double) ParseKneeRule(string s)
     {
         var parts = s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         double dthr = 0.05, dp95 = 0.20;
@@ -82,7 +87,6 @@ internal static class CliParsing
         }
         return (dthr, dp95);
     }
-
 
     public static int ParseSize(string s)
     {
@@ -128,5 +132,11 @@ internal static class CliParsing
             _ => throw new ArgumentException($"Invalid latency display type: {latencies}. Valid options: normalized, raw, both")
         };
     }
-}
 
+    private static string ExtractHostFromUrl(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+            return uri.Host;
+        return url; // fallback
+    }
+}

@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench.Metrics;
 using RavenBench.Transport;
-using RavenBench.Workload;
+using RavenBench.Util;
 using Xunit;
 
 namespace RavenBench.Tests;
@@ -14,53 +14,56 @@ public class ServerMetricsTrackerTests
     [Fact]
     public void Constructor_Initializes_Successfully()
     {
-        // INVARIANT: Constructor should not throw with valid transport
+        // INVARIANT: Constructor should not throw with valid transport and options
         // INVARIANT: Initial state should be valid
         using var transport = new TestTransport();
-        using var tracker = new ServerMetricsTracker(transport);
-        
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        using var tracker = new ServerMetricsTracker(transport, options);
+
         tracker.Should().NotBeNull();
-        
+
         // Should have valid initial metrics
         var initial = tracker.Current;
         initial.Should().NotBeNull();
         initial.Timestamp.Should().BeAfter(DateTime.MinValue);
     }
-    
+
     [Fact]
     public void Start_Stop_Basic_Functionality()
     {
         // INVARIANT: Start and stop should work without exceptions
         // INVARIANT: Current should always return valid metrics
         using var transport = new TestTransport();
-        using var tracker = new ServerMetricsTracker(transport);
-        
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        using var tracker = new ServerMetricsTracker(transport, options);
+
         // Should be able to start
         tracker.Start();
-        
+
         var metrics1 = tracker.Current;
         metrics1.Should().NotBeNull();
-        
+
         // Should be able to stop
         tracker.Stop();
-        
+
         var metrics2 = tracker.Current;
         metrics2.Should().NotBeNull();
     }
-    
+
     [Fact]
     public void Current_Property_Thread_Safe_Access()
     {
         // INVARIANT: Current property should be thread-safe
         // INVARIANT: Should never return null or invalid metrics
         using var transport = new TestTransport();
-        using var tracker = new ServerMetricsTracker(transport);
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        using var tracker = new ServerMetricsTracker(transport, options);
         tracker.Start();
-        
+
         const int accessCount = 100;
         var allMetrics = new ServerMetrics[accessCount];
         var exceptions = new Exception[accessCount];
-        
+
         // Access Current property from multiple threads rapidly
         Parallel.For(0, accessCount, i =>
         {
@@ -73,12 +76,12 @@ public class ServerMetricsTrackerTests
                 exceptions[i] = ex;
             }
         });
-        
+
         tracker.Stop();
-        
+
         // Should have no exceptions
         exceptions.Should().AllSatisfy(ex => ex.Should().BeNull());
-        
+
         // All metrics should be valid
         allMetrics.Should().AllSatisfy(metrics =>
         {
@@ -86,72 +89,120 @@ public class ServerMetricsTrackerTests
             metrics.Timestamp.Should().BeAfter(DateTime.MinValue);
         });
     }
-    
+
     [Fact]
     public void Multiple_Start_Stop_Cycles_Work_Correctly()
     {
         // INVARIANT: Should handle multiple start/stop cycles
         // INVARIANT: Should remain stable across cycles
         using var transport = new TestTransport();
-        using var tracker = new ServerMetricsTracker(transport);
-        
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        using var tracker = new ServerMetricsTracker(transport, options);
+
         for (int cycle = 0; cycle < 3; cycle++)
         {
             tracker.Start();
-            
+
             var metrics = tracker.Current;
             metrics.Should().NotBeNull();
-            
+
             tracker.Stop();
-            
+
             // Should still provide valid metrics after stop
             metrics = tracker.Current;
             metrics.Should().NotBeNull();
         }
     }
-    
+
     [Fact]
     public void Dispose_Cleans_Up_Resources()
     {
         // INVARIANT: Dispose should work without exceptions
         // INVARIANT: Should handle disposal in any state
         var transport = new TestTransport();
-        var tracker = new ServerMetricsTracker(transport);
-        
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        var tracker = new ServerMetricsTracker(transport, options);
+
         tracker.Start();
-        
+
         // Should dispose cleanly
         tracker.Dispose();
-        
+
         // Second dispose should also be safe
         tracker.Dispose();
-        
+
         // Clean up transport
         transport.Dispose();
     }
-    
+
     [Fact]
     public void Metrics_Update_During_Polling()
     {
         // INVARIANT: Metrics should be updated periodically when started
         // INVARIANT: Should use transport's GetServerMetricsAsync method
         using var transport = new TestTransport();
-        using var tracker = new ServerMetricsTracker(transport);
-        
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        using var tracker = new ServerMetricsTracker(transport, options);
+
         tracker.Start();
-        
+
         var initialMetrics = tracker.Current;
-        
+
         // Give it time for at least one poll cycle (polling every 2 seconds)
         // We'll wait a shorter time and just verify the infrastructure works
         Thread.Sleep(100);
-        
+
         var updatedMetrics = tracker.Current;
-        
+
         // Both should be valid (may or may not be different instances)
         initialMetrics.Should().NotBeNull();
         updatedMetrics.Should().NotBeNull();
-        
+
         tracker.Stop();
+    }
+
+    [Fact]
+    public void Snmp_Enabled_InitializesCorrectly()
+    {
+        // Arrange
+        var transport = new TestTransport();
+        var options = new RunOptions
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            SnmpEnabled = true,
+            SnmpPort = 161
+        };
+
+        // Act
+        using var tracker = new ServerMetricsTracker(transport, options);
+
+        // Assert
+        tracker.Should().NotBeNull();
+        var metrics = tracker.Current;
+        metrics.Should().NotBeNull();
+        metrics.IsValid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Snmp_Disabled_InitializesCorrectly()
+    {
+        // Arrange
+        var transport = new TestTransport();
+        var options = new RunOptions
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            SnmpEnabled = false // Explicitly disabled
+        };
+
+        // Act
+        using var tracker = new ServerMetricsTracker(transport, options);
+
+        // Assert
+        tracker.Should().NotBeNull();
+        var metrics = tracker.Current;
+        metrics.Should().NotBeNull();
+        metrics.IsValid.Should().BeTrue();
     }
 }

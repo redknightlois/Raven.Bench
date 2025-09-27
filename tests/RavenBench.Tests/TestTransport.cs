@@ -55,7 +55,13 @@ public sealed class TestTransport : ITransport
 
     public Task ValidateClientAsync() => Task.CompletedTask;
 
+
     public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(_serverMetrics);
+
+    public Task<(double? machineCpu, double? processCpu, long? managedMemoryMb, long? unmanagedMemoryMb)> GetSnmpMetricsAsync()
+    {
+        return Task.FromResult<(double?, double?, long?, long?)>((null, null, null, null));
+    }
 
     public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints() => new[]
     {

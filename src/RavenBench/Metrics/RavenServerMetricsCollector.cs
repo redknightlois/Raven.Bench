@@ -28,7 +28,7 @@ public static class RavenServerMetricsCollector
             };
 
             // Configure HTTP version if specified
-            if (!string.IsNullOrEmpty(httpVersion))
+            if (string.IsNullOrEmpty(httpVersion) == false)
             {
                 var normalizedVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
                 var httpVersionInfo = HttpHelper.GetRequestVersionInfo(normalizedVersion);
@@ -165,7 +165,7 @@ public static class RavenServerMetricsCollector
             return null;
 
         // Parse TimeSpan from string format (e.g., "00:57:11.9531250")
-        if (!TimeSpan.TryParse(cpuStatEntry.TotalProcessorTime, out var totalProcessorTime))
+        if (TimeSpan.TryParse(cpuStatEntry.TotalProcessorTime, out var totalProcessorTime) == false)
             return null;
 
         return new CpuSample

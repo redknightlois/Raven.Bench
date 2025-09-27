@@ -20,7 +20,7 @@ internal static class VerboseErrorTracker
 
     public static void LogError(string errorMessage, bool verbose)
     {
-        if (!verbose || string.IsNullOrEmpty(errorMessage))
+        if (verbose == false || string.IsNullOrEmpty(errorMessage))
             return;
 
         // Just count the error, don't print it immediately
@@ -93,8 +93,7 @@ public class BenchmarkRunner(RunOptions opts)
         var concurrency = opts.ConcurrencyStart;
 
         var cpuTracker = new ProcessCpuTracker();
-        using var serverTracker = new ServerMetricsTracker(transport);
-
+        using var serverTracker = new ServerMetricsTracker(transport, opts);
         var maxNetUtil = 0.0;
         StartupCalibration? startupCalibration = null;
         string clientCompression = transport switch
@@ -108,7 +107,8 @@ public class BenchmarkRunner(RunOptions opts)
 
         await ValidateClientAsync(transport);
         await ValidateServerSanityAsync(transport);
-        
+        await ValidateSnmpAsync(transport);
+
         try
         {
             Console.WriteLine("[Raven.Bench] Running startup calibration...");
@@ -210,7 +210,8 @@ public class BenchmarkRunner(RunOptions opts)
             Workload = workload,
             CpuTracker = cpuTracker,
             ServerTracker = serverTracker,
-            Rng = _rng
+            Rng = _rng,
+            Options = opts
         };
         
         while (concurrency <= opts.ConcurrencyEnd)
@@ -317,7 +318,7 @@ public class BenchmarkRunner(RunOptions opts)
                 var t = ctx.AddTask($"Warmup @ C={step.Concurrency}{httpVersionInfo}", maxValue: step.Duration.TotalSeconds);
                 var run = RunClosedLoopAsync(context, step);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (!run.IsCompleted)
+                while (run.IsCompleted == false)
                 {
                     t.Value = Math.Min(step.Duration.TotalSeconds, sw.Elapsed.TotalSeconds);
                     await Task.Delay(200);
@@ -347,7 +348,7 @@ public class BenchmarkRunner(RunOptions opts)
                 var t = ctx.AddTask($"Measure @ C={step.Concurrency}{httpVersionInfo}", maxValue: step.Duration.TotalSeconds);
                 var run = RunClosedLoopAsync(context, step);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (!run.IsCompleted)
+                while (run.IsCompleted == false)
                 {
                     t.Value = Math.Min(step.Duration.TotalSeconds, sw.Elapsed.TotalSeconds);
                     await Task.Delay(200);
@@ -470,7 +471,7 @@ public class BenchmarkRunner(RunOptions opts)
                         else
                         {
                             Interlocked.Increment(ref errors);
-                            VerboseErrorTracker.LogError(res.ErrorDetails, opts.Verbose);
+                            VerboseErrorTracker.LogError(res.ErrorDetails ?? string.Empty, opts.Verbose);
                         }
                     }
                     catch (TaskCanceledException)
@@ -518,6 +519,10 @@ public class BenchmarkRunner(RunOptions opts)
             ServerIoWriteOps = serverMetrics.IoWriteOperations.HasValue ? (long)serverMetrics.IoWriteOperations.Value : null,
             ServerIoReadKb = serverMetrics.ReadThroughputKb,
             ServerIoWriteKb = serverMetrics.WriteThroughputKb,
+            MachineCpu = serverMetrics.MachineCpu,
+            ProcessCpu = serverMetrics.ProcessCpu,
+            ManagedMemoryMb = serverMetrics.ManagedMemoryMb,
+            UnmanagedMemoryMb = serverMetrics.UnmanagedMemoryMb,
         };
         
         return (stepResult, hist);
@@ -587,6 +592,57 @@ public class BenchmarkRunner(RunOptions opts)
         {
             // non-fatal - continue with benchmark
             Console.WriteLine($"[Raven.Bench] Warning: Server validation failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Validates SNMP connectivity if SNMP is enabled in options.
+    /// Throws exception if SNMP is enabled but fails to retrieve metrics - SNMP must work when explicitly enabled.
+    /// </summary>
+    private async Task ValidateSnmpAsync(ITransport transport)
+    {
+        if (opts.SnmpEnabled == false)
+            return;
+
+        Console.WriteLine("[Raven.Bench] Validating SNMP connectivity...");
+
+        try
+        {
+            var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = await transport.GetSnmpMetricsAsync();
+
+            if (machineCpu.HasValue || processCpu.HasValue || managedMemoryMb.HasValue || unmanagedMemoryMb.HasValue)
+            {
+                Console.WriteLine("[Raven.Bench] SNMP validation successful:");
+                if (machineCpu.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Machine CPU: {machineCpu.Value}%");
+                if (processCpu.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Process CPU: {processCpu.Value}%");
+                if (managedMemoryMb.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Managed Memory: {managedMemoryMb.Value} MB");
+                if (unmanagedMemoryMb.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Unmanaged Memory: {unmanagedMemoryMb.Value} MB");
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "SNMP is enabled but no metrics were retrieved. Possible causes:\n" +
+                    "  - SNMP service not running on server\n" +
+                    "  - Firewall blocking SNMP port 161\n" +
+                    "  - Incorrect community string (expected: 'ravendb')\n" +
+                    "  - Server SNMP not enabled (set Monitoring.Snmp.Enabled=true in server settings.json)\n" +
+                    "\nBenchmark cannot proceed with SNMP enabled but unavailable.");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Re-throw validation failures
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"SNMP validation failed: {ex.Message}\n" +
+                "Benchmark cannot proceed with SNMP enabled but unavailable.", ex);
         }
     }
 }

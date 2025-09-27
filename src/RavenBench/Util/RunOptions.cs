@@ -50,4 +50,8 @@ public sealed class RunOptions
     public bool StrictHttpVersion { get; init; } = false; // fail if requested HTTP version is not available
     public bool Verbose { get; init; } = false; // enable detailed error logging
     public LatencyDisplayType LatencyDisplay { get; init; } = LatencyDisplayType.Normalized; // which latencies to display
+
+    public bool SnmpEnabled { get; init; }
+    public int SnmpPort { get; init; } = 161;
+    public TimeSpan SnmpPollInterval { get; init; } = TimeSpan.FromSeconds(5);
 }

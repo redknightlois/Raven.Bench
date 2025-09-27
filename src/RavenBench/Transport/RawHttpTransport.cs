@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using RavenBench.Metrics.Snmp;
 using System.Text.Json;
 using System.Buffers;
 using System.Diagnostics;
@@ -21,7 +22,7 @@ public sealed class RawHttpTransport : ITransport
     private readonly string? _customEndpoint; // optional format with {id}
     private readonly LockFreeRingBuffer<byte[]> _bufferPool;
     private readonly Version _httpVersion;
-    public string EffectiveCompressionMode { get; }
+    public string EffectiveCompressionMode { get; } = "identity";
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
 
@@ -95,43 +96,44 @@ public sealed class RawHttpTransport : ITransport
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
 
-            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-
-            if (!resp.IsSuccessStatusCode)
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
             {
-                var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                return new TransportResult(0, 0, errorDetails);
-            }
-
-            long bytesIn = 0;
-            if (resp.Content.Headers.ContentLength.HasValue)
-            {
-                bytesIn = resp.Content.Headers.ContentLength.Value;
-                // If gzip auto-decompressed, Content-Length is post-decompression; treat as payload bytes
-            }
-            else
-            {
-                await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-
-                if (_bufferPool.TryDequeue(out var buffer) == false)
+                if (resp.IsSuccessStatusCode == false)
                 {
-                    buffer = new byte[32768]; // Fallback if pool is empty
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                    return new TransportResult(0, 0, errorDetails);
                 }
 
-                int totalRead = 0;
-                int bytesRead;
-                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                long bytesIn = 0;
+                if (resp.Content.Headers.ContentLength.HasValue)
                 {
-                    totalRead += bytesRead;
+                    bytesIn = resp.Content.Headers.ContentLength.Value;
+                    // If gzip auto-decompressed, Content-Length is post-decompression; treat as payload bytes
                 }
-                bytesIn = totalRead;
+                else
+                {
+                    await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
 
-                _bufferPool.TryEnqueue(buffer); // Return to pool
+                    if (_bufferPool.TryDequeue(out var buffer) == false)
+                    {
+                        buffer = new byte[32768]; // Fallback if pool is empty
+                    }
+
+                    int totalRead = 0;
+                    int bytesRead;
+                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                    {
+                        totalRead += bytesRead;
+                    }
+                    bytesIn = totalRead;
+
+                    _bufferPool.TryEnqueue(buffer); // Return to pool
+                }
+                // crude header bytes estimate
+                var bytesOut = 400; // request headers approx
+                return new TransportResult(bytesOut, bytesIn);
             }
-            // crude header bytes estimate
-            var bytesOut = 400; // request headers approx
-            return new TransportResult(bytesOut, bytesIn);
         }
         catch (TaskCanceledException)
         {
@@ -166,40 +168,41 @@ public sealed class RawHttpTransport : ITransport
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
 
-            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
-
-            if (!resp.IsSuccessStatusCode)
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
             {
-                var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                return new TransportResult(0, 0, errorDetails);
-            }
-
-            long bytesIn = 0;
-            if (resp.Content.Headers.ContentLength.HasValue)
-            {
-                bytesIn = resp.Content.Headers.ContentLength.Value;
-            }
-            else
-            {
-                await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-
-                if (_bufferPool.TryDequeue(out var buffer) == false)
-                    buffer = new byte[32768]; // Fallback if pool is empty
-
-                int totalRead = 0;
-                int bytesRead;
-                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                if (resp.IsSuccessStatusCode == false)
                 {
-                    totalRead += bytesRead;
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                    return new TransportResult(0, 0, errorDetails);
                 }
-                bytesIn = totalRead;
 
-                _bufferPool.TryEnqueue(buffer); // Return to pool
+                long bytesIn = 0;
+                if (resp.Content.Headers.ContentLength.HasValue)
+                {
+                    bytesIn = resp.Content.Headers.ContentLength.Value;
+                }
+                else
+                {
+                    await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+
+                    if (_bufferPool.TryDequeue(out var buffer) == false)
+                        buffer = new byte[32768]; // Fallback if pool is empty
+
+                    int totalRead = 0;
+                    int bytesRead;
+                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                    {
+                        totalRead += bytesRead;
+                    }
+                    bytesIn = totalRead;
+
+                    _bufferPool.TryEnqueue(buffer); // Return to pool
+                }
+                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(json);
+                bytesOut += 400; // headers approx
+                return new TransportResult(bytesOut, bytesIn);
             }
-            long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(json);
-            bytesOut += 400; // headers approx
-            return new TransportResult(bytesOut, bytesIn);
         }
         catch (TaskCanceledException)
         {
@@ -240,9 +243,19 @@ public sealed class RawHttpTransport : ITransport
         return null;
     }
 
+
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
         return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db, HttpHelper.FormatHttpVersion(_httpVersion));
+    }
+
+    public async Task<(double? machineCpu, double? processCpu, long? managedMemoryMb, long? unmanagedMemoryMb)> GetSnmpMetricsAsync()
+    {
+        var snmpClient = new SnmpClient();
+        var oids = new[] { SnmpOids.MachineCpu, SnmpOids.ProcessCpu, SnmpOids.ManagedMemory, SnmpOids.UnmanagedMemory };
+        var host = new Uri(_baseUrl).Host;
+        var snmpResults = await snmpClient.GetManyAsync(oids, host);
+        return SnmpMetricMapper.MapMetrics(snmpResults);
     }
 
     public async Task<string> GetServerVersionAsync()
@@ -264,8 +277,8 @@ public sealed class RawHttpTransport : ITransport
                 
             return "unknown";
         }
-        catch (Exception ex) 
-        { 
+        catch (Exception ex)
+        {
             throw new InvalidOperationException($"Client validation failed: Unable to retrieve server version. {ex.Message}", ex);
         }
     }
@@ -287,9 +300,10 @@ public sealed class RawHttpTransport : ITransport
 
             return "unknown";
         }
-        catch (Exception ex) 
-        { 
-            throw new InvalidOperationException($"Client validation failed: Unable to retrieve server type. {ex.Message}", ex);
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Raven.Bench] Warning: Failed to get license type: {ex.GetType().Name}: {ex.Message}");
+            return "unknown";
         }
     }
 
@@ -308,13 +322,13 @@ public sealed class RawHttpTransport : ITransport
 
             using var response = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
 
-            if (!response.IsSuccessStatusCode)
+            if (response.IsSuccessStatusCode == false)
             {
                 throw new HttpRequestException($"Server returned {response.StatusCode}: {response.ReasonPhrase}");
             }
 
         }
-        catch (Exception ex) when (!(ex is InvalidOperationException))
+        catch (Exception ex) when (ex is InvalidOperationException == false)
         {
             throw new InvalidOperationException($"Client validation failed: Unable to connect to RavenDB server. {ex.Message}", ex);
         }
@@ -344,7 +358,7 @@ public sealed class RawHttpTransport : ITransport
             uri.Scheme != null && (uri.Scheme == "http" || uri.Scheme == "https"))
             return endpoint;
 
-        if (!endpoint.StartsWith('/'))
+        if (endpoint.StartsWith('/') == false)
             endpoint = "/" + endpoint;
 
         return _baseUrl + endpoint;
@@ -352,26 +366,24 @@ public sealed class RawHttpTransport : ITransport
 
     public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints()
     {
-        var list = new List<(string, string)>
+        return new List<(string, string)>
         {
             ("server-version", "/build/version"),
             ("license-status", "/license/status")
         };
-
-        if (!string.IsNullOrWhiteSpace(_customEndpoint))
-        {
-            list.Add(("raw-endpoint", _customEndpoint!));
-        }
-
-        return list;
     }
 
-    public void Dispose()
+    private static string? ExtractAcceptEncoding(string compression)
     {
-        _http.Dispose();
+        if (string.IsNullOrWhiteSpace(compression))
+            return null;
+
+        var parts = compression.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+            return null;
+
+        return parts[1].ToLowerInvariant();
     }
-
-
 
     private string BuildUrl(string id)
     {
@@ -394,5 +406,10 @@ public sealed class RawHttpTransport : ITransport
         req.Version = _httpVersion;
         req.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
         return req;
+    }
+
+    public void Dispose()
+    {
+        _http.Dispose();
     }
 }

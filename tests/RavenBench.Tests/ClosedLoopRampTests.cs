@@ -47,20 +47,26 @@ public class ClosedLoopRampTests
     private sealed class BenchmarkRunnerForTest : BenchmarkRunner
     {
         private readonly IWorkload _w;
-        public BenchmarkRunnerForTest(RunOptions opts, IWorkload w) : base(opts) { _w = w; }
+        private readonly RunOptions _opts;
+        public BenchmarkRunnerForTest(RunOptions opts, IWorkload w) : base(opts)
+        {
+            _w = w;
+            _opts = opts;
+        }
         public async Task<BenchmarkRun> RunAsyncWithTransport(ITransport transport)
         {
             var steps = new List<StepResult>();
             var concurrency = 2;
             var tracker = new RavenBench.Metrics.ProcessCpuTracker();
-            using var serverTracker = new RavenBench.Metrics.ServerMetricsTracker(transport);
+            using var serverTracker = new RavenBench.Metrics.ServerMetricsTracker(transport, _opts);
             var context = new BenchmarkContext
             {
                 Transport = transport,
                 Workload = _w,
                 CpuTracker = tracker,
                 ServerTracker = serverTracker,
-                Rng = new Random(42)
+                Rng = new Random(42),
+                Options = _opts
             };
             
             while (concurrency <= 8)

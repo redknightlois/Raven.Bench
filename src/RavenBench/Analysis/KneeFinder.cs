@@ -40,7 +40,7 @@ public static class KneeFinder
 
             // Don’t consider knees until we are in danger zone
             var inDanger = prev.Raw.P50 >= P50DangerMs || cur.Raw.P50 >= P50DangerMs;
-            if (!inDanger)
+            if (inDanger == false)
                 continue;
 
             var dthr = prev.Throughput > 0 ? (cur.Throughput - prev.Throughput) / prev.Throughput : 0.0;

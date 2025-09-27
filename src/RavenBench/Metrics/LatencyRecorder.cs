@@ -1,3 +1,7 @@
+using System;
+using System.Threading;
+using System.Linq;
+
 namespace RavenBench.Metrics;
 
 public sealed class LatencyRecorder
@@ -19,7 +23,7 @@ public sealed class LatencyRecorder
 
     public void Record(long micros)
     {
-        if (!_record) return;
+        if (_record == false) return;
         
         var n = Interlocked.Increment(ref _count);
         
@@ -42,7 +46,7 @@ public sealed class LatencyRecorder
 
     public double GetPercentile(int p)
     {
-        if (!_record) return 0;
+        if (_record == false) return 0;
         
         var currentCount = Volatile.Read(ref _count);
         if (currentCount == 0) return 0;
@@ -65,7 +69,7 @@ public sealed class LatencyRecorder
 
     public double GetNormalizedPercentile(int p, double ttfbAdjustedMs, double beta, double floorRttMs)
     {
-        if (!_record) return 0;
+        if (_record == false) return 0;
 
         var currentCount = Volatile.Read(ref _count);
         if (currentCount == 0) return 0;

@@ -1,5 +1,6 @@
 using RavenBench.Metrics;
 using RavenBench.Transport;
+using RavenBench.Util;
 using RavenBench.Workload;
 
 namespace RavenBench;
@@ -14,6 +15,7 @@ internal sealed class BenchmarkContext
     public required ProcessCpuTracker CpuTracker { get; init; }
     public required ServerMetricsTracker ServerTracker { get; init; }
     public required Random Rng { get; init; }
+    public required RunOptions Options { get; init; }
 }
 
 /// <summary>

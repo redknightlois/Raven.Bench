@@ -20,11 +20,12 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(RavenDb71Src)' == ''">
+    <PackageReference Include="Lextm.SharpSnmpLib" Version="10.0.0" />
     <PackageReference Include="RavenDB.Client" Version="7.1.*" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Text.Json" Version="8.0.4" />
+    <PackageReference Include="System.Text.Json" Version="9.0.9" />
     <PackageReference Include="Spectre.Console" Version="0.51.1" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.51.1" />
   </ItemGroup>

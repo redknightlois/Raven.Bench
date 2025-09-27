@@ -10,6 +10,7 @@ using RavenBench.Workload;
 using RavenBench.Metrics;
 using RavenBench.Util;
 using RavenBench.Diagnostics;
+using RavenBench.Metrics.Snmp;
 using System.Text.Json;
 using System.Net;
 using System.Net.Http;
@@ -150,10 +151,20 @@ public sealed class RavenClientTransport : ITransport
         await session.SaveChangesAsync().ConfigureAwait(false);
     }
 
+
     public async Task<ServerMetrics> GetServerMetricsAsync()
     {
         var baseUrl = _store.Urls[0].TrimEnd('/');
         return await RavenServerMetricsCollector.CollectAsync(baseUrl, _store.Database, HttpHelper.FormatHttpVersion(_httpVersion));
+    }
+
+    public async Task<(double? machineCpu, double? processCpu, long? managedMemoryMb, long? unmanagedMemoryMb)> GetSnmpMetricsAsync()
+    {
+        var snmpClient = new SnmpClient();
+        var oids = new[] { SnmpOids.MachineCpu, SnmpOids.ProcessCpu, SnmpOids.ManagedMemory, SnmpOids.UnmanagedMemory };
+        var host = new Uri(_store.Urls[0]).Host;
+        var snmpResults = await snmpClient.GetManyAsync(oids, host);
+        return SnmpMetricMapper.MapMetrics(snmpResults);
     }
 
     public async Task<string> GetServerVersionAsync()
@@ -260,7 +271,7 @@ public sealed class RavenClientTransport : ITransport
         return await CalibrationHelper.ExecuteCalibrationAsync(async cancellationToken =>
         {
             // Prepare endpoint path (ensure it starts with /)
-            if (!endpoint.StartsWith('/'))
+            if (endpoint.StartsWith('/') == false)
                 endpoint = "/" + endpoint;
 
             // Create HTTP client with same configuration as the store
@@ -278,7 +289,7 @@ public sealed class RavenClientTransport : ITransport
             req.Headers.ConnectionClose = false;
 
             var acceptEncoding = ExtractAcceptEncoding(_compressionMode);
-            if (!string.IsNullOrWhiteSpace(acceptEncoding))
+            if (string.IsNullOrWhiteSpace(acceptEncoding) == false)
             {
                 req.Headers.AcceptEncoding.Clear();
                 req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(acceptEncoding));
@@ -295,7 +306,7 @@ public sealed class RavenClientTransport : ITransport
             uri.Scheme != null && (uri.Scheme == "http" || uri.Scheme == "https"))
             return endpoint;
 
-        if (!endpoint.StartsWith('/'))
+        if (endpoint.StartsWith('/') == false)
             endpoint = "/" + endpoint;
 
         return _store.Urls[0].TrimEnd('/') + endpoint;
