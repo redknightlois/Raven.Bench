@@ -74,151 +74,9 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine();
 
-        // Determine which columns to show based on available data (shared between normalized and raw tables)
-        bool showServerReqs = summary.Options.SnmpEnabled &&
-                              summary.Options.Snmp.Profile == Util.SnmpProfile.Extended &&
-                              summary.Steps.Any(s => s.ServerSnmpRequestsPerSec.HasValue);
-        bool showErrors = summary.Steps.Any(s => s.ErrorRate > 0);
-        bool showServerIoR = summary.Steps.Any(s => s.ServerIoReadOps.HasValue);
-        bool showServerIoW = summary.Steps.Any(s => s.ServerIoWriteOps.HasValue);
-        bool showDirtyMem = summary.Options.SnmpEnabled &&
-                            summary.Options.Snmp.Profile == Util.SnmpProfile.Extended &&
-                            summary.Steps.Any(s => s.DirtyMemoryMb.HasValue);
-        bool showLoad1m = summary.Options.SnmpEnabled &&
-                          summary.Options.Snmp.Profile == Util.SnmpProfile.Extended &&
-                          summary.Steps.Any(s => s.Load1Min.HasValue);
-        bool showSnmpErrors = summary.Options.SnmpEnabled &&
-                              summary.Options.Snmp.Profile == Util.SnmpProfile.Extended &&
-                              summary.Steps.Any(s => s.SnmpErrorsPerSec.HasValue);
-
-        // Display tables based on latency type
         if (latencyDisplay == LatencyDisplayType.Normalized || latencyDisplay == LatencyDisplayType.Both)
         {
-            var normalizedTable = new Table().Border(TableBorder.Rounded).Caption("[grey]Per-step metrics (RTT-normalized)[/]");
-
-            // Add columns
-            normalizedTable.AddColumn("Concurrency");
-            normalizedTable.AddColumn("Thr/s");
-
-            if (showServerReqs)
-            {
-                normalizedTable.AddColumn("Server Req/s");
-            }
-
-            normalizedTable.AddColumn("p50 ms");
-            normalizedTable.AddColumn("p95 ms");
-
-            if (showErrors)
-            {
-                normalizedTable.AddColumn("Errors %");
-            }
-
-            normalizedTable.AddColumn("Client CPU %");
-            normalizedTable.AddColumn("Client Net %");
-
-            if (summary.Options.SnmpEnabled == false)
-            {
-                normalizedTable.AddColumn("Server CPU %");
-                normalizedTable.AddColumn("Server Mem MB");
-            }
-
-            if (showServerIoR)
-            {
-                normalizedTable.AddColumn("Server IO R");
-            }
-            if (showServerIoW)
-            {
-                normalizedTable.AddColumn("Server IO W");
-            }
-
-            if (summary.Options.SnmpEnabled)
-            {
-                normalizedTable.AddColumn("Machine CPU %");
-                normalizedTable.AddColumn("Process CPU %");
-                normalizedTable.AddColumn("Managed MB");
-                normalizedTable.AddColumn("Unmanaged MB");
-
-                if (summary.Options.Snmp.Profile == Util.SnmpProfile.Extended)
-                {
-                    if (showDirtyMem)
-                    {
-                        normalizedTable.AddColumn("Dirty MB");
-                    }
-                    if (showLoad1m)
-                    {
-                        normalizedTable.AddColumn("Load 1m");
-                    }
-                    if (showSnmpErrors)
-                    {
-                        normalizedTable.AddColumn("Err/s");
-                    }
-                }
-            }
-            foreach (var s in summary.Steps)
-            {
-                var row = new List<string>
-                {
-                    s.Concurrency.ToString(),
-                    s.Throughput.ToString("F0")
-                };
-
-                if (showServerReqs)
-                {
-                    row.Add(s.ServerSnmpRequestsPerSec?.ToString("F0") ?? "N/A");
-                }
-
-                row.Add(s.Normalized.P50.ToString("F1"));
-                row.Add(s.Normalized.P95.ToString("F1"));
-
-                if (showErrors)
-                {
-                    row.Add(s.ErrorRate == 0 ? "N/A" : (s.ErrorRate * 100).ToString("F1"));
-                }
-
-                row.Add((s.ClientCpu * 100).ToString("F0"));
-                row.Add((s.NetworkUtilization * 100).ToString("F1"));
-
-                if (summary.Options.SnmpEnabled == false)
-                {
-                    row.Add(s.ServerCpu?.ToString("F1") ?? "N/A");
-                    row.Add(s.ServerMemoryMB?.ToString() ?? "N/A");
-                }
-
-                if (showServerIoR)
-                {
-                    row.Add(s.ServerIoReadOps?.ToString() ?? "N/A");
-                }
-                if (showServerIoW)
-                {
-                    row.Add(s.ServerIoWriteOps?.ToString() ?? "N/A");
-                }
-
-                if (summary.Options.SnmpEnabled)
-                {
-                    row.Add(s.MachineCpu?.ToString("F1") ?? "N/A");
-                    row.Add(s.ProcessCpu?.ToString("F1") ?? "N/A");
-                    row.Add(s.ManagedMemoryMb?.ToString("F0") ?? "N/A");
-                    row.Add(s.UnmanagedMemoryMb?.ToString("F0") ?? "N/A");
-
-                    if (summary.Options.Snmp.Profile == Util.SnmpProfile.Extended)
-                    {
-                        if (showDirtyMem)
-                        {
-                            row.Add(s.DirtyMemoryMb?.ToString("F0") ?? "N/A");
-                        }
-                        if (showLoad1m)
-                        {
-                            row.Add(s.Load1Min?.ToString("F2") ?? "N/A");
-                        }
-                        if (showSnmpErrors)
-                        {
-                            row.Add(s.SnmpErrorsPerSec?.ToString("F1") ?? "N/A");
-                        }
-                    }
-                }
-
-                normalizedTable.AddRow(row.ToArray());
-            }
+            var normalizedTable = BuildTable(summary, "Per-step metrics (RTT-normalized)", TableScope.Normalized);
             AnsiConsole.Write(normalizedTable);
         }
 
@@ -227,134 +85,10 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             if (latencyDisplay == LatencyDisplayType.Both)
                 AnsiConsole.WriteLine();
 
-            var rawTable = new Table().Border(TableBorder.Rounded).Caption("[grey]Per-step metrics (raw)[/]");
-
-            // Add columns
-            rawTable.AddColumn("Concurrency");
-            rawTable.AddColumn("Thr/s");
-
-            if (showServerReqs)
-            {
-                rawTable.AddColumn("Server Req/s");
-            }
-
-            rawTable.AddColumn("p50 ms");
-            rawTable.AddColumn("p95 ms");
-
-            if (showErrors)
-            {
-                rawTable.AddColumn("Errors %");
-            }
-
-            rawTable.AddColumn("Client CPU %");
-            rawTable.AddColumn("Client Net %");
-
-            if (summary.Options.SnmpEnabled == false)
-            {
-                rawTable.AddColumn("Server CPU %");
-                rawTable.AddColumn("Server Mem MB");
-            }
-
-            if (showServerIoR)
-            {
-                rawTable.AddColumn("Server IO R");
-            }
-            if (showServerIoW)
-            {
-                rawTable.AddColumn("Server IO W");
-            }
-
-            if (summary.Options.SnmpEnabled)
-            {
-                rawTable.AddColumn("Machine CPU %");
-                rawTable.AddColumn("Process CPU %");
-                rawTable.AddColumn("Managed MB");
-                rawTable.AddColumn("Unmanaged MB");
-
-                if (summary.Options.Snmp.Profile == Util.SnmpProfile.Extended)
-                {
-                    if (showDirtyMem)
-                    {
-                        rawTable.AddColumn("Dirty MB");
-                    }
-                    if (showLoad1m)
-                    {
-                        rawTable.AddColumn("Load 1m");
-                    }
-                    if (showSnmpErrors)
-                    {
-                        rawTable.AddColumn("Err/s");
-                    }
-                }
-            }
-            foreach (var s in summary.Steps)
-            {
-                var rawRow = new List<string>
-                {
-                    s.Concurrency.ToString(),
-                    s.Throughput.ToString("F0")
-                };
-
-                if (showServerReqs)
-                {
-                    rawRow.Add(s.ServerSnmpRequestsPerSec?.ToString("F0") ?? "N/A");
-                }
-
-                rawRow.Add(s.Raw.P50.ToString("F1"));
-                rawRow.Add(s.Raw.P95.ToString("F1"));
-
-                if (showErrors)
-                {
-                    rawRow.Add((s.ErrorRate * 100).ToString("F2"));
-                }
-
-                rawRow.Add((s.ClientCpu * 100).ToString("F1"));
-                rawRow.Add((s.NetworkUtilization * 100).ToString("F1"));
-
-                if (summary.Options.SnmpEnabled == false)
-                {
-                    rawRow.Add(s.ServerCpu?.ToString("F1") ?? "N/A");
-                    rawRow.Add(s.ServerMemoryMB?.ToString() ?? "N/A");
-                }
-
-                if (showServerIoR)
-                {
-                    rawRow.Add(s.ServerIoReadOps?.ToString() ?? "N/A");
-                }
-                if (showServerIoW)
-                {
-                    rawRow.Add(s.ServerIoWriteOps?.ToString() ?? "N/A");
-                }
-
-                if (summary.Options.SnmpEnabled)
-                {
-                    rawRow.Add(s.MachineCpu?.ToString("F1") ?? "N/A");
-                    rawRow.Add(s.ProcessCpu?.ToString("F1") ?? "N/A");
-                    rawRow.Add(s.ManagedMemoryMb?.ToString("F0") ?? "N/A");
-                    rawRow.Add(s.UnmanagedMemoryMb?.ToString("F0") ?? "N/A");
-
-                    if (summary.Options.Snmp.Profile == Util.SnmpProfile.Extended)
-                    {
-                        if (showDirtyMem)
-                        {
-                            rawRow.Add(s.DirtyMemoryMb?.ToString("F0") ?? "N/A");
-                        }
-                        if (showLoad1m)
-                        {
-                            rawRow.Add(s.Load1Min?.ToString("F2") ?? "N/A");
-                        }
-                        if (showSnmpErrors)
-                        {
-                            rawRow.Add(s.SnmpErrorsPerSec?.ToString("F1") ?? "N/A");
-                        }
-                    }
-                }
-
-                rawTable.AddRow(rawRow.ToArray());
-            }
+            var rawTable = BuildTable(summary, "Per-step metrics (raw)", TableScope.Raw);
             AnsiConsole.Write(rawTable);
         }
-
+    
         if (summary.Knee is { } knee)
         {
             var kneeMessage = latencyDisplay switch
@@ -383,6 +117,32 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
 
         if (analysis.UnreliableBeyondKnee)
             AnsiConsole.MarkupLine("[italic]Beyond limits = unreliable.[/]");
+    }
+
+    private static Table BuildTable(BenchmarkSummary summary, string title, TableScope scope)
+    {
+        var table = new Table().Border(TableBorder.Rounded).Caption($"[grey]{title}[/]");
+        var visibleColumns = TableMetrics.GetVisibleColumns(summary, scope);
+
+        foreach (var column in visibleColumns)
+        {
+            table.AddColumn(column.Header);
+        }
+
+        for (var i = 0; i < visibleColumns.Count; i++)
+        {
+            var column = visibleColumns[i];
+            var tableColumn = table.Columns[i];
+            column.ConfigureColumn?.Invoke(tableColumn);
+        }
+
+        foreach (var step in summary.Steps)
+        {
+            var row = visibleColumns.Select(c => c.ValueSelector(step)).ToArray();
+            table.AddRow(row);
+        }
+
+        return table;
     }
 
     private static IEnumerable<string> CheckForSnmpDiscrepancy(BenchmarkSummary summary)
