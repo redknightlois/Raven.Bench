@@ -57,8 +57,13 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `--max-errors <percent>`: stop early if error rate exceeds this per step (default: `0.5%`).
   - `--knee-rule dthr=<percent>,dp95=<percent>`: threshold deltas for knee detection (default: `5%,20%`).
   - `--latencies <normalized|raw|both>`: which latencies to print to console.
-  - `--snmp-enabled`: enable SNMP telemetry from server (defaults to same host as --url, port 161, community 'public', version 2c).
-  - `--include-snmp`: include SNMP metrics in CSV outputs (console/JSON always include if enabled).
+  - SNMP telemetry (opt-in server monitoring):
+    - `--snmp-enabled`: enable SNMP collection (default: false)
+    - `--snmp-profile <minimal|extended>`: metric profile (default: minimal, 4 metrics; extended adds IO/load/request counters, 14 metrics)
+    - `--snmp-port <int>`: SNMP agent port (default: 161)
+    - `--snmp-interval <duration>`: poll interval (default: 250ms)
+    - `--snmp-timeout <duration>`: query timeout (default: 5s)
+    - See [docs/snmp-metric-catalog.md](docs/snmp-metric-catalog.md) for metric details and troubleshooting
   - `--network-limited` and `--link-mbps <double>`: annotate verdicts for known link speeds.
   - `--raw-endpoint <path-with-{id}>`: with `--transport raw`, test a custom endpoint (e.g., `/databases/db/docs?id={id}`).
   - `--tp-workers/--tp-iocp <int>`: adjust ThreadPool minimums (defaults are high to avoid client-side starvation).
@@ -96,14 +101,14 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 **Outputs and Integrations**
 - Console report
   - Per-step tables with throughput, error rate, client CPU, network utilization, and server metrics (if accessible).
-  - SNMP metrics (machine CPU, process CPU, total memory) included if `--snmp-enabled` and `--include-snmp`.
+  - SNMP metrics included when `--snmp-enabled` (gauge metrics: CPU, memory, load; rate metrics: IO ops/sec, requests/sec).
   - Knee panel and a one-line Verdict.
 - JSON summary
   - Use `--out results.json` to write a structured `BenchmarkSummary` with options, steps, knee, verdict, HTTP version, compression, and calibration points.
-  - SNMP metrics included if enabled.
+  - SNMP metrics (all gauges and computed rates) included if enabled.
 - CSV per-step
   - Use `--out-csv steps.csv` to write per-step metrics, including both raw and normalized latencies.
-  - SNMP metrics included if `--include-snmp`.- CI / stress benches
+  - SNMP metrics included when enabled (all profile metrics with per-second rates for counters).- CI / stress benches
   - Parse JSON to extract knee concurrency and throughput, fail builds beyond thresholds, or chart historical trends.
   - Example (jq): `jq -r '.Knee | {C: .Concurrency, Thr: .Throughput, p95: .Raw.P95, p95n: .Normalized.P95}' results.json`
   - Compare CSV across runs to validate regressions after changes.
@@ -122,6 +127,10 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - Check `--url`, database name, and RavenDB version. For older servers, some endpoints may differ.
 - Server metrics show N/A
   - Server counters come from admin/debug endpoints accessed via a RavenDB client. In secured environments, ensure proper certificates/permissions or run in dev mode.
+- SNMP validation fails
+  - Ensure RavenDB server has `Monitoring.Snmp.Enabled=true` in settings.json and firewall allows UDP port 161.
+  - Test connectivity: `snmpwalk -v2c -c ravendb <server-host> .1.3.6.1.4.1.45751`
+  - See [docs/snmp-metric-catalog.md](docs/snmp-metric-catalog.md) for detailed troubleshooting.
 - High errors early, HTTP/1.x
   - Socket exhaustion can hit at low C with HTTP/1. Consider HTTP/2 or HTTP/3, or decrease step concurrency.
 - Identity runs hit network limit fast

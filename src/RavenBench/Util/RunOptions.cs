@@ -51,7 +51,10 @@ public sealed class RunOptions
     public bool Verbose { get; init; } = false; // enable detailed error logging
     public LatencyDisplayType LatencyDisplay { get; init; } = LatencyDisplayType.Normalized; // which latencies to display
 
-    public bool SnmpEnabled { get; init; }
-    public int SnmpPort { get; init; } = 161;
-    public TimeSpan SnmpPollInterval { get; init; } = TimeSpan.FromSeconds(5);
+    public SnmpOptions Snmp { get; init; } = SnmpOptions.Disabled;
+
+    // Legacy SNMP properties for backwards compatibility - prefer using Snmp property
+    public bool SnmpEnabled => Snmp.Enabled;
+    public int SnmpPort => Snmp.Port;
+    public TimeSpan SnmpPollInterval => Snmp.PollInterval;
 }

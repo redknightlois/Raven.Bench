@@ -519,10 +519,24 @@ public class BenchmarkRunner(RunOptions opts)
             ServerIoWriteOps = serverMetrics.IoWriteOperations.HasValue ? (long)serverMetrics.IoWriteOperations.Value : null,
             ServerIoReadKb = serverMetrics.ReadThroughputKb,
             ServerIoWriteKb = serverMetrics.WriteThroughputKb,
+
+            // SNMP gauge metrics
             MachineCpu = serverMetrics.MachineCpu,
             ProcessCpu = serverMetrics.ProcessCpu,
             ManagedMemoryMb = serverMetrics.ManagedMemoryMb,
             UnmanagedMemoryMb = serverMetrics.UnmanagedMemoryMb,
+            DirtyMemoryMb = serverMetrics.DirtyMemoryMb,
+            Load1Min = serverMetrics.Load1Min,
+            Load5Min = serverMetrics.Load5Min,
+            Load15Min = serverMetrics.Load15Min,
+
+            // SNMP rate metrics
+            SnmpIoReadOpsPerSec = serverMetrics.SnmpIoReadOpsPerSec,
+            SnmpIoWriteOpsPerSec = serverMetrics.SnmpIoWriteOpsPerSec,
+            SnmpIoReadBytesPerSec = serverMetrics.SnmpIoReadBytesPerSec,
+            SnmpIoWriteBytesPerSec = serverMetrics.SnmpIoWriteBytesPerSec,
+            ServerSnmpRequestsPerSec = serverMetrics.ServerSnmpRequestsPerSec,
+            SnmpErrorsPerSec = serverMetrics.SnmpErrorsPerSec,
         };
         
         return (stepResult, hist);
@@ -601,34 +615,34 @@ public class BenchmarkRunner(RunOptions opts)
     /// </summary>
     private async Task ValidateSnmpAsync(ITransport transport)
     {
-        if (opts.SnmpEnabled == false)
+        if (opts.Snmp.Enabled == false)
             return;
 
-        Console.WriteLine("[Raven.Bench] Validating SNMP connectivity...");
+        Console.WriteLine($"[Raven.Bench] Validating SNMP connectivity (profile: {opts.Snmp.Profile})...");
 
         try
         {
-            var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = await transport.GetSnmpMetricsAsync();
+            var snmpSample = await transport.GetSnmpMetricsAsync(opts.Snmp);
 
-            if (machineCpu.HasValue || processCpu.HasValue || managedMemoryMb.HasValue || unmanagedMemoryMb.HasValue)
+            if (!snmpSample.IsEmpty)
             {
                 Console.WriteLine("[Raven.Bench] SNMP validation successful:");
-                if (machineCpu.HasValue)
-                    Console.WriteLine($"[Raven.Bench]   Machine CPU: {machineCpu.Value}%");
-                if (processCpu.HasValue)
-                    Console.WriteLine($"[Raven.Bench]   Process CPU: {processCpu.Value}%");
-                if (managedMemoryMb.HasValue)
-                    Console.WriteLine($"[Raven.Bench]   Managed Memory: {managedMemoryMb.Value} MB");
-                if (unmanagedMemoryMb.HasValue)
-                    Console.WriteLine($"[Raven.Bench]   Unmanaged Memory: {unmanagedMemoryMb.Value} MB");
+                if (snmpSample.MachineCpu.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Machine CPU: {snmpSample.MachineCpu.Value}%");
+                if (snmpSample.ProcessCpu.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Process CPU: {snmpSample.ProcessCpu.Value}%");
+                if (snmpSample.ManagedMemoryMb.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Managed Memory: {snmpSample.ManagedMemoryMb.Value} MB");
+                if (snmpSample.UnmanagedMemoryMb.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   Unmanaged Memory: {snmpSample.UnmanagedMemoryMb.Value} MB");
             }
             else
             {
                 throw new InvalidOperationException(
                     "SNMP is enabled but no metrics were retrieved. Possible causes:\n" +
-                    "  - SNMP service not running on server\n" +
-                    "  - Firewall blocking SNMP port 161\n" +
-                    "  - Incorrect community string (expected: 'ravendb')\n" +
+                    $"  - SNMP service not running on server\n" +
+                    $"  - Firewall blocking SNMP port {opts.Snmp.Port}\n" +
+                    $"  - Community string mismatch (RavenDB uses '{SnmpOptions.Community}')\n" +
                     "  - Server SNMP not enabled (set Monitoring.Snmp.Enabled=true in server settings.json)\n" +
                     "\nBenchmark cannot proceed with SNMP enabled but unavailable.");
             }

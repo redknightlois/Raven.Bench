@@ -6,11 +6,21 @@ public static class CsvResultsWriter
 {
     public static void Write(string path, BenchmarkSummary summary, bool includeSnmp = false)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
         using var sw = new StreamWriter(path);
         var baseHeaders = "concurrency,throughput,p50_ms,p90_ms,p95_ms,p99_ms,p50_norm,p90_norm,p95_norm,p99_norm,errors,bytes_out,bytes_in,cpu,net_util,server_cpu,server_mem_mb,server_rps,server_io_read,server_io_write";
         if (includeSnmp)
+        {
+            // Always include minimal profile metrics (4 fields)
             baseHeaders += ",machine_cpu,process_cpu,managed_mem_mb,unmanaged_mem_mb";
+            // Include extended profile metrics (10 additional fields)
+            baseHeaders += ",dirty_mem_mb,load_1min,load_5min,load_15min";
+            baseHeaders += ",snmp_io_read_ops_per_sec,snmp_io_write_ops_per_sec";
+            baseHeaders += ",snmp_io_read_bytes_per_sec,snmp_io_write_bytes_per_sec";
+            baseHeaders += ",snmp_requests_per_sec,snmp_errors_per_sec";
+        }
         sw.WriteLine(baseHeaders);
         foreach (var s in summary.Steps)
         {
@@ -26,11 +36,29 @@ public static class CsvResultsWriter
                 s.ServerIoReadOps?.ToString() ?? "N/A",
                 s.ServerIoWriteOps?.ToString() ?? "N/A");
             if (includeSnmp)
-                baseLine += string.Format(", {0:F1}, {1:F1}, {2}, {3}",
-                    s.MachineCpu ?? 0,
-                    s.ProcessCpu ?? 0,
-                    s.ManagedMemoryMb?.ToString() ?? "N/A",
-                    s.UnmanagedMemoryMb?.ToString() ?? "N/A");
+            {
+                // Minimal profile metrics (4 fields)
+                baseLine += string.Format(CultureInfo.InvariantCulture,
+                    ",{0},{1},{2},{3}",
+                    s.MachineCpu?.ToString("F2") ?? "N/A",
+                    s.ProcessCpu?.ToString("F2") ?? "N/A",
+                    s.ManagedMemoryMb?.ToString("F0") ?? "N/A",
+                    s.UnmanagedMemoryMb?.ToString("F0") ?? "N/A");
+
+                // Extended profile metrics (9 fields)
+                baseLine += string.Format(CultureInfo.InvariantCulture,
+                    ",{0},{1},{2},{3},{4},{5},{6},{7},{8}",
+                    s.DirtyMemoryMb?.ToString("F0") ?? "N/A",
+                    s.Load1Min?.ToString("F3") ?? "N/A",
+                    s.Load5Min?.ToString("F3") ?? "N/A",
+                    s.Load15Min?.ToString("F3") ?? "N/A",
+                    s.SnmpIoReadOpsPerSec?.ToString("F2") ?? "N/A",
+                    s.SnmpIoWriteOpsPerSec?.ToString("F2") ?? "N/A",
+                    s.SnmpIoReadBytesPerSec?.ToString("F0") ?? "N/A",
+                    s.SnmpIoWriteBytesPerSec?.ToString("F0") ?? "N/A",
+                    s.ServerSnmpRequestsPerSec?.ToString("F2") ?? "N/A",
+                    s.SnmpErrorsPerSec?.ToString("F2") ?? "N/A");
+            }
             sw.WriteLine(baseLine);
         }
     }

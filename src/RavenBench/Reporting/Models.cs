@@ -63,10 +63,23 @@ public sealed class StepResult
     public long? ServerIoReadKb { get; init; }
     public long? ServerIoWriteKb { get; init; }
 
+    // SNMP gauge metrics
     public double? MachineCpu { get; init; }
     public double? ProcessCpu { get; init; }
     public long? ManagedMemoryMb { get; init; }
     public long? UnmanagedMemoryMb { get; init; }
+    public long? DirtyMemoryMb { get; init; }
+    public double? Load1Min { get; init; }
+    public double? Load5Min { get; init; }
+    public double? Load15Min { get; init; }
+
+    // SNMP rate metrics
+    public double? SnmpIoReadOpsPerSec { get; init; }
+    public double? SnmpIoWriteOpsPerSec { get; init; }
+    public double? SnmpIoReadBytesPerSec { get; init; }
+    public double? SnmpIoWriteBytesPerSec { get; init; }
+    public double? ServerSnmpRequestsPerSec { get; init; }
+    public double? SnmpErrorsPerSec { get; init; }
 
     public string? Reason { get; set; }
 }

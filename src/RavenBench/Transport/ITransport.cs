@@ -1,6 +1,8 @@
 using RavenBench.Workload;
 using RavenBench.Metrics;
+using RavenBench.Metrics.Snmp;
 using RavenBench.Diagnostics;
+using RavenBench.Util;
 
 namespace RavenBench.Transport;
 
@@ -29,7 +31,12 @@ public interface ITransport : IDisposable
 
     Task<int?> GetServerMaxCoresAsync();
     Task<ServerMetrics> GetServerMetricsAsync();
-    Task<(double? machineCpu, double? processCpu, long? managedMemoryMb, long? unmanagedMemoryMb)> GetSnmpMetricsAsync();
+
+    /// <summary>
+    /// Returns SNMP metrics as a structured sample.
+    /// </summary>
+    Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions);
+
     Task<string> GetServerVersionAsync();
     Task<string> GetServerLicenseTypeAsync();
     Task ValidateClientAsync();
