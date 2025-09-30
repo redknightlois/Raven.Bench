@@ -170,8 +170,7 @@ public class ServerMetricsTrackerTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            SnmpEnabled = true,
-            SnmpPort = 161
+            Snmp = new SnmpOptions { Enabled = true, Port = 161 }
         };
 
         // Act
@@ -193,7 +192,7 @@ public class ServerMetricsTrackerTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            SnmpEnabled = false // Explicitly disabled
+            Snmp = SnmpOptions.Disabled
         };
 
         // Act

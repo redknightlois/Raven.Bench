@@ -19,11 +19,11 @@ public class RunSettingsSnmpTests
 
         var options = settings.ToRunOptions();
 
-        options.SnmpEnabled.Should().BeTrue();
+        options.Snmp.Enabled.Should().BeTrue();
     }
 
-    [Fact] 
-    public void ToRunOptions_MapsSnmpDisabledByDefault()
+    [Fact]
+    public void ToRunOptions_MapsSnmpEnabledByDefault()
     {
         var settings = new RunSettings
         {
@@ -33,7 +33,7 @@ public class RunSettingsSnmpTests
 
         var options = settings.ToRunOptions();
 
-        options.SnmpEnabled.Should().BeFalse();
+        options.Snmp.Enabled.Should().BeTrue();
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class RunSettingsSnmpTests
     }
 
     [Fact]
-    public void ToRunOptions_DefaultsSnmpIntervalTo5Seconds()
+    public void ToRunOptions_DefaultsSnmpIntervalTo250Milliseconds()
     {
         var settings = new RunSettings
         {
@@ -95,6 +95,6 @@ public class RunSettingsSnmpTests
 
         var options = settings.ToRunOptions();
 
-        options.SnmpPollInterval.Should().Be(TimeSpan.FromSeconds(5));
+        options.SnmpPollInterval.Should().Be(TimeSpan.FromMilliseconds(250));
     }
 }

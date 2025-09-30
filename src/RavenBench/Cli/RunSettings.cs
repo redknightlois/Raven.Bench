@@ -105,4 +105,9 @@ public sealed class RunSettings : CommandSettings
     [CommandOption("--snmp-interval")]
     public string? SnmpInterval { get; init; }
 
+    [CommandOption("--snmp-profile")]
+    public string SnmpProfile { get; init; } = "minimal";
+
+    [CommandOption("--snmp-timeout")]
+    public string SnmpTimeout { get; init; } = "5s";
 }

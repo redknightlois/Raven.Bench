@@ -13,7 +13,9 @@ public static class JsonResultsWriter
 
     public static void Write(string path, BenchmarkSummary summary)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
         using var fs = File.Create(path);
         JsonSerializer.Serialize(fs, summary, Options);
     }

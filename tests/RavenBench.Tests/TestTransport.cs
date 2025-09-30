@@ -58,9 +58,20 @@ public sealed class TestTransport : ITransport
 
     public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(_serverMetrics);
 
-    public Task<(double? machineCpu, double? processCpu, long? managedMemoryMb, long? unmanagedMemoryMb)> GetSnmpMetricsAsync()
+    public Task<RavenBench.Metrics.Snmp.SnmpSample> GetSnmpMetricsAsync(RavenBench.Util.SnmpOptions snmpOptions)
     {
-        return Task.FromResult<(double?, double?, long?, long?)>((null, null, null, null));
+        var sample = new RavenBench.Metrics.Snmp.SnmpSample
+        {
+            MachineCpu = 50.0,
+            ProcessCpu = 30.0,
+            ManagedMemoryMb = 1024,
+            UnmanagedMemoryMb = 512,
+            DirtyMemoryMb = 128,
+            Load1Min = 1.5,
+            Load5Min = 1.2,
+            Load15Min = 1.0
+        };
+        return Task.FromResult(sample);
     }
 
     public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints() => new[]

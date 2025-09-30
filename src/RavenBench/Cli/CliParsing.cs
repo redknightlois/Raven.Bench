@@ -46,10 +46,33 @@ internal static class CliParsing
             HttpVersion = s.HttpVersion,
             StrictHttpVersion = s.StrictHttpVersion,
             Verbose = s.Verbose,
-            SnmpEnabled = s.SnmpEnabled,
-            SnmpPort = s.SnmpEnabled ? s.SnmpPort : 161,
-            SnmpPollInterval = s.SnmpEnabled ? ParseDuration(s.SnmpInterval ?? "5s") : TimeSpan.FromSeconds(5),
+            Snmp = BuildSnmpOptions(s),
             LatencyDisplay = ParseLatencyDisplayType(s.Latencies)
+        };
+    }
+
+    private static SnmpOptions BuildSnmpOptions(RunSettings s)
+    {
+        if (!s.SnmpEnabled)
+            return SnmpOptions.Disabled;
+
+        return new SnmpOptions
+        {
+            Enabled = true,
+            Port = s.SnmpPort,
+            PollInterval = ParseDuration(s.SnmpInterval ?? "250ms"),
+            Profile = ParseSnmpProfile(s.SnmpProfile),
+            Timeout = ParseDuration(s.SnmpTimeout)
+        };
+    }
+
+    private static SnmpProfile ParseSnmpProfile(string profile)
+    {
+        return profile.ToLowerInvariant() switch
+        {
+            "minimal" => SnmpProfile.Minimal,
+            "extended" => SnmpProfile.Extended,
+            _ => throw new ArgumentException($"Invalid SNMP profile: {profile}. Valid options: minimal, extended")
         };
     }
 

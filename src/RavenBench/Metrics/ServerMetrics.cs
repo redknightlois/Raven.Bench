@@ -22,10 +22,24 @@ public sealed class ServerMetrics
     public long? WriteThroughputKb { get; init; }
     public long? QueueLength { get; init; }
 
+    // SNMP gauge metrics
     public double? MachineCpu { get; init; }
     public double? ProcessCpu { get; init; }
     public long? ManagedMemoryMb { get; init; }
     public long? UnmanagedMemoryMb { get; init; }
+    public long? DirtyMemoryMb { get; init; }
+    public double? Load1Min { get; init; }
+    public double? Load5Min { get; init; }
+    public double? Load15Min { get; init; }
+
+    // SNMP rate metrics (computed from counters)
+    public double? SnmpIoReadOpsPerSec { get; init; }
+    public double? SnmpIoWriteOpsPerSec { get; init; }
+    public double? SnmpIoReadBytesPerSec { get; init; }
+    public double? SnmpIoWriteBytesPerSec { get; init; }
+    public double? ServerSnmpRequestsPerSec { get; init; }
+    public double? SnmpErrorsPerSec { get; init; }
+
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
     public bool IsValid { get; init; } = true;
     public string? ErrorMessage { get; init; }
@@ -41,6 +55,7 @@ public sealed class ServerMetricsTracker : IDisposable
     private readonly RunOptions _options;
     private readonly Timer _timer;
     private readonly object _lock = new();
+    private readonly SnmpCounterCache _counterCache = new();
 
     private ServerMetrics _currentMetrics = new();
     private bool _isRunning;
@@ -57,7 +72,8 @@ public sealed class ServerMetricsTracker : IDisposable
         lock (_lock)
         {
             _isRunning = true;
-            _timer.Change(0, 2000); // Poll every 2 seconds
+            var intervalMs = (int)_options.Snmp.PollInterval.TotalMilliseconds;
+            _timer.Change(0, intervalMs);
         }
     }
 
@@ -89,30 +105,50 @@ public sealed class ServerMetricsTracker : IDisposable
         {
             var metrics = await _transport.GetServerMetricsAsync();
 
-            if (_options.SnmpEnabled)
+            if (_options.Snmp.Enabled)
             {
-                var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = await _transport.GetSnmpMetricsAsync();
+                var snmpSample = await _transport.GetSnmpMetricsAsync(_options.Snmp);
+                var snmpRates = _counterCache.ComputeRates(snmpSample);
 
-                metrics = new ServerMetrics
+                // If we have rates (not the first sample), merge them into metrics
+                if (snmpRates != null)
                 {
-                    CpuUsagePercent = metrics.CpuUsagePercent,
-                    MemoryUsageMB = metrics.MemoryUsageMB,
-                    ActiveConnections = metrics.ActiveConnections,
-                    RequestsPerSecond = metrics.RequestsPerSecond,
-                    QueuedRequests = metrics.QueuedRequests,
-                    IoReadOperations = metrics.IoReadOperations,
-                    IoWriteOperations = metrics.IoWriteOperations,
-                    ReadThroughputKb = metrics.ReadThroughputKb,
-                    WriteThroughputKb = metrics.WriteThroughputKb,
-                    QueueLength = metrics.QueueLength,
-                    MachineCpu = machineCpu,
-                    ProcessCpu = processCpu,
-                    ManagedMemoryMb = managedMemoryMb,
-                    UnmanagedMemoryMb = unmanagedMemoryMb,
-                    Timestamp = metrics.Timestamp,
-                    IsValid = metrics.IsValid,
-                    ErrorMessage = metrics.ErrorMessage
-                };
+                    metrics = new ServerMetrics
+                    {
+                        CpuUsagePercent = metrics.CpuUsagePercent,
+                        MemoryUsageMB = metrics.MemoryUsageMB,
+                        ActiveConnections = metrics.ActiveConnections,
+                        RequestsPerSecond = metrics.RequestsPerSecond,
+                        QueuedRequests = metrics.QueuedRequests,
+                        IoReadOperations = metrics.IoReadOperations,
+                        IoWriteOperations = metrics.IoWriteOperations,
+                        ReadThroughputKb = metrics.ReadThroughputKb,
+                        WriteThroughputKb = metrics.WriteThroughputKb,
+                        QueueLength = metrics.QueueLength,
+
+                        // SNMP gauge metrics
+                        MachineCpu = snmpRates.MachineCpu,
+                        ProcessCpu = snmpRates.ProcessCpu,
+                        ManagedMemoryMb = snmpRates.ManagedMemoryMb,
+                        UnmanagedMemoryMb = snmpRates.UnmanagedMemoryMb,
+                        DirtyMemoryMb = snmpRates.DirtyMemoryMb,
+                        Load1Min = snmpRates.Load1Min,
+                        Load5Min = snmpRates.Load5Min,
+                        Load15Min = snmpRates.Load15Min,
+
+                        // SNMP rate metrics
+                        SnmpIoReadOpsPerSec = snmpRates.IoReadOpsPerSec,
+                        SnmpIoWriteOpsPerSec = snmpRates.IoWriteOpsPerSec,
+                        SnmpIoReadBytesPerSec = snmpRates.IoReadBytesPerSec,
+                        SnmpIoWriteBytesPerSec = snmpRates.IoWriteBytesPerSec,
+                        ServerSnmpRequestsPerSec = snmpRates.ServerRequestsPerSec,
+                        SnmpErrorsPerSec = snmpRates.ErrorsPerSec,
+
+                        Timestamp = metrics.Timestamp,
+                        IsValid = metrics.IsValid,
+                        ErrorMessage = metrics.ErrorMessage
+                    };
+                }
             }
 
             lock (_lock)

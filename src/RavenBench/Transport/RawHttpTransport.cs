@@ -249,13 +249,14 @@ public sealed class RawHttpTransport : ITransport
         return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db, HttpHelper.FormatHttpVersion(_httpVersion));
     }
 
-    public async Task<(double? machineCpu, double? processCpu, long? managedMemoryMb, long? unmanagedMemoryMb)> GetSnmpMetricsAsync()
+    public async Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions)
     {
         var snmpClient = new SnmpClient();
-        var oids = new[] { SnmpOids.MachineCpu, SnmpOids.ProcessCpu, SnmpOids.ManagedMemory, SnmpOids.UnmanagedMemory };
+        var oids = SnmpOids.GetOidsForProfile(snmpOptions.Profile);
         var host = new Uri(_baseUrl).Host;
-        var snmpResults = await snmpClient.GetManyAsync(oids, host);
-        return SnmpMetricMapper.MapMetrics(snmpResults);
+        var timeoutMs = (int)snmpOptions.Timeout.TotalMilliseconds;
+        var snmpResults = await snmpClient.GetManyAsync(oids, host, snmpOptions.Port, SnmpOptions.Community, timeoutMs);
+        return SnmpMetricMapper.MapToSample(snmpResults);
     }
 
     public async Task<string> GetServerVersionAsync()
