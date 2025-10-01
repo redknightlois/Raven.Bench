@@ -34,8 +34,9 @@ public interface ITransport : IDisposable
 
     /// <summary>
     /// Returns SNMP metrics as a structured sample.
+    /// When databaseName is provided, queries database-specific OIDs; otherwise queries server-wide OIDs.
     /// </summary>
-    Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions);
+    Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null);
 
     Task<string> GetServerVersionAsync();
     Task<string> GetServerLicenseTypeAsync();

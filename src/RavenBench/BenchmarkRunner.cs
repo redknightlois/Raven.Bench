@@ -515,8 +515,8 @@ public class BenchmarkRunner(RunOptions opts)
             ServerCpu = serverMetrics.CpuUsagePercent,
             ServerMemoryMB = serverMetrics.MemoryUsageMB,
             ServerRequestsPerSec = serverMetrics.RequestsPerSecond,
-            ServerIoReadOps = serverMetrics.IoReadOperations.HasValue ? (long)serverMetrics.IoReadOperations.Value : null,
-            ServerIoWriteOps = serverMetrics.IoWriteOperations.HasValue ? (long)serverMetrics.IoWriteOperations.Value : null,
+            ServerIoReadOps = serverMetrics.SnmpIoReadOpsPerSec.HasValue ? (long)serverMetrics.SnmpIoReadOpsPerSec.Value : null,
+            ServerIoWriteOps = serverMetrics.SnmpIoWriteOpsPerSec.HasValue ? (long)serverMetrics.SnmpIoWriteOpsPerSec.Value : null,
             ServerIoReadKb = serverMetrics.ReadThroughputKb,
             ServerIoWriteKb = serverMetrics.WriteThroughputKb,
 
@@ -622,7 +622,7 @@ public class BenchmarkRunner(RunOptions opts)
 
         try
         {
-            var snmpSample = await transport.GetSnmpMetricsAsync(opts.Snmp);
+            var snmpSample = await transport.GetSnmpMetricsAsync(opts.Snmp, opts.Database);
 
             if (!snmpSample.IsEmpty)
             {
@@ -635,6 +635,10 @@ public class BenchmarkRunner(RunOptions opts)
                     Console.WriteLine($"[Raven.Bench]   Managed Memory: {snmpSample.ManagedMemoryMb.Value} MB");
                 if (snmpSample.UnmanagedMemoryMb.HasValue)
                     Console.WriteLine($"[Raven.Bench]   Unmanaged Memory: {snmpSample.UnmanagedMemoryMb.Value} MB");
+                if (snmpSample.IoWriteOpsPerSec.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   IO Write Ops/sec: {snmpSample.IoWriteOpsPerSec.Value}");
+                if (snmpSample.IoReadOpsPerSec.HasValue)
+                    Console.WriteLine($"[Raven.Bench]   IO Read Ops/sec: {snmpSample.IoReadOpsPerSec.Value}");
             }
             else
             {
