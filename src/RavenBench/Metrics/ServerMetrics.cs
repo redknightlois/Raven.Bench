@@ -56,6 +56,7 @@ public sealed class ServerMetricsTracker : IDisposable
     private readonly Timer _timer;
     private readonly object _lock = new();
     private readonly SnmpCounterCache _counterCache = new();
+    private readonly List<ServerMetrics> _metricsHistory = new();
 
     private ServerMetrics _currentMetrics = new();
     private bool _isRunning;
@@ -154,6 +155,12 @@ public sealed class ServerMetricsTracker : IDisposable
             lock (_lock)
             {
                 _currentMetrics = metrics;
+
+                // Store in history if SNMP is enabled (to avoid storing empty metrics)
+                if (_options.Snmp.Enabled && metrics.IsValid)
+                {
+                    _metricsHistory.Add(metrics);
+                }
             }
         }
         catch
@@ -162,6 +169,13 @@ public sealed class ServerMetricsTracker : IDisposable
         }
     }
 
+    public List<ServerMetrics> GetHistory()
+    {
+        lock (_lock)
+        {
+            return new List<ServerMetrics>(_metricsHistory);
+        }
+    }
 
     public void Dispose()
     {

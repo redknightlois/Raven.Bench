@@ -141,8 +141,8 @@ internal static class IntegrationTestHelper
                 ErrorRate = 0.01, // 1% error rate
                 BytesOut = 1000 + i * 100,
                 BytesIn = 800 + i * 80,
-                Raw = new Percentiles(10.0 + i, 15.0 + i, 20.0 + i, 30.0 + i),
-                Normalized = new Percentiles(9.0 + i, 14.0 + i, 18.0 + i, 28.0 + i),
+                Raw = new Percentiles(10.0 + i, 12.5 + i, 15.0 + i, 20.0 + i, 30.0 + i, 40.0 + i),
+                Normalized = new Percentiles(9.0 + i, 11.5 + i, 14.0 + i, 18.0 + i, 28.0 + i, 38.0 + i),
                 ClientCpu = 0.25 + i * 0.1,
                 NetworkUtilization = 0.1 + i * 0.05
             });

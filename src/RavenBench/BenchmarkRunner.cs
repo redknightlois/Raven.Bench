@@ -240,14 +240,14 @@ public class BenchmarkRunner(RunOptions opts)
             });
 
             // Calculate percentiles
-            int[] percentiles = { 50, 90, 95, 99 };
-            var rawValues = new double[4];
+            int[] percentiles = { 50, 75, 90, 95, 99, 999 };
+            var rawValues = new double[6];
             for (int i = 0; i < percentiles.Length; i++)
             {
                 rawValues[i] = hist.GetPercentile(percentiles[i]) / 1000.0;
             }
 
-            var rawPercentiles = new Percentiles(rawValues[0], rawValues[1], rawValues[2], rawValues[3]);
+            var rawPercentiles = new Percentiles(rawValues[0], rawValues[1], rawValues[2], rawValues[3], rawValues[4], rawValues[5]);
 
             // Apply RTT-based normalization using baseline latency from calibration
             Percentiles normalizedPercentiles;
@@ -255,13 +255,13 @@ public class BenchmarkRunner(RunOptions opts)
             {
                 // Use minimum observed latency from calibration as baseline RTT
                 var baselineRttMs = startupCalibration.Endpoints.Min(e => e.ObservedMs);
-                var normalizedValues = new double[4];
+                var normalizedValues = new double[6];
                 for (int i = 0; i < rawValues.Length; i++)
                 {
                     // Subtract baseline RTT to get normalized latency (additional latency due to load)
                     normalizedValues[i] = Math.Max(0, rawValues[i] - baselineRttMs);
                 }
-                normalizedPercentiles = new Percentiles(normalizedValues[0], normalizedValues[1], normalizedValues[2], normalizedValues[3]);
+                normalizedPercentiles = new Percentiles(normalizedValues[0], normalizedValues[1], normalizedValues[2], normalizedValues[3], normalizedValues[4], normalizedValues[5]);
             }
             else
             {
@@ -291,13 +291,17 @@ public class BenchmarkRunner(RunOptions opts)
             VerboseErrorTracker.PrintSummary();
         }
 
+        // Get SNMP metrics history before disposing the tracker
+        var serverMetricsHistory = serverTracker.GetHistory();
+
         return new BenchmarkRun
         {
             Steps = steps,
             MaxNetworkUtilization = maxNetUtil,
             ClientCompression = clientCompression,
             EffectiveHttpVersion = httpVersion,
-            StartupCalibration = startupCalibration
+            StartupCalibration = startupCalibration,
+            ServerMetricsHistory = serverMetricsHistory.Count > 0 ? serverMetricsHistory : null
         };
     }
 

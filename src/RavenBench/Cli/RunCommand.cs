@@ -28,6 +28,9 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
         // Knee detection and analysis
         var knee = KneeFinder.FindKnee(run.Steps, opts.KneeThroughputDelta, opts.KneeP95Delta, opts.MaxErrorRate);
 
+        // Build SNMP time series and aggregations from history
+        var (snmpTimeSeries, snmpAggregations) = BuildSnmpData(run.ServerMetricsHistory);
+
         // Create a temporary summary for analysis
         var tempSummary = new BenchmarkSummary
         {
@@ -38,7 +41,9 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             ClientCompression = run.ClientCompression,
             EffectiveHttpVersion = run.EffectiveHttpVersion,
             StartupCalibration = run.StartupCalibration,
-            Notes = opts.Notes
+            Notes = opts.Notes,
+            SnmpTimeSeries = snmpTimeSeries,
+            SnmpAggregations = snmpAggregations
         };
 
         // Perform complete result analysis
@@ -54,14 +59,22 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             ClientCompression = run.ClientCompression,
             EffectiveHttpVersion = run.EffectiveHttpVersion,
             StartupCalibration = run.StartupCalibration,
-            Notes = opts.Notes
+            Notes = opts.Notes,
+            SnmpTimeSeries = snmpTimeSeries,
+            SnmpAggregations = snmpAggregations
         };
 
         // Write outputs
         if (string.IsNullOrWhiteSpace(opts.OutJson) == false)
+        {
+            AnsiConsole.MarkupLine($"[dim]Attempting to write JSON to: {opts.OutJson}[/]");
             JsonResultsWriter.Write(opts.OutJson!, summary);
+        }
         if (string.IsNullOrWhiteSpace(opts.OutCsv) == false)
+        {
+            AnsiConsole.MarkupLine($"[dim]Attempting to write CSV to: {opts.OutCsv}[/]");
             CsvResultsWriter.Write(opts.OutCsv!, summary, opts.SnmpEnabled);
+        }
 
         // Render console report
         RenderResults(summary, run.MaxNetworkUtilization, analysis, opts.LatencyDisplay);
@@ -166,5 +179,58 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
                 }
             }
         }
+    }
+
+    private static (List<Reporting.SnmpTimeSeries>?, Reporting.SnmpAggregations?) BuildSnmpData(List<Metrics.ServerMetrics>? history)
+    {
+        if (history == null || history.Count == 0)
+            return (null, null);
+
+        var timeSeries = new List<Reporting.SnmpTimeSeries>();
+
+        // Build time series from server metrics history
+        foreach (var snapshot in history)
+        {
+            timeSeries.Add(new Reporting.SnmpTimeSeries
+            {
+                Timestamp = snapshot.Timestamp,
+                MachineCpu = snapshot.MachineCpu,
+                ProcessCpu = snapshot.ProcessCpu,
+                ManagedMemoryMb = snapshot.ManagedMemoryMb,
+                UnmanagedMemoryMb = snapshot.UnmanagedMemoryMb,
+                DirtyMemoryMb = snapshot.DirtyMemoryMb,
+                Load1Min = snapshot.Load1Min,
+                SnmpIoReadOpsPerSec = snapshot.SnmpIoReadOpsPerSec,
+                SnmpIoWriteOpsPerSec = snapshot.SnmpIoWriteOpsPerSec,
+                SnmpIoReadBytesPerSec = snapshot.SnmpIoReadBytesPerSec,
+                SnmpIoWriteBytesPerSec = snapshot.SnmpIoWriteBytesPerSec,
+                ServerSnmpRequestsPerSec = snapshot.ServerSnmpRequestsPerSec
+            });
+        }
+
+        // Compute IO aggregations
+        var totalReadOps = history.Where(h => h.SnmpIoReadOpsPerSec.HasValue).Sum(h => h.SnmpIoReadOpsPerSec!.Value);
+        var totalWriteOps = history.Where(h => h.SnmpIoWriteOpsPerSec.HasValue).Sum(h => h.SnmpIoWriteOpsPerSec!.Value);
+        var totalReadBytes = history.Where(h => h.SnmpIoReadBytesPerSec.HasValue).Sum(h => h.SnmpIoReadBytesPerSec!.Value);
+        var totalWriteBytes = history.Where(h => h.SnmpIoWriteBytesPerSec.HasValue).Sum(h => h.SnmpIoWriteBytesPerSec!.Value);
+
+        var countReadOps = history.Count(h => h.SnmpIoReadOpsPerSec.HasValue);
+        var countWriteOps = history.Count(h => h.SnmpIoWriteOpsPerSec.HasValue);
+        var countReadBytes = history.Count(h => h.SnmpIoReadBytesPerSec.HasValue);
+        var countWriteBytes = history.Count(h => h.SnmpIoWriteBytesPerSec.HasValue);
+
+        var aggregations = new Reporting.SnmpAggregations
+        {
+            TotalSnmpIoReadOps = countReadOps > 0 ? totalReadOps : null,
+            AverageSnmpIoReadOpsPerSec = countReadOps > 0 ? totalReadOps / countReadOps : null,
+            TotalSnmpIoWriteOps = countWriteOps > 0 ? totalWriteOps : null,
+            AverageSnmpIoWriteOpsPerSec = countWriteOps > 0 ? totalWriteOps / countWriteOps : null,
+            TotalSnmpIoReadBytes = countReadBytes > 0 ? totalReadBytes : null,
+            AverageSnmpIoReadBytesPerSec = countReadBytes > 0 ? totalReadBytes / countReadBytes : null,
+            TotalSnmpIoWriteBytes = countWriteBytes > 0 ? totalWriteBytes : null,
+            AverageSnmpIoWriteBytesPerSec = countWriteBytes > 0 ? totalWriteBytes / countWriteBytes : null
+        };
+
+        return (timeSeries, aggregations);
     }
 }

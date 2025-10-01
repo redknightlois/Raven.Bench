@@ -39,9 +39,13 @@ namespace RavenBench.Cli
             
             // Latency
             new("p50 ms", _ => true, s => FormatNumber(s.Normalized.P50), TableScope.Normalized, c => c.RightAligned()),
-            new("p95 ms", _ => true, s => FormatNumber(s.Normalized.P95), TableScope.Normalized, c => c.RightAligned()),
+            new("p90 ms", _ => true, s => FormatNumber(s.Normalized.P90), TableScope.Normalized, c => c.RightAligned()),
+            new("p99 ms", _ => true, s => FormatNumber(s.Normalized.P99), TableScope.Normalized, c => c.RightAligned()),
+            new("p999 ms", _ => true, s => FormatNumber(s.Normalized.P999), TableScope.Normalized, c => c.RightAligned()),
             new("p50 ms", _ => true, s => FormatNumber(s.Raw.P50), TableScope.Raw, c => c.RightAligned()),
-            new("p95 ms", _ => true, s => FormatNumber(s.Raw.P95), TableScope.Raw, c => c.RightAligned()),
+            new("p90 ms", _ => true, s => FormatNumber(s.Raw.P90), TableScope.Raw, c => c.RightAligned()),
+            new("p99 ms", _ => true, s => FormatNumber(s.Raw.P99), TableScope.Raw, c => c.RightAligned()),
+            new("p999 ms", _ => true, s => FormatNumber(s.Raw.P999), TableScope.Raw, c => c.RightAligned()),
 
             new("Errors %", summary => summary.Steps.Any(s => s.ErrorRate > 0), s => s.ErrorRate == 0 ? "N/A" : (s.ErrorRate * 100).ToString("F1"), TableScope.Both, c => c.RightAligned()),
             
