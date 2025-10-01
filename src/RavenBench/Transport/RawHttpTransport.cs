@@ -249,14 +249,72 @@ public sealed class RawHttpTransport : ITransport
         return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db, HttpHelper.FormatHttpVersion(_httpVersion));
     }
 
-    public async Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions)
+    public async Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
     {
+        long? databaseIndex = null;
+
+        // Discover database SNMP index if database name is provided
+        if (string.IsNullOrEmpty(databaseName) == false && await TryGetDatabaseSnmpIndexAsync(databaseName) is { } index)
+        {
+            databaseIndex = index;
+        }
+
         var snmpClient = new SnmpClient();
-        var oids = SnmpOids.GetOidsForProfile(snmpOptions.Profile);
+        var oids = SnmpOids.GetOidsForProfile(snmpOptions.Profile, databaseIndex);
         var host = new Uri(_baseUrl).Host;
         var timeoutMs = (int)snmpOptions.Timeout.TotalMilliseconds;
         var snmpResults = await snmpClient.GetManyAsync(oids, host, snmpOptions.Port, SnmpOptions.Community, timeoutMs);
         return SnmpMetricMapper.MapToSample(snmpResults);
+    }
+
+    private async Task<long?> TryGetDatabaseSnmpIndexAsync(string databaseName)
+    {
+        try
+        {
+            var url = $"{_baseUrl}/monitoring/snmp/oids";
+            using var req = CreateRequest(HttpMethod.Get, url);
+
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+
+            // Navigate to Databases section
+            if (doc.RootElement.TryGetProperty("Databases", out var databases) == false)
+            {
+                Console.WriteLine("[WARN] SNMP OID response missing 'Databases' property");
+                return null;
+            }
+
+            // Look for the database by name
+            if (databases.TryGetProperty(databaseName, out var dbElement) == false)
+            {
+                Console.WriteLine($"[WARN] Database '{databaseName}' not found in SNMP OID mapping");
+                return null;
+            }
+
+            // Extract database index from the first OID
+            if (dbElement.TryGetProperty("@General", out var general) == false || general.GetArrayLength() == 0)
+            {
+                Console.WriteLine($"[WARN] No '@General' section or empty for database '{databaseName}'");
+                return null;
+            }
+
+            var firstOid = general[0].GetProperty("OID").GetString();
+            if (SnmpOids.TryParseDatabaseIndexFromOid(firstOid, out var index))
+            {
+                return index;
+            }
+
+            Console.WriteLine($"[WARN] Failed to parse database index from OID: {firstOid}");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Failed to discover SNMP database index for '{databaseName}': {ex.Message}");
+            Console.WriteLine("[WARN] Falling back to server-wide SNMP metrics (IO/request metrics will be unavailable)");
+            return null;
+        }
     }
 
     public async Task<string> GetServerVersionAsync()

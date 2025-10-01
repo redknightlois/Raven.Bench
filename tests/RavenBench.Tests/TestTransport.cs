@@ -58,7 +58,7 @@ public sealed class TestTransport : ITransport
 
     public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(_serverMetrics);
 
-    public Task<RavenBench.Metrics.Snmp.SnmpSample> GetSnmpMetricsAsync(RavenBench.Util.SnmpOptions snmpOptions)
+    public Task<RavenBench.Metrics.Snmp.SnmpSample> GetSnmpMetricsAsync(RavenBench.Util.SnmpOptions snmpOptions, string? databaseName = null)
     {
         var sample = new RavenBench.Metrics.Snmp.SnmpSample
         {

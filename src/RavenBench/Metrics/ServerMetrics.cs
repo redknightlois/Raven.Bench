@@ -107,7 +107,7 @@ public sealed class ServerMetricsTracker : IDisposable
 
             if (_options.Snmp.Enabled)
             {
-                var snmpSample = await _transport.GetSnmpMetricsAsync(_options.Snmp);
+                var snmpSample = await _transport.GetSnmpMetricsAsync(_options.Snmp, _options.Database);
                 var snmpRates = _counterCache.ComputeRates(snmpSample);
 
                 // If we have rates (not the first sample), merge them into metrics
