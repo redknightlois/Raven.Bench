@@ -40,10 +40,11 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 - Basic shape
   - `Raven.Bench run --url <server> --database <db> [options]`
 - Common options
-  - `--reads/--writes/--updates <weight|percent>`: define mix. Examples: `--reads 75 --writes 25` or `--reads 3 --writes 1`.
   - `--warmup <duration>` and `--duration <duration>`: per-step timing, e.g., `20s`, `60s`.
   - `--distribution <uniform|zipfian|latest>`: key selection strategy (default: `uniform`).
   - `--doc-size <bytes|KB|MB>`: payload size for writes/updates (default: `1KB`).
+  - `--profile <mixed|writes|reads|query-by-id>`: required. Selects which workload to run.
+  - `--reads/--writes/--updates <weight|percent>`: only valid with `--profile mixed`; values normalize to 100%.
   - `--http-version <auto|1.1|2|3>` and `--strict-http-version`: version negotiation and enforcement.
   - `--transport <raw|client>` and `--compression <identity|gzip|zstd|br|deflate>`:
     - `raw` uses HTTP directly; identity/gzip/br/deflate supported.
@@ -71,11 +72,17 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 
 **Quick Starts**
 - Expose the hose (identity raw HTTP)
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --reads 75 --writes 25 --distribution uniform --transport raw --compression identity --mode closed --concurrency 8..512x2 --duration 60s --out results.json --out-csv steps.csv`
+  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25 --distribution uniform --transport raw --compression identity --mode closed --concurrency 8..512x2 --duration 60s --out results.json --out-csv steps.csv`
 - Realistic client with compression
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --transport client --compression zstd --reads 75 --writes 25 --concurrency 8..1024x2 --duration 60s --latencies both`
+  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile mixed --transport client --compression zstd --reads 75 --writes 25 --concurrency 8..1024x2 --duration 60s --latencies both`
 - Zipfian reads and small docs
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --reads 90 --writes 10 --distribution zipfian --doc-size 512B --duration 45s`
+  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile mixed --reads 90 --writes 10 --distribution zipfian --doc-size 512B --duration 45s`
+- Write-only profile
+  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile writes --concurrency 16..256x2 --duration 60s`
+- Read-only with preload
+  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile reads --preload 100000 --distribution zipfian --concurrency 8..512x2`
+- Query-by-id profile
+  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution uniform --concurrency 8..256x2`
 - HTTP/3 (strict) or auto negotiate
   - Strict HTTP/3: `--http-version 3 --strict-http-version`
   - Negotiable HTTP/2: `--http-version http2`
@@ -83,12 +90,20 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 
 **Workloads and Distributions**
 - Mix
+  - Requires `--profile mixed` and `--preload N`.
   - Provide `--reads/--writes/--updates` as either weights or percents; values normalize to 100%.
-  - Reads are by id when the keyspace has data; inserts grow the keyspace; updates target an existing id.
+  - Defaults to 75% reads, 25% updates (no writes).
+  - Reads and updates operate on preloaded documents; writes (if specified) grow the keyspace beyond preload.
 - Key distributions for reads.
   - `uniform`: equal probability across existing keys.
   - `zipfian`: favors smaller (older) keys.
   - `latest`: favors the most recently inserted portion of the keyspace.
+
+- Profiles (v0):
+  - `--profile mixed`: YCSB-style mix honoring `--reads/--writes/--updates` (defaults to 75% reads, 25% updates when omitted). Requires `--preload N` to seed data.
+  - `--profile writes`: single-document inserts only. Ids are sequential `bench/00000001+`. Payload uses YCSB-like fields sized to `--doc-size`.
+  - `--profile reads`: read-by-id only. Requires `--preload N` to seed the keyspace; distribution applies.
+  - `--profile query-by-id`: parameterized query by id only. Requires `--preload N`. Raw HTTP posts to `/databases/<db>/queries` with `from @all_docs where id() = $id`. Measures query endpoint overhead vs. direct reads; field-based query workloads planned for v1.
 
 **HTTP Version and Compression**
 - Version negotiation
@@ -144,7 +159,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `dotnet build -c Release`
   - `dotnet test`
 - Running locally
-  - `dotnet run --project src/RavenBench -- run --url http://localhost:8080 --database ycsb --reads 75 --writes 25`
+  - `dotnet run --project src/RavenBench -- run --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25`
 
 **Notes and Limitations**
 - v0 supports `--mode closed` only.

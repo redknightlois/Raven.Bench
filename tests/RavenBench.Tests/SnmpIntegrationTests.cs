@@ -19,7 +19,8 @@ public class SnmpIntegrationTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Snmp = new SnmpOptions { Enabled = true, Port = 161 }
+            Snmp = new SnmpOptions { Enabled = true, Port = 161 },
+            Profile = WorkloadProfile.Mixed
         };
 
         // Act
@@ -41,7 +42,8 @@ public class SnmpIntegrationTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Snmp = SnmpOptions.Disabled
+            Snmp = SnmpOptions.Disabled,
+            Profile = WorkloadProfile.Mixed
         };
 
         // Act
@@ -63,7 +65,8 @@ public class SnmpIntegrationTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Snmp = new SnmpOptions { Enabled = true, Port = 161 }
+            Snmp = new SnmpOptions { Enabled = true, Port = 161 },
+            Profile = WorkloadProfile.Mixed
         };
 
         // Act
@@ -89,7 +92,8 @@ public class SnmpIntegrationTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Snmp = new SnmpOptions { Enabled = true }
+            Snmp = new SnmpOptions { Enabled = true },
+            Profile = WorkloadProfile.Mixed
         };
 
         // Act
@@ -127,7 +131,8 @@ public class SnmpIntegrationTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Snmp = new SnmpOptions { Enabled = true }
+            Snmp = new SnmpOptions { Enabled = true },
+            Profile = WorkloadProfile.Mixed
         };
 
         // Act

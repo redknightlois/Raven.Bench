@@ -28,6 +28,8 @@ public interface ITransport : IDisposable
 {
     Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct);
     Task PutAsync(string id, string json);
+    Task EnsureDatabaseExistsAsync(string databaseName);
+    Task<long> GetDocumentCountAsync(string idPrefix);
 
     Task<int?> GetServerMaxCoresAsync();
     Task<ServerMetrics> GetServerMetricsAsync();

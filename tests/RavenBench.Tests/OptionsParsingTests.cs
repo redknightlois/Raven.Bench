@@ -16,7 +16,8 @@ public class CliParsingTests
             Database = "ycsb",
             Concurrency = "16..256x1.5",
             KneeRule = "dthr=3%,dp95=30%",
-            MaxErrors = "1%"
+            MaxErrors = "1%",
+            Profile = "mixed"
         };
 
         var opts = settings.ToRunOptions();
@@ -38,7 +39,8 @@ public class CliParsingTests
             Database = "ycsb",
             Reads = "3",
             Writes = "1",
-            Updates = "0"
+            Updates = "0",
+            Profile = "mixed"
         };
 
         var opts = settings.ToRunOptions();

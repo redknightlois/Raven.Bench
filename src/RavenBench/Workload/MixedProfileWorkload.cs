@@ -2,20 +2,21 @@ using RavenBench.Util;
 
 namespace RavenBench.Workload;
 
-public sealed class MixedWorkload : IWorkload
+public sealed class MixedProfileWorkload : IWorkload
 {
     private readonly WorkloadMix _mix;
     private readonly IKeyDistribution _distribution;
     private readonly int _docSizeBytes;
 
-    // Keyspace grows with preload; otherwise we keep inserting sequentially
-    private long _maxKey = 0;
+    // Keyspace starts at preload count and grows with inserts
+    private long _maxKey;
 
-    public MixedWorkload(WorkloadMix mix, IKeyDistribution distribution, int docSizeBytes)
+    public MixedProfileWorkload(WorkloadMix mix, IKeyDistribution distribution, int docSizeBytes, long initialKeyspace = 0)
     {
         _mix = mix;
         _distribution = distribution;
         _docSizeBytes = docSizeBytes;
+        _maxKey = initialKeyspace;
     }
 
     public Operation NextOperation(Random rng)
@@ -50,4 +51,3 @@ public sealed class MixedWorkload : IWorkload
 
     private static string IdFor(long i) => $"bench/{i:D8}";
 }
-

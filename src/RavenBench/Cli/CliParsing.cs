@@ -19,6 +19,7 @@ internal static class CliParsing
             Reads = ParseNullableWeight(s.Reads),
             Writes = ParseNullableWeight(s.Writes),
             Updates = ParseNullableWeight(s.Updates),
+            Profile = ParseProfile(s.Profile),
             DocumentSizeBytes = ParseSize(s.DocSize),
             ConcurrencyStart = concurrencyStart,
             ConcurrencyEnd = concurrencyEnd,
@@ -66,6 +67,21 @@ internal static class CliParsing
         };
     }
 
+    private static WorkloadProfile ParseProfile(string? profile)
+    {
+        if (string.IsNullOrWhiteSpace(profile))
+            throw new ArgumentException("--profile is required. Valid options: mixed, writes, reads, query-by-id");
+
+        return profile.Trim().ToLowerInvariant() switch
+        {
+            "mixed" => WorkloadProfile.Mixed,
+            "writes" or "write" => WorkloadProfile.Writes,
+            "reads" or "read" => WorkloadProfile.Reads,
+            "query-by-id" or "querybyid" => WorkloadProfile.QueryById,
+            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id")
+        };
+    }
+
     private static SnmpProfile ParseSnmpProfile(string profile)
     {
         return profile.ToLowerInvariant() switch
@@ -85,7 +101,7 @@ internal static class CliParsing
         return value;
     }
 
-    private static double ParseNullableWeight(string s) => s is not null ? ParseWeight(s) : 0.0;
+    private static double? ParseNullableWeight(string? s) => string.IsNullOrWhiteSpace(s) ? null : ParseWeight(s);
 
     public static (int, int, double) ParseConcurrency(string s)
     {

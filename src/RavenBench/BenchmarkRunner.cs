@@ -86,6 +86,10 @@ public class BenchmarkRunner(RunOptions opts)
 
         using var transport = BuildTransport(opts, negotiatedHttpVersion);
 
+        // Ensure database exists before preload or benchmark
+        Console.WriteLine($"[Raven.Bench] Ensuring database '{opts.Database}' exists...");
+        await transport.EnsureDatabaseExistsAsync(opts.Database);
+
         if (opts.Preload > 0)
             await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
 
@@ -365,20 +369,63 @@ public class BenchmarkRunner(RunOptions opts)
 
     private static IWorkload BuildWorkload(RunOptions opts)
     {
-        var r = opts.Reads ?? 75.0;
-        var w = opts.Writes ?? 25.0;
-        var u = opts.Updates ?? 0.0;
-        var mix = WorkloadMix.FromWeights(r, w, u);
-        
-        IKeyDistribution dist = opts.Distribution.ToLowerInvariant() switch
-        {
-            "uniform" => new UniformDistribution(),
-            "zipfian" => new ZipfianDistribution(),
-            "latest" => new LatestDistribution(),
-            _ => throw new NotImplementedException($"Distribution '{opts.Distribution}' is not implemented. Supported distributions: uniform, zipfian, latest")
-        };
+        if (opts.Profile == WorkloadProfile.Unspecified)
+            throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id.");
 
-        return new MixedWorkload(mix, dist, opts.DocumentSizeBytes);
+        if (opts.Profile != WorkloadProfile.Mixed)
+        {
+            if (opts.Reads.HasValue || opts.Writes.HasValue || opts.Updates.HasValue)
+            {
+                throw new InvalidOperationException("--reads/--writes/--updates are only supported with --profile mixed.");
+            }
+        }
+
+        IKeyDistribution CreateDistribution()
+        {
+            return opts.Distribution.ToLowerInvariant() switch
+            {
+                "uniform" => new UniformDistribution(),
+                "zipfian" => new ZipfianDistribution(),
+                "latest" => new LatestDistribution(),
+                _ => throw new NotImplementedException($"Distribution '{opts.Distribution}' is not implemented. Supported distributions: uniform, zipfian, latest")
+            };
+        }
+
+        return opts.Profile switch
+        {
+            WorkloadProfile.Mixed => BuildMixedWorkload(opts, CreateDistribution()),
+            WorkloadProfile.Writes => new WriteWorkload(opts.DocumentSizeBytes, startingKey: opts.Preload),
+            WorkloadProfile.Reads => BuildReadWorkload(opts, CreateDistribution()),
+            WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
+            _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
+        };
+    }
+
+    private static IWorkload BuildMixedWorkload(RunOptions opts, IKeyDistribution distribution)
+    {
+        if (opts.Preload <= 0)
+            throw new InvalidOperationException("Mixed profile requires preloaded documents. Use --preload to seed data.");
+
+        // Default: 75% reads, 25% updates (no writes - operate on existing data)
+        var reads = opts.Reads ?? 75.0;
+        var writes = opts.Writes ?? 0.0;
+        var updates = opts.Updates ?? 25.0;
+        var mix = WorkloadMix.FromWeights(reads, writes, updates);
+        return new MixedProfileWorkload(mix, distribution, opts.DocumentSizeBytes, initialKeyspace: opts.Preload);
+    }
+
+    private static IWorkload BuildReadWorkload(RunOptions opts, IKeyDistribution distribution)
+    {
+        if (opts.Preload <= 0)
+            throw new InvalidOperationException("Read profile requires --preload to seed the keyspace before the run.");
+        return new ReadWorkload(distribution, opts.Preload);
+    }
+
+    private static IWorkload BuildQueryWorkload(RunOptions opts, IKeyDistribution distribution)
+    {
+        if (opts.Preload <= 0)
+            throw new InvalidOperationException("Query profile requires --preload to seed the keyspace before the run.");
+        return new QueryWorkload(distribution, opts.Preload);
     }
 
     private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion)
@@ -401,13 +448,22 @@ public class BenchmarkRunner(RunOptions opts)
 
     private static async Task PreloadAsync(ITransport transport, RunOptions opts, int count, Random rng, int docSize)
     {
+        // Check if documents already exist
+        var existingCount = await transport.GetDocumentCountAsync("bench/");
+
+        if (existingCount >= count)
+        {
+            Console.WriteLine($"[Raven.Bench] Database already has {existingCount} documents (>= {count} requested). Skipping preload.");
+            return;
+        }
+
         Console.WriteLine($"[Raven.Bench] Preloading {count} documents...");
-        
+
         var options = new ParallelOptions
         {
             MaxDegreeOfParallelism = 32
         };
-        
+
         await Parallel.ForEachAsync(
             Enumerable.Range(1, count),
             options,
@@ -423,7 +479,7 @@ public class BenchmarkRunner(RunOptions opts)
                     // ignore individual preload failures
                 }
             });
-            
+
         Console.WriteLine("[Raven.Bench] Preload complete.");
     }
 
