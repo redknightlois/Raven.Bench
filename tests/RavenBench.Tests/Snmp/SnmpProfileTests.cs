@@ -23,13 +23,13 @@ public class SnmpProfileTests
     }
 
     [Fact]
-    public void GetOidsForProfile_Extended_Returns14Oids()
+    public void GetOidsForProfile_Extended_ServerWide_Returns8Oids()
     {
-        // Act
+        // Act - server-wide metrics only (no database index)
         var oids = SnmpOids.GetOidsForProfile(SnmpProfile.Extended);
 
         // Assert
-        oids.Should().HaveCount(14);
+        oids.Should().HaveCount(8);
 
         // Minimal metrics
         oids.Should().Contain(SnmpOids.MachineCpu);
@@ -37,17 +37,40 @@ public class SnmpProfileTests
         oids.Should().Contain(SnmpOids.ManagedMemory);
         oids.Should().Contain(SnmpOids.UnmanagedMemory);
 
-        // Extended metrics
+        // Extended server-wide metrics
         oids.Should().Contain(SnmpOids.DirtyMemory);
         oids.Should().Contain(SnmpOids.Load1Min);
         oids.Should().Contain(SnmpOids.Load5Min);
         oids.Should().Contain(SnmpOids.Load15Min);
-        oids.Should().Contain(SnmpOids.IoReadOps);
-        oids.Should().Contain(SnmpOids.IoWriteOps);
-        oids.Should().Contain(SnmpOids.IoReadBytes);
-        oids.Should().Contain(SnmpOids.IoWriteBytes);
-        oids.Should().Contain(SnmpOids.RequestCount);
-        oids.Should().Contain(SnmpOids.RequestsPerSecond);
+    }
+
+    [Fact]
+    public void GetOidsForProfile_Extended_WithDatabaseIndex_Returns14Oids()
+    {
+        // Act - with database index for database-specific metrics
+        var databaseIndex = 1L;
+        var oids = SnmpOids.GetOidsForProfile(SnmpProfile.Extended, databaseIndex);
+
+        // Assert
+        oids.Should().HaveCount(14);
+
+        // Server-wide metrics
+        oids.Should().Contain(SnmpOids.MachineCpu);
+        oids.Should().Contain(SnmpOids.ProcessCpu);
+        oids.Should().Contain(SnmpOids.ManagedMemory);
+        oids.Should().Contain(SnmpOids.UnmanagedMemory);
+        oids.Should().Contain(SnmpOids.DirtyMemory);
+        oids.Should().Contain(SnmpOids.Load1Min);
+        oids.Should().Contain(SnmpOids.Load5Min);
+        oids.Should().Contain(SnmpOids.Load15Min);
+
+        // Database-specific metrics (formatted with database index)
+        oids.Should().Contain($"1.3.6.1.4.1.45751.1.1.5.2.{databaseIndex}.2.7");  // IoReadOps
+        oids.Should().Contain($"1.3.6.1.4.1.45751.1.1.5.2.{databaseIndex}.2.8");  // IoWriteOps
+        oids.Should().Contain($"1.3.6.1.4.1.45751.1.1.5.2.{databaseIndex}.2.9");  // IoReadBytes
+        oids.Should().Contain($"1.3.6.1.4.1.45751.1.1.5.2.{databaseIndex}.2.10"); // IoWriteBytes
+        oids.Should().Contain($"1.3.6.1.4.1.45751.1.1.5.2.{databaseIndex}.3.6");  // RequestCount
+        oids.Should().Contain($"1.3.6.1.4.1.45751.1.1.5.2.{databaseIndex}.3.5");  // RequestsPerSecond
     }
 
     [Fact]

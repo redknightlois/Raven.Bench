@@ -30,11 +30,13 @@ public class SnmpMetricMapperTests
     [Fact]
     public void MapToSample_WithGauge32Rates_ExtractsValues()
     {
-        // Arrange
+        // Arrange - use database-specific OIDs (database index = 1)
+        var dbIoReadOps = "1.3.6.1.4.1.45751.1.1.5.2.1.2.7";
+        var dbIoWriteOps = "1.3.6.1.4.1.45751.1.1.5.2.1.2.8";
         var values = new Dictionary<string, Variable>
         {
-            [SnmpOids.IoReadOps] = new Variable(new ObjectIdentifier(SnmpOids.IoReadOps), new Gauge32(123)),
-            [SnmpOids.IoWriteOps] = new Variable(new ObjectIdentifier(SnmpOids.IoWriteOps), new Gauge32(789))
+            [dbIoReadOps] = new Variable(new ObjectIdentifier(dbIoReadOps), new Gauge32(123)),
+            [dbIoWriteOps] = new Variable(new ObjectIdentifier(dbIoWriteOps), new Gauge32(789))
         };
 
         // Act
@@ -134,12 +136,12 @@ public class SnmpMetricMapperTests
             [SnmpOids.Load1Min] = new Variable(new ObjectIdentifier(SnmpOids.Load1Min), new Gauge32(150)),
             [SnmpOids.Load5Min] = new Variable(new ObjectIdentifier(SnmpOids.Load5Min), new Gauge32(120)),
             [SnmpOids.Load15Min] = new Variable(new ObjectIdentifier(SnmpOids.Load15Min), new Gauge32(100)),
-            [SnmpOids.IoReadOps] = new Variable(new ObjectIdentifier(SnmpOids.IoReadOps), new Counter64(10000)),
-            [SnmpOids.IoWriteOps] = new Variable(new ObjectIdentifier(SnmpOids.IoWriteOps), new Gauge32(5000)),
-            [SnmpOids.IoReadBytes] = new Variable(new ObjectIdentifier(SnmpOids.IoReadBytes), new Gauge32(1024)),
-            [SnmpOids.IoWriteBytes] = new Variable(new ObjectIdentifier(SnmpOids.IoWriteBytes), new Gauge32(512)),
-            [SnmpOids.RequestCount] = new Variable(new ObjectIdentifier(SnmpOids.RequestCount), new Integer32(100000)),
-            [SnmpOids.RequestsPerSecond] = new Variable(new ObjectIdentifier(SnmpOids.RequestsPerSecond), new Gauge32(1500))
+            ["1.3.6.1.4.1.45751.1.1.5.2.1.2.7"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.2.7"), new Counter64(10000)),
+            ["1.3.6.1.4.1.45751.1.1.5.2.1.2.8"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.2.8"), new Gauge32(5000)),
+            ["1.3.6.1.4.1.45751.1.1.5.2.1.2.9"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.2.9"), new Gauge32(1024)),
+            ["1.3.6.1.4.1.45751.1.1.5.2.1.2.10"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.2.10"), new Gauge32(512)),
+            ["1.3.6.1.4.1.45751.1.1.5.2.1.3.6"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.3.6"), new Integer32(100000)),
+            ["1.3.6.1.4.1.45751.1.1.5.2.1.3.5"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.3.5"), new Gauge32(1500))
         };
 
         // Act
@@ -187,10 +189,11 @@ public class SnmpMetricMapperTests
     [Fact]
     public void MapToSample_WithInteger32_ConvertsToLong()
     {
-        // Arrange
+        // Arrange - database-specific RequestCount OID
+        var dbRequestCount = "1.3.6.1.4.1.45751.1.1.5.2.1.3.6";
         var values = new Dictionary<string, Variable>
         {
-            [SnmpOids.RequestCount] = new Variable(new ObjectIdentifier(SnmpOids.RequestCount), new Integer32(50000))
+            [dbRequestCount] = new Variable(new ObjectIdentifier(dbRequestCount), new Integer32(50000))
         };
 
         // Act
