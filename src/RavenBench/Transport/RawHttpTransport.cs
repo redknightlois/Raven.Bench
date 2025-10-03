@@ -72,6 +72,7 @@ public sealed class RawHttpTransport : ITransport
             OperationType.ReadById => await GetAsync(op.Id, ct).ConfigureAwait(false),
             OperationType.Insert => await PutAsyncInternal(op.Id, op.Payload!, ct).ConfigureAwait(false),
             OperationType.Update => await PutAsyncInternal(op.Id, op.Payload!, ct).ConfigureAwait(false),
+            OperationType.Query => await PostQueryAsync(op.Id, ct).ConfigureAwait(false),
             _ => new TransportResult(0, 0)
         };
     }
@@ -80,6 +81,72 @@ public sealed class RawHttpTransport : ITransport
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await PutAsyncInternal(id, json, cts.Token).ConfigureAwait(false);
+    }
+
+    private async Task<TransportResult> PostQueryAsync(string id, CancellationToken ct)
+    {
+        try
+        {
+            var url = $"{_baseUrl}/databases/{_db}/queries";
+
+            using var req = CreateRequest(HttpMethod.Post, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+
+            // RavenDB parameterized query against @all_docs by id
+            var queryPayload = JsonSerializer.Serialize(new
+            {
+                Query = "from @all_docs where id() = $id",
+                QueryParameters = new { id }
+            });
+            req.Content = new StringContent(queryPayload, Encoding.UTF8, "application/json");
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+            {
+                if (resp.IsSuccessStatusCode == false)
+                {
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                    return new TransportResult(0, 0, errorDetails);
+                }
+
+                long bytesIn = 0;
+                if (resp.Content.Headers.ContentLength.HasValue)
+                {
+                    bytesIn = resp.Content.Headers.ContentLength.Value;
+                }
+                else
+                {
+                    await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                    if (_bufferPool.TryDequeue(out var buffer) == false)
+                        buffer = new byte[32768];
+                    int totalRead = 0, bytesRead;
+                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                        totalRead += bytesRead;
+                    bytesIn = totalRead;
+                    _bufferPool.TryEnqueue(buffer);
+                }
+
+                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+                bytesOut += 400; // headers approx
+                return new TransportResult(bytesOut, bytesIn);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            if (ct.IsCancellationRequested)
+                return new TransportResult(0, 0);
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
+        catch (Exception ex)
+        {
+            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
+            return new TransportResult(0, 0, errorDetails);
+        }
     }
 
     private async Task<TransportResult> GetAsync(string id, CancellationToken ct)
@@ -465,6 +532,50 @@ public sealed class RawHttpTransport : ITransport
         req.Version = _httpVersion;
         req.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
         return req;
+    }
+
+    public async Task EnsureDatabaseExistsAsync(string databaseName)
+    {
+        // Use RavenDB client for administrative tasks
+        using var adminStore = new Raven.Client.Documents.DocumentStore
+        {
+            Urls = [_baseUrl],
+            Database = databaseName
+        };
+        adminStore.Initialize();
+
+        try
+        {
+            var dbRecord = new Raven.Client.ServerWide.DatabaseRecord(databaseName);
+            await adminStore.Maintenance.Server.SendAsync(new Raven.Client.ServerWide.Operations.CreateDatabaseOperation(dbRecord));
+        }
+        catch (Raven.Client.Exceptions.ConcurrencyException)
+        {
+            // Database already exists, ignore
+        }
+    }
+
+    public async Task<long> GetDocumentCountAsync(string idPrefix)
+    {
+        // Use RavenDB client for querying document count
+        using var adminStore = new Raven.Client.Documents.DocumentStore
+        {
+            Urls = [_baseUrl],
+            Database = _db
+        };
+        adminStore.Initialize();
+
+        using var session = adminStore.OpenAsyncSession();
+        // Use streaming to count documents without indexing delay
+        var count = 0L;
+        await using (var stream = await session.Advanced.StreamAsync<object>(startsWith: idPrefix))
+        {
+            while (await stream.MoveNextAsync())
+            {
+                count++;
+            }
+        }
+        return count;
     }
 
     public void Dispose()

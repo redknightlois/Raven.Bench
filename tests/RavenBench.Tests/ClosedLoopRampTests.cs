@@ -34,9 +34,10 @@ public class ClosedLoopRampTests
             ConcurrencyFactor = 2,
             OutJson = null,
             OutCsv = null,
+            Profile = WorkloadProfile.Mixed
         };
 
-        var runner = new BenchmarkRunnerForTest(opts, new MixedWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024));
+        var runner = new BenchmarkRunnerForTest(opts, new MixedProfileWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024));
         var run = await runner.RunAsyncWithTransport(new TestTransport(baseLatencyMs: 1));
 
         run.Steps.Count.Should().BeGreaterOrEqualTo(2);

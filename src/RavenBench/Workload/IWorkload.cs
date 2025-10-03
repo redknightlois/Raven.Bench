@@ -9,7 +9,8 @@ public enum OperationType
 {
     ReadById,
     Insert,
-    Update
+    Update,
+    Query
 }
 
 public readonly struct Operation(OperationType type, string id, string? payload)
@@ -18,4 +19,3 @@ public readonly struct Operation(OperationType type, string id, string? payload)
     public string Id { get; } = id;
     public string? Payload { get; } = payload;
 }
-

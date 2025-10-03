@@ -121,6 +121,14 @@ public sealed class RavenClientTransport : ITransport
                     }
                     var outBytes = op.Payload?.Length ?? 0;
                     return new TransportResult(outBytes + 300, 256);
+                case OperationType.Query:
+                    using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                    {
+                        // Run a parameterized raw query matching the raw HTTP profile
+                        var q = s.Advanced.AsyncRawQuery<object>("from @all_docs where id() = $id").AddParameter("id", op.Id);
+                        var _ = await q.ToListAsync(ct).ConfigureAwait(false);
+                    }
+                    return new TransportResult(300, 4096);
                 default:
                     return new TransportResult(0, 0);
             }
@@ -290,6 +298,34 @@ public sealed class RavenClientTransport : ITransport
         await ValidateClientAsync().ConfigureAwait(false);
 
         Console.WriteLine($"[Raven.Bench] Client validation: Using HTTP/{HttpHelper.FormatHttpVersion(_httpVersion)}");
+    }
+
+    public async Task EnsureDatabaseExistsAsync(string databaseName)
+    {
+        try
+        {
+            var dbRecord = new Raven.Client.ServerWide.DatabaseRecord(databaseName);
+            await _store.Maintenance.Server.SendAsync(new Raven.Client.ServerWide.Operations.CreateDatabaseOperation(dbRecord));
+        }
+        catch (Raven.Client.Exceptions.ConcurrencyException)
+        {
+            // Database already exists, ignore
+        }
+    }
+
+    public async Task<long> GetDocumentCountAsync(string idPrefix)
+    {
+        using var session = _store.OpenAsyncSession();
+        // Use streaming to count documents without indexing delay
+        var count = 0L;
+        await using (var stream = await session.Advanced.StreamAsync<object>(startsWith: idPrefix))
+        {
+            while (await stream.MoveNextAsync())
+            {
+                count++;
+            }
+        }
+        return count;
     }
 
     public void Dispose()

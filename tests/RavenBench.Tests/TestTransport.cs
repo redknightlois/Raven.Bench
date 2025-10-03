@@ -47,6 +47,10 @@ public sealed class TestTransport : ITransport
 
     public Task PutAsync(string id, string json) => Task.CompletedTask;
 
+    public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;
+
+    public Task<long> GetDocumentCountAsync(string idPrefix) => Task.FromResult(0L);
+
     public Task<int?> GetServerMaxCoresAsync() => Task.FromResult<int?>(4);
 
     public Task<string> GetServerVersionAsync() => Task.FromResult("1.0.0-test");

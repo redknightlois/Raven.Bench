@@ -78,7 +78,7 @@ public class IntegrationTests
         // INVARIANT: Generated payloads should match size expectations
         
         var distribution = new UniformDistribution();
-        var workload = new MixedWorkload(
+        var workload = new MixedProfileWorkload(
             WorkloadMix.FromWeights(0, 100, 0),
             distribution,
             2048 // 2KB documents
@@ -120,7 +120,8 @@ public class IntegrationTests
         Duration = TimeSpan.FromMilliseconds(50),
         ConcurrencyStart = 2,
         ConcurrencyEnd = 2, // Single concurrency for simple tests
-        ConcurrencyFactor = 2
+        ConcurrencyFactor = 2,
+        Profile = WorkloadProfile.Mixed
     };
 }
 

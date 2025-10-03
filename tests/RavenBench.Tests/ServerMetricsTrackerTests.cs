@@ -17,7 +17,7 @@ public class ServerMetricsTrackerTests
         // INVARIANT: Constructor should not throw with valid transport and options
         // INVARIANT: Initial state should be valid
         using var transport = new TestTransport();
-        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.Mixed };
         using var tracker = new ServerMetricsTracker(transport, options);
 
         tracker.Should().NotBeNull();
@@ -34,7 +34,7 @@ public class ServerMetricsTrackerTests
         // INVARIANT: Start and stop should work without exceptions
         // INVARIANT: Current should always return valid metrics
         using var transport = new TestTransport();
-        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.Mixed };
         using var tracker = new ServerMetricsTracker(transport, options);
 
         // Should be able to start
@@ -56,7 +56,7 @@ public class ServerMetricsTrackerTests
         // INVARIANT: Current property should be thread-safe
         // INVARIANT: Should never return null or invalid metrics
         using var transport = new TestTransport();
-        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.Mixed };
         using var tracker = new ServerMetricsTracker(transport, options);
         tracker.Start();
 
@@ -96,7 +96,7 @@ public class ServerMetricsTrackerTests
         // INVARIANT: Should handle multiple start/stop cycles
         // INVARIANT: Should remain stable across cycles
         using var transport = new TestTransport();
-        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.Mixed };
         using var tracker = new ServerMetricsTracker(transport, options);
 
         for (int cycle = 0; cycle < 3; cycle++)
@@ -120,7 +120,7 @@ public class ServerMetricsTrackerTests
         // INVARIANT: Dispose should work without exceptions
         // INVARIANT: Should handle disposal in any state
         var transport = new TestTransport();
-        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.Mixed };
         var tracker = new ServerMetricsTracker(transport, options);
 
         tracker.Start();
@@ -141,7 +141,7 @@ public class ServerMetricsTrackerTests
         // INVARIANT: Metrics should be updated periodically when started
         // INVARIANT: Should use transport's GetServerMetricsAsync method
         using var transport = new TestTransport();
-        var options = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        var options = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.Mixed };
         using var tracker = new ServerMetricsTracker(transport, options);
 
         tracker.Start();
@@ -170,7 +170,8 @@ public class ServerMetricsTrackerTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Snmp = new SnmpOptions { Enabled = true, Port = 161 }
+            Snmp = new SnmpOptions { Enabled = true, Port = 161 },
+            Profile = WorkloadProfile.Mixed
         };
 
         // Act
@@ -192,7 +193,8 @@ public class ServerMetricsTrackerTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Snmp = SnmpOptions.Disabled
+            Snmp = SnmpOptions.Disabled,
+            Profile = WorkloadProfile.Mixed
         };
 
         // Act

@@ -26,6 +26,10 @@ public sealed class RunSettings : CommandSettings
     [Description("Update operation weight (percentage or count)")]
     public string? Updates { get; init; }
 
+    [CommandOption("--profile")]
+    [Description("Required. Operation profile: mixed, writes, reads, query-by-id")]
+    public string? Profile { get; init; }
+
     [CommandOption("--distribution")]
     [Description("Key distribution: uniform, zipfian (default: uniform)")]
     public string Distribution { get; init; } = "uniform";

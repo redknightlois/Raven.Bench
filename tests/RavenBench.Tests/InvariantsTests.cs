@@ -12,7 +12,7 @@ public class InvariantsTests
     [Fact]
     public void Flags_Unreliable_Beyond_Knee()
     {
-        var opts = new RunOptions { Url = "u", Database = "d" };
+        var opts = new RunOptions { Url = "u", Database = "d", Profile = WorkloadProfile.Mixed };
         var knee = new StepResult { Concurrency = 16 };
         var run = new BenchmarkRun 
         { 
@@ -36,4 +36,3 @@ public class InvariantsTests
         analysis.Warnings.Should().NotBeEmpty();
     }
 }
-

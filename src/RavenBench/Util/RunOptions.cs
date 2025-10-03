@@ -53,8 +53,20 @@ public sealed class RunOptions
 
     public SnmpOptions Snmp { get; init; } = SnmpOptions.Disabled;
 
+    // Required workload profile selection
+    public WorkloadProfile Profile { get; init; } = WorkloadProfile.Unspecified;
+
     // Legacy SNMP properties for backwards compatibility - prefer using Snmp property
     public bool SnmpEnabled => Snmp.Enabled;
     public int SnmpPort => Snmp.Port;
     public TimeSpan SnmpPollInterval => Snmp.PollInterval;
+}
+
+public enum WorkloadProfile
+{
+    Unspecified = 0,
+    Mixed,
+    Writes,
+    Reads,
+    QueryById
 }
