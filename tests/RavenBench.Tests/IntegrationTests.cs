@@ -92,16 +92,19 @@ public class IntegrationTests
             var op = workload.NextOperation(rng);
             
             op.Should().NotBeNull();
-            op.Type.Should().NotBe(OperationType.ReadById); // Should be write since 100% writes
-            
-            if (op.Payload != null)
+            op.Should().BeOfType<InsertOperation<string>>(); // Should be write since 100% writes
+
+            if (op is InsertOperation<string> insertOp)
             {
+                var payloadString = insertOp.Payload;
+                payloadString.Should().NotBeNull();
+
                 // Payload should be valid JSON
-                var document = System.Text.Json.JsonDocument.Parse(op.Payload);
+                var document = System.Text.Json.JsonDocument.Parse(payloadString);
                 document.RootElement.ValueKind.Should().Be(System.Text.Json.JsonValueKind.Object);
-                
+
                 // Should be reasonably sized
-                var payloadBytes = System.Text.Encoding.UTF8.GetByteCount(op.Payload);
+                var payloadBytes = System.Text.Encoding.UTF8.GetByteCount(payloadString);
                 payloadBytes.Should().BeGreaterThan(100);
                 payloadBytes.Should().BeLessThan(5000); // Within reasonable bounds for 2KB target
             }

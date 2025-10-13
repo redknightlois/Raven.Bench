@@ -96,36 +96,46 @@ public sealed class RavenClientTransport : ITransport
     }
 
 
-    public async Task<TransportResult> ExecuteAsync(Workload.Operation op, CancellationToken ct)
+    public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
         try
         {
-            switch (op.Type)
+            switch (op)
             {
-                case OperationType.ReadById:
+                case ReadOperation readOp:
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
-                        var _ = await s.LoadAsync<object>(op.Id, ct).ConfigureAwait(false);
+                        var _ = await s.LoadAsync<object>(readOp.Id, ct).ConfigureAwait(false);
                     }
                     // bytes unknown; estimate ~doc size
                     return new TransportResult(300, 4096);
-                case OperationType.Insert:
-                case OperationType.Update:
+                case InsertOperation<string> insertOp:
                     // Store raw JSON to maintain consistency with RawHttpTransport
                     using (var session = _store.OpenAsyncSession())
                     {
                         // Store as raw JSON document to match RawHttpTransport behavior
-                        var doc = new { Json = op.Payload };
-                        await session.StoreAsync(doc, op.Id, ct).ConfigureAwait(false);
+                        var doc = new { Json = insertOp.Payload };
+                        await session.StoreAsync(doc, insertOp.Id, ct).ConfigureAwait(false);
                         await session.SaveChangesAsync(ct).ConfigureAwait(false);
                     }
-                    var outBytes = op.Payload?.Length ?? 0;
+                    var outBytes = insertOp.Payload?.Length ?? 0;
                     return new TransportResult(outBytes + 300, 256);
-                case OperationType.Query:
+                case UpdateOperation<string> updateOp:
+                    // Store raw JSON to maintain consistency with RawHttpTransport
+                    using (var session = _store.OpenAsyncSession())
+                    {
+                        // Store as raw JSON document to match RawHttpTransport behavior
+                        var doc = new { Json = updateOp.Payload };
+                        await session.StoreAsync(doc, updateOp.Id, ct).ConfigureAwait(false);
+                        await session.SaveChangesAsync(ct).ConfigureAwait(false);
+                    }
+                    var updateOutBytes = updateOp.Payload?.Length ?? 0;
+                    return new TransportResult(updateOutBytes + 300, 256);
+                case QueryOperation queryOp:
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
                         // Run a parameterized raw query matching the raw HTTP profile
-                        var q = s.Advanced.AsyncRawQuery<object>("from @all_docs where id() = $id").AddParameter("id", op.Id);
+                        var q = s.Advanced.AsyncRawQuery<object>("from @all_docs where id() = $id").AddParameter("id", queryOp.Id);
                         var _ = await q.ToListAsync(ct).ConfigureAwait(false);
                     }
                     return new TransportResult(300, 4096);
@@ -150,11 +160,11 @@ public sealed class RavenClientTransport : ITransport
         }
     }
 
-    public async Task PutAsync(string id, string json)
+    public async Task PutAsync<T>(string id, T document)
     {
         // Store raw JSON to maintain consistency with RawHttpTransport
         using var session = _store.OpenAsyncSession();
-        var doc = new { Json = json };
+        var doc = new { Json = document };
         await session.StoreAsync(doc, id).ConfigureAwait(false);
         await session.SaveChangesAsync().ConfigureAwait(false);
     }

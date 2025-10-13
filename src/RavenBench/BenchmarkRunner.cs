@@ -397,6 +397,7 @@ public class BenchmarkRunner(RunOptions opts)
             WorkloadProfile.Writes => new WriteWorkload(opts.DocumentSizeBytes, startingKey: opts.Preload),
             WorkloadProfile.Reads => BuildReadWorkload(opts, CreateDistribution()),
             WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
+            WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, startingKey: opts.Preload),
             _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
         };
     }

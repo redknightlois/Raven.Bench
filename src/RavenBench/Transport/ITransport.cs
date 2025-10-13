@@ -26,8 +26,8 @@ public readonly struct CalibrationResult(double ttfbMs, double totalMs, long byt
 
 public interface ITransport : IDisposable
 {
-    Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct);
-    Task PutAsync(string id, string json);
+    Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct);
+    Task PutAsync<T>(string id, T document);
     Task EnsureDatabaseExistsAsync(string databaseName);
     Task<long> GetDocumentCountAsync(string idPrefix);
 

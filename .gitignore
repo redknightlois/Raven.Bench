@@ -388,3 +388,5 @@ FodyWeavers.xsd
 
 # JetBrains IDEs
 .idea/
+
+/epics/

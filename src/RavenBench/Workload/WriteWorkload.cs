@@ -13,12 +13,12 @@ public sealed class WriteWorkload : IWorkload
         _maxKey = startingKey;
     }
 
-    public Operation NextOperation(Random rng)
+    public OperationBase NextOperation(Random rng)
     {
         var keyValue = Interlocked.Increment(ref _maxKey);
         var id = IdFor(keyValue);
         var payload = PayloadGenerator.Generate(_docSizeBytes, rng);
-        return new Operation(OperationType.Insert, id, payload);
+        return new InsertOperation<string> { Id = id, Payload = payload };
     }
 
     private static string IdFor(long i) => $"bench/{i:D8}";

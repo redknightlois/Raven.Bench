@@ -67,7 +67,7 @@ internal static class CliParsing
         };
     }
 
-    private static WorkloadProfile ParseProfile(string? profile)
+    private static WorkloadProfile ParseProfile(string profile)
     {
         if (string.IsNullOrWhiteSpace(profile))
             throw new ArgumentException("--profile is required. Valid options: mixed, writes, reads, query-by-id");
@@ -101,7 +101,7 @@ internal static class CliParsing
         return value;
     }
 
-    private static double? ParseNullableWeight(string? s) => string.IsNullOrWhiteSpace(s) ? null : ParseWeight(s);
+    private static double? ParseNullableWeight(string s) => string.IsNullOrWhiteSpace(s) ? null : ParseWeight(s);
 
     public static (int, int, double) ParseConcurrency(string s)
     {

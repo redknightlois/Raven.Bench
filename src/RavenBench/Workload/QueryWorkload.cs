@@ -14,10 +14,10 @@ public sealed class QueryWorkload : IWorkload
         _maxKey = initialKeyspace;
     }
 
-    public Operation NextOperation(Random rng)
+    public OperationBase NextOperation(Random rng)
     {
         var k = _distribution.NextKey(rng, (int)Math.Min(_maxKey, int.MaxValue));
-        return new Operation(OperationType.Query, IdFor(k), payload: null);
+        return new QueryOperation { Id = IdFor(k) };
     }
 
     private static string IdFor(long i) => $"bench/{i:D8}";

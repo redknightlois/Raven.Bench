@@ -65,22 +65,22 @@ public sealed class RawHttpTransport : ITransport
         }
     }
 
-    public async Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct)
+    public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
-        return op.Type switch
+        return op switch
         {
-            OperationType.ReadById => await GetAsync(op.Id, ct).ConfigureAwait(false),
-            OperationType.Insert => await PutAsyncInternal(op.Id, op.Payload!, ct).ConfigureAwait(false),
-            OperationType.Update => await PutAsyncInternal(op.Id, op.Payload!, ct).ConfigureAwait(false),
-            OperationType.Query => await PostQueryAsync(op.Id, ct).ConfigureAwait(false),
+            ReadOperation readOp => await GetAsync(readOp.Id, ct).ConfigureAwait(false),
+            InsertOperation<string> insertOp => await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false),
+            UpdateOperation<string> updateOp => await PutAsyncInternal(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false),
+            QueryOperation queryOp => await PostQueryAsync(queryOp.Id, ct).ConfigureAwait(false),
             _ => new TransportResult(0, 0)
         };
     }
 
-    public async Task PutAsync(string id, string json)
+    public async Task PutAsync<T>(string id, T document)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await PutAsyncInternal(id, json, cts.Token).ConfigureAwait(false);
+        await PutAsyncInternal(id, document, cts.Token).ConfigureAwait(false);
     }
 
     private async Task<TransportResult> PostQueryAsync(string id, CancellationToken ct)
@@ -220,7 +220,7 @@ public sealed class RawHttpTransport : ITransport
         }
     }
 
-    private async Task<TransportResult> PutAsyncInternal(string id, string json, CancellationToken ct)
+    private async Task<TransportResult> PutAsyncInternal<T>(string id, T document, CancellationToken ct)
     {
         try
         {
@@ -230,7 +230,7 @@ public sealed class RawHttpTransport : ITransport
             req.Headers.AcceptEncoding.Clear();
             req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
             req.Headers.ExpectContinue = false;
-            req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            req.Content = new StringContent(JsonSerializer.Serialize(document), Encoding.UTF8, "application/json");
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -266,7 +266,7 @@ public sealed class RawHttpTransport : ITransport
 
                     _bufferPool.TryEnqueue(buffer); // Return to pool
                 }
-                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(json);
+                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(document));
                 bytesOut += 400; // headers approx
                 return new TransportResult(bytesOut, bytesIn);
             }
