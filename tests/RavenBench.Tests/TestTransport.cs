@@ -39,13 +39,13 @@ public sealed class TestTransport : ITransport
 
     public void Dispose() { }
 
-    public async Task<TransportResult> ExecuteAsync(Operation op, CancellationToken ct)
+    public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
         await Task.Delay(_baseLatencyMs, ct);
         return new TransportResult(bytesOut: 200, bytesIn: 150);
     }
 
-    public Task PutAsync(string id, string json) => Task.CompletedTask;
+    public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
 
     public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;
 

@@ -1,21 +1,40 @@
+using System.Collections.Generic;
+
 namespace RavenBench.Workload;
 
 public interface IWorkload
 {
-    Operation NextOperation(Random rng);
+    OperationBase NextOperation(Random rng);
 }
 
-public enum OperationType
+public abstract class OperationBase
 {
-    ReadById,
-    Insert,
-    Update,
-    Query
 }
 
-public readonly struct Operation(OperationType type, string id, string? payload)
+public class ReadOperation : OperationBase
 {
-    public OperationType Type { get; } = type;
-    public string Id { get; } = id;
-    public string? Payload { get; } = payload;
+    public required string Id { get; init; }
 }
+
+public class QueryOperation : OperationBase
+{
+    public required string Id { get; init; }
+}
+
+public class InsertOperation<T> : OperationBase
+{
+    public required string Id { get; init; }
+    public required T Payload { get; init; }
+}
+
+public class UpdateOperation<T> : OperationBase
+{
+    public required string Id { get; init; }
+    public required T Payload { get; init; }
+}
+
+public class BulkInsertOperation<T> : OperationBase
+{
+    public required List<DocumentToWrite<T>> Documents { get; init; }
+}
+

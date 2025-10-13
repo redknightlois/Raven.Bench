@@ -56,6 +56,9 @@ public sealed class RunOptions
     // Required workload profile selection
     public WorkloadProfile Profile { get; init; } = WorkloadProfile.Unspecified;
 
+    public int BulkBatchSize { get; init; } = 100;
+    public int BulkDepth { get; init; } = 1;
+
     // Legacy SNMP properties for backwards compatibility - prefer using Snmp property
     public bool SnmpEnabled => Snmp.Enabled;
     public int SnmpPort => Snmp.Port;
@@ -68,5 +71,6 @@ public enum WorkloadProfile
     Mixed,
     Writes,
     Reads,
-    QueryById
+    QueryById,
+    BulkWrites
 }

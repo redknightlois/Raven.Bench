@@ -27,8 +27,16 @@ public sealed class RunSettings : CommandSettings
     public string? Updates { get; init; }
 
     [CommandOption("--profile")]
-    [Description("Required. Operation profile: mixed, writes, reads, query-by-id")]
+    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes")]
     public string? Profile { get; init; }
+
+    [CommandOption("--bulk-batch-size")]
+    [Description("Number of documents per bulk batch (default: 100)")]
+    public int BulkBatchSize { get; init; } = 100;
+
+    [CommandOption("--bulk-depth")]
+    [Description("Number of batches to send in parallel (default: 1)")]
+    public int BulkDepth { get; init; } = 1;
 
     [CommandOption("--distribution")]
     [Description("Key distribution: uniform, zipfian (default: uniform)")]
