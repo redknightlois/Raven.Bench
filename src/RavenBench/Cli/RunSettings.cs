@@ -38,6 +38,26 @@ public sealed class RunSettings : CommandSettings
     [Description("Number of batches to send in parallel (default: 1)")]
     public int BulkDepth { get; init; } = 1;
 
+    [CommandOption("--dataset")]
+    [Description("Dataset to import: stackoverflow (auto-downloads and imports)")]
+    public string? Dataset { get; init; }
+
+    [CommandOption("--dataset-profile")]
+    [Description("Dataset size profile: small (~5GB), half (~20GB), full (~50GB) - automatically sets database name and size")]
+    public string? DatasetProfile { get; init; }
+
+    [CommandOption("--dataset-size")]
+    [Description("Custom dataset size: 0=full, N=use N post dump files (overridden by --dataset-profile)")]
+    public int DatasetSize { get; init; } = 0;
+
+    [CommandOption("--dataset-skip-if-exists")]
+    [Description("Skip dataset import if data already exists (default: true)")]
+    public bool DatasetSkipIfExists { get; init; } = true;
+
+    [CommandOption("--dataset-cache-dir")]
+    [Description("Directory for caching downloaded dataset files")]
+    public string? DatasetCacheDir { get; init; }
+
     [CommandOption("--distribution")]
     [Description("Key distribution: uniform, zipfian (default: uniform)")]
     public string Distribution { get; init; } = "uniform";

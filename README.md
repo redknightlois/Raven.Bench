@@ -43,8 +43,14 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `--warmup <duration>` and `--duration <duration>`: per-step timing, e.g., `20s`, `60s`.
   - `--distribution <uniform|zipfian|latest>`: key selection strategy (default: `uniform`).
   - `--doc-size <bytes|KB|MB>`: payload size for writes/updates (default: `1KB`).
-  - `--profile <mixed|writes|reads|query-by-id>`: required. Selects which workload to run.
+  - `--profile <mixed|writes|reads|query-by-id|bulk-writes|stackoverflow-reads|stackoverflow-queries>`: required. Selects which workload to run.
   - `--reads/--writes/--updates <weight|percent>`: only valid with `--profile mixed`; values normalize to 100%.
+  - `--dataset <stackoverflow>`: Auto-downloads and imports dataset before benchmark (optional, required for StackOverflow profiles).
+  - `--dataset-profile <small|half|full>`: Predefined dataset sizes with automatic database naming:
+    - `small`: ~5GB data → database `StackOverflow-5GB`
+    - `half`: ~20GB data → database `StackOverflow-20GB`
+    - `full`: ~50GB data → database `StackOverflow-50GB`
+  - `--dataset-size <N>`: Custom dataset size: N post dump files (~1GB each + 2GB users). Auto-generates database name like `StackOverflow-12GB` for N=10. Overridden by `--dataset-profile`.
   - `--http-version <auto|1.1|2|3>` and `--strict-http-version`: version negotiation and enforcement.
   - `--transport <raw|client>` and `--compression <identity|gzip|zstd|br|deflate>`:
     - `raw` uses HTTP directly; identity/gzip/br/deflate supported.
@@ -83,6 +89,14 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile reads --preload 100000 --distribution zipfian --concurrency 8..512x2`
 - Query-by-id profile
   - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution uniform --concurrency 8..256x2`
+- Bulk writes (100 docs per batch)
+  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile bulk-writes --bulk-batch-size 100 --concurrency 4..64x2`
+- StackOverflow random reads with small dataset (auto-imports to StackOverflow-5GB)
+  - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-reads --dataset stackoverflow --dataset-profile small --concurrency 8..256x2 --duration 60s`
+- StackOverflow queries with half dataset (auto-imports to StackOverflow-20GB)
+  - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-queries --dataset stackoverflow --dataset-profile half --concurrency 8..128x2`
+- StackOverflow with custom size (auto-imports to StackOverflow-12GB with 10 post dumps)
+  - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-reads --dataset stackoverflow --dataset-size 10 --concurrency 8..256x2`
 - HTTP/3 (strict) or auto negotiate
   - Strict HTTP/3: `--http-version 3 --strict-http-version`
   - Negotiable HTTP/2: `--http-version http2`
@@ -99,11 +113,14 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `zipfian`: favors smaller (older) keys.
   - `latest`: favors the most recently inserted portion of the keyspace.
 
-- Profiles (v0):
+- Profiles (v0 + v1):
   - `--profile mixed`: YCSB-style mix honoring `--reads/--writes/--updates` (defaults to 75% reads, 25% updates when omitted). Requires `--preload N` to seed data.
   - `--profile writes`: single-document inserts only. Ids are sequential `bench/00000001+`. Payload uses YCSB-like fields sized to `--doc-size`.
   - `--profile reads`: read-by-id only. Requires `--preload N` to seed the keyspace; distribution applies.
-  - `--profile query-by-id`: parameterized query by id only. Requires `--preload N`. Raw HTTP posts to `/databases/<db>/queries` with `from @all_docs where id() = $id`. Measures query endpoint overhead vs. direct reads; field-based query workloads planned for v1.
+  - `--profile query-by-id`: parameterized query by id only. Requires `--preload N`. Raw HTTP posts to `/databases/<db>/queries` with `from @all_docs where id() = $id`. Measures query endpoint overhead vs. direct reads.
+  - `--profile bulk-writes`: bulk insert batches via `/bulk_docs` endpoint. Use `--bulk-batch-size` (default: 100) and `--bulk-depth` (default: 1) to control batch size and parallelism. Mirrors `batch-writes.lua` behavior.
+  - `--profile stackoverflow-reads` (or `so-reads`): Random reads from StackOverflow dataset: 50% `questions/{1..N}`, 50% `users/{1..M}`. Use `--so-max-question-id` (default: 12350817) and `--so-max-user-id` (default: 5987285). Requires StackOverflow dataset. Mirrors `full-random-reads.lua`.
+  - `--profile stackoverflow-queries` (or `so-queries`): Parameterized queries against questions collection only. Use `--so-max-question-id`. Requires StackOverflow dataset. Mirrors `consistent-questions.lua`.
 
 **HTTP Version and Compression**
 - Version negotiation

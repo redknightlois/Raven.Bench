@@ -135,10 +135,22 @@ public sealed class RavenClientTransport : ITransport
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
                         // Run a parameterized raw query matching the raw HTTP profile
-                        var q = s.Advanced.AsyncRawQuery<object>("from @all_docs where id() = $id").AddParameter("id", queryOp.Id);
+                        var q = s.Advanced.AsyncRawQuery<object>("from @all_docs where id() = $id")
+                            .AddParameter("id", queryOp.Id);
                         var _ = await q.ToListAsync(ct).ConfigureAwait(false);
                     }
                     return new TransportResult(300, 4096);
+                case BulkInsertOperation<string> bulkOp:
+                    using (var bulkInsert = _store.BulkInsert())
+                    {
+                        foreach (var docToWrite in bulkOp.Documents)
+                        {
+                            var doc = new { Json = docToWrite.Document };
+                            await bulkInsert.StoreAsync(doc, docToWrite.Id).ConfigureAwait(false);
+                        }
+                    }
+                    var bulkOutBytes = bulkOp.Documents.Sum(d => (d.Document?.Length ?? 0) + 50);
+                    return new TransportResult(bulkOutBytes, 256 * bulkOp.Documents.Count);
                 default:
                     return new TransportResult(0, 0);
             }
