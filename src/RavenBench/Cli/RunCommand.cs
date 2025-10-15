@@ -10,9 +10,19 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, RunSettings settings)
     {
-        if (string.IsNullOrWhiteSpace(settings.Url) || string.IsNullOrWhiteSpace(settings.Database))
+        // Validate URL (always required)
+        if (string.IsNullOrWhiteSpace(settings.Url))
         {
-            AnsiConsole.MarkupLine("[red]--url and --database are required.[/]");
+            AnsiConsole.MarkupLine("[red]--url is required.[/]");
+            return -1;
+        }
+
+        // Database is optional when using dataset (will be auto-generated)
+        if (string.IsNullOrWhiteSpace(settings.Database) &&
+            string.IsNullOrWhiteSpace(settings.Dataset) &&
+            string.IsNullOrWhiteSpace(settings.DatasetProfile))
+        {
+            AnsiConsole.MarkupLine("[red]--database is required (or use --dataset with --dataset-profile to auto-generate).[/]");
             return -1;
         }
         var opts = settings.ToRunOptions();

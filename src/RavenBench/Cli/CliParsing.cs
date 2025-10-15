@@ -12,10 +12,15 @@ internal static class CliParsing
         var (concurrencyStart, concurrencyEnd, concurrencyFactor) = ParseConcurrency(s.Concurrency);
         var (kneeThroughputDelta, kneeP95Delta) = ParseKneeRule(s.KneeRule);
 
+        // Database is optional when using dataset profiles (will be auto-generated)
+        var database = string.IsNullOrEmpty(s.DatasetProfile) == false || string.IsNullOrEmpty(s.Dataset) == false
+            ? (s.Database ?? "temp-placeholder") // Will be overridden by dataset logic
+            : RequiredString(s.Database!, "--database");
+
         return new RunOptions
         {
             Url = RequiredString(s.Url!, "--url"),
-            Database = RequiredString(s.Database!, "--database"),
+            Database = database,
             Reads = ParseNullableWeight(s.Reads),
             Writes = ParseNullableWeight(s.Writes),
             Updates = ParseNullableWeight(s.Updates),
@@ -48,7 +53,14 @@ internal static class CliParsing
             StrictHttpVersion = s.StrictHttpVersion,
             Verbose = s.Verbose,
             Snmp = BuildSnmpOptions(s),
-            LatencyDisplay = ParseLatencyDisplayType(s.Latencies)
+            LatencyDisplay = ParseLatencyDisplayType(s.Latencies),
+            BulkBatchSize = s.BulkBatchSize,
+            BulkDepth = s.BulkDepth,
+            Dataset = s.Dataset,
+            DatasetProfile = s.DatasetProfile,
+            DatasetSize = s.DatasetSize,
+            DatasetSkipIfExists = s.DatasetSkipIfExists,
+            DatasetCacheDir = s.DatasetCacheDir
         };
     }
 
@@ -78,7 +90,10 @@ internal static class CliParsing
             "writes" or "write" => WorkloadProfile.Writes,
             "reads" or "read" => WorkloadProfile.Reads,
             "query-by-id" or "querybyid" => WorkloadProfile.QueryById,
-            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id")
+            "bulk-writes" or "bulkwrites" => WorkloadProfile.BulkWrites,
+            "stackoverflow-reads" or "so-reads" => WorkloadProfile.StackOverflowReads,
+            "stackoverflow-queries" or "so-queries" => WorkloadProfile.StackOverflowQueries,
+            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries")
         };
     }
 

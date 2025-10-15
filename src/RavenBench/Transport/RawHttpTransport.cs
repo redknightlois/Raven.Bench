@@ -73,6 +73,7 @@ public sealed class RawHttpTransport : ITransport
             InsertOperation<string> insertOp => await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false),
             UpdateOperation<string> updateOp => await PutAsyncInternal(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false),
             QueryOperation queryOp => await PostQueryAsync(queryOp.Id, ct).ConfigureAwait(false),
+            BulkInsertOperation<string> bulkOp => await PostBulkDocsAsync(bulkOp.Documents, ct).ConfigureAwait(false),
             _ => new TransportResult(0, 0)
         };
     }
@@ -132,6 +133,80 @@ public sealed class RawHttpTransport : ITransport
                 }
 
                 long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+                bytesOut += 400; // headers approx
+                return new TransportResult(bytesOut, bytesIn);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            if (ct.IsCancellationRequested)
+                return new TransportResult(0, 0);
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
+        catch (Exception ex)
+        {
+            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
+            return new TransportResult(0, 0, errorDetails);
+        }
+    }
+
+    private async Task<TransportResult> PostBulkDocsAsync(List<DocumentToWrite<string>> documents, CancellationToken ct)
+    {
+        try
+        {
+            var url = $"{_baseUrl}/databases/{_db}/bulk_docs";
+
+            using var req = CreateRequest(HttpMethod.Post, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+
+            // Build RavenDB bulk_docs command array matching batch-writes.lua format
+            var commands = new List<object>();
+            foreach (var doc in documents)
+            {
+                commands.Add(new
+                {
+                    Method = "PUT",
+                    Type = "PUT",
+                    Id = doc.Id,
+                    Document = JsonSerializer.Deserialize<Dictionary<string, object>>(doc.Document)
+                });
+            }
+
+            var bulkPayload = JsonSerializer.Serialize(new { Commands = commands });
+            req.Content = new StringContent(bulkPayload, Encoding.UTF8, "application/json");
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+            {
+                if (resp.IsSuccessStatusCode == false)
+                {
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                    return new TransportResult(0, 0, errorDetails);
+                }
+
+                long bytesIn = 0;
+                if (resp.Content.Headers.ContentLength.HasValue)
+                {
+                    bytesIn = resp.Content.Headers.ContentLength.Value;
+                }
+                else
+                {
+                    await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                    if (_bufferPool.TryDequeue(out var buffer) == false)
+                        buffer = new byte[32768];
+                    int totalRead = 0, bytesRead;
+                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                        totalRead += bytesRead;
+                    bytesIn = totalRead;
+                    _bufferPool.TryEnqueue(buffer);
+                }
+
+                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(bulkPayload);
                 bytesOut += 400; // headers approx
                 return new TransportResult(bytesOut, bytesIn);
             }

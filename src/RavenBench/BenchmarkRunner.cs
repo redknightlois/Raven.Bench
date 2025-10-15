@@ -7,6 +7,8 @@ using RavenBench.Diagnostics;
 using RavenBench.Util;
 using RavenBench.Reporting;
 using Spectre.Console;
+using Raven.Client.Documents;
+using Raven.Client.Documents.Operations;
 
 
 namespace RavenBench;
@@ -74,8 +76,6 @@ public class BenchmarkRunner(RunOptions opts)
         Console.WriteLine($"[Raven.Bench] Setting ThreadPool: workers={workers}, iocp={iocp}");
         ThreadPool.SetMinThreads(workers, iocp);
 
-        var workload = BuildWorkload(opts);
-
         // Negotiate HTTP version before creating transport
         Console.WriteLine("[Raven.Bench] Negotiating HTTP version...");
         var negotiatedHttpVersion = await HttpVersionNegotiator.NegotiateVersionAsync(
@@ -84,11 +84,47 @@ public class BenchmarkRunner(RunOptions opts)
             opts.StrictHttpVersion);
         Console.WriteLine($"[Raven.Bench] Using HTTP/{HttpHelper.FormatHttpVersion(negotiatedHttpVersion)}");
 
-        using var transport = BuildTransport(opts, negotiatedHttpVersion);
+        // Import dataset if specified - this may override the database name
+        if (string.IsNullOrEmpty(opts.Dataset) == false)
+        {
+            datasetDatabase = await ImportDatasetAsync(opts);
+            if (datasetDatabase != opts.Database)
+            {
+                Console.WriteLine($"[Raven.Bench] Using dataset-specific database: '{datasetDatabase}'");
+            }
+        }
+
+        // Use dataset database if different from opts.Database
+        var effectiveDatabase = datasetDatabase ?? opts.Database;
+
+        using var transport = BuildTransport(opts, negotiatedHttpVersion, effectiveDatabase);
 
         // Ensure database exists before preload or benchmark
-        Console.WriteLine($"[Raven.Bench] Ensuring database '{opts.Database}' exists...");
-        await transport.EnsureDatabaseExistsAsync(opts.Database);
+        Console.WriteLine($"[Raven.Bench] Ensuring database '{effectiveDatabase}' exists...");
+        await transport.EnsureDatabaseExistsAsync(effectiveDatabase);
+
+        // Wait for indexes to be non-stale after dataset import
+        if (string.IsNullOrEmpty(opts.Dataset) == false)
+        {
+            await WaitForNonStaleIndexesAsync(opts.Url, effectiveDatabase);
+        }
+
+        // Discover workload metadata for StackOverflow profiles (after dataset import and index wait)
+        StackOverflowWorkloadMetadata? stackOverflowMetadata = null;
+        if (opts.Profile == WorkloadProfile.StackOverflowReads || opts.Profile == WorkloadProfile.StackOverflowQueries)
+        {
+            stackOverflowMetadata = await StackOverflowWorkloadHelper.DiscoverOrLoadMetadataAsync(
+                opts.Url,
+                effectiveDatabase);
+
+            if (stackOverflowMetadata == null)
+            {
+                throw new InvalidOperationException("StackOverflow metadata not available. Ensure dataset is imported and indexes are not stale.");
+            }
+        }
+
+        // Build workload with discovered metadata
+        var workload = BuildWorkload(opts, stackOverflowMetadata);
 
         if (opts.Preload > 0)
             await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
@@ -367,7 +403,7 @@ public class BenchmarkRunner(RunOptions opts)
         return res;
     }
 
-    private static IWorkload BuildWorkload(RunOptions opts)
+    private static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata)
     {
         if (opts.Profile == WorkloadProfile.Unspecified)
             throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id.");
@@ -398,6 +434,8 @@ public class BenchmarkRunner(RunOptions opts)
             WorkloadProfile.Reads => BuildReadWorkload(opts, CreateDistribution()),
             WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
             WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, startingKey: opts.Preload),
+            WorkloadProfile.StackOverflowReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
+            WorkloadProfile.StackOverflowQueries => new StackOverflowQueryWorkload(stackOverflowMetadata!),
             _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
         };
     }
@@ -429,22 +467,24 @@ public class BenchmarkRunner(RunOptions opts)
         return new QueryWorkload(distribution, opts.Preload);
     }
 
-    private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion)
+    private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion, string? databaseOverride = null)
     {
+        var database = databaseOverride ?? opts.Database;
+
         if (opts.Transport == "raw")
         {
             Console.WriteLine($"[Raven.Bench] Transport: Raw HTTP with {opts.Compression} compression");
-            return new RawHttpTransport(opts.Url, opts.Database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint);
+            return new RawHttpTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint);
         }
 
         if (opts.Transport == "client")
         {
             Console.WriteLine($"[Raven.Bench] Transport: RavenDB Client with {opts.Compression} compression");
-            return new RavenClientTransport(opts.Url, opts.Database, opts.Compression, negotiatedHttpVersion);
+            return new RavenClientTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion);
         }
 
         Console.WriteLine("[Raven.Bench] Transport: Raw HTTP with identity compression (default)");
-        return new RawHttpTransport(opts.Url, opts.Database, "identity", negotiatedHttpVersion);
+        return new RawHttpTransport(opts.Url, database, "identity", negotiatedHttpVersion);
     }
 
     private static async Task PreloadAsync(ITransport transport, RunOptions opts, int count, Random rng, int docSize)
@@ -482,6 +522,109 @@ public class BenchmarkRunner(RunOptions opts)
             });
 
         Console.WriteLine("[Raven.Bench] Preload complete.");
+    }
+
+    private static async Task WaitForNonStaleIndexesAsync(string serverUrl, string databaseName)
+    {
+        Console.WriteLine("[Raven.Bench] Waiting for indexes to become non-stale...");
+
+        using var store = new DocumentStore
+        {
+            Urls = new[] { serverUrl },
+            Database = databaseName
+        };
+        store.Initialize();
+
+        var maxWait = TimeSpan.FromMinutes(10);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        while (sw.Elapsed < maxWait)
+        {
+            var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
+            var staleIndexes = stats.Indexes.Where(i => i.IsStale).ToList();
+
+            if (staleIndexes.Count == 0)
+            {
+                Console.WriteLine($"[Raven.Bench] All indexes are non-stale (waited {sw.Elapsed.TotalSeconds:F1}s)");
+                return;
+            }
+
+            Console.WriteLine($"[Raven.Bench] {staleIndexes.Count} stale index(es), waiting... ({sw.Elapsed.TotalSeconds:F0}s elapsed)");
+            await Task.Delay(2000);
+        }
+
+        Console.WriteLine($"[Raven.Bench] WARNING: Indexes still stale after {maxWait.TotalMinutes} minutes");
+    }
+
+    private static async Task<string> ImportDatasetAsync(RunOptions opts)
+    {
+        Console.WriteLine($"[Raven.Bench] Dataset import requested: {opts.Dataset}");
+
+        var datasetManager = new Dataset.DatasetManager(opts.DatasetCacheDir);
+
+        // Determine database name and dataset size based on profile or custom size
+        string targetDatabase;
+        int datasetSize;
+
+        if (!string.IsNullOrEmpty(opts.DatasetProfile))
+        {
+            // Use predefined profile
+            var profile = Enum.Parse<Dataset.DatasetProfile>(opts.DatasetProfile, ignoreCase: true);
+            targetDatabase = Dataset.KnownDatasets.GetDatabaseName(profile);
+            datasetSize = Dataset.KnownDatasets.GetDatasetSize(profile);
+            Console.WriteLine($"[Raven.Bench] Using dataset profile '{opts.DatasetProfile}': {targetDatabase} (~{(datasetSize == 0 ? 50 : datasetSize + 2)}GB)");
+        }
+        else if (opts.DatasetSize > 0 || opts.DatasetSize == 0)
+        {
+            // Use custom size - generate database name based on size
+            targetDatabase = Dataset.KnownDatasets.GetDatabaseNameForSize(opts.DatasetSize);
+            datasetSize = opts.DatasetSize;
+            Console.WriteLine($"[Raven.Bench] Using custom dataset size: {targetDatabase} (~{(datasetSize == 0 ? 50 : datasetSize + 2)}GB)");
+        }
+        else
+        {
+            // Fallback to user-specified database name
+            targetDatabase = opts.Database;
+            datasetSize = 0;
+        }
+
+        // Check if dataset already exists
+        if (opts.DatasetSkipIfExists)
+        {
+            var exists = await datasetManager.IsStackOverflowDatasetImportedAsync(opts.Url, targetDatabase, expectedMinDocuments: 10000);
+            if (exists)
+            {
+                Console.WriteLine($"[Raven.Bench] Dataset appears to already exist in database '{targetDatabase}'. Skipping import.");
+                Console.WriteLine($"[Raven.Bench] Use --dataset-skip-if-exists=false to force re-import.");
+                return targetDatabase; // Return database name even if skipping import
+            }
+        }
+
+        // Get dataset info
+        Dataset.DatasetInfo? dataset;
+        if (datasetSize > 0)
+        {
+            // Partial dataset
+            Console.WriteLine($"[Raven.Bench] Importing partial dataset with {datasetSize} post dump files to '{targetDatabase}'");
+            dataset = Dataset.KnownDatasets.StackOverflowPartial(datasetSize);
+        }
+        else
+        {
+            // Full dataset
+            Console.WriteLine($"[Raven.Bench] Importing full dataset to '{targetDatabase}'");
+            dataset = Dataset.KnownDatasets.GetByName(opts.Dataset!);
+        }
+
+        if (dataset == null)
+        {
+            throw new ArgumentException($"Unknown dataset: {opts.Dataset}. Supported datasets: stackoverflow");
+        }
+
+        // Download and import to the target database
+        await datasetManager.ImportDatasetAsync(dataset, opts.Url, targetDatabase);
+
+        // Return the target database name so the runner can use it
+        return targetDatabase;
     }
 
     private static string IdFor(int i) => $"bench/{i:D8}";

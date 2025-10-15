@@ -59,6 +59,13 @@ public sealed class RunOptions
     public int BulkBatchSize { get; init; } = 100;
     public int BulkDepth { get; init; } = 1;
 
+    // Dataset management
+    public string? Dataset { get; init; }
+    public string? DatasetProfile { get; init; } // small, half, full - automatically sets database name and size
+    public int DatasetSize { get; init; } = 0; // 0 = full dataset, N = use N post dump files for partial (overridden by DatasetProfile)
+    public bool DatasetSkipIfExists { get; init; } = true; // Skip import if dataset appears to exist
+    public string? DatasetCacheDir { get; init; }
+
     // Legacy SNMP properties for backwards compatibility - prefer using Snmp property
     public bool SnmpEnabled => Snmp.Enabled;
     public int SnmpPort => Snmp.Port;
@@ -72,5 +79,7 @@ public enum WorkloadProfile
     Writes,
     Reads,
     QueryById,
-    BulkWrites
+    BulkWrites,
+    StackOverflowReads,
+    StackOverflowQueries
 }
