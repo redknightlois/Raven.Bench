@@ -134,12 +134,21 @@ public sealed class RavenClientTransport : ITransport
                 case QueryOperation queryOp:
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
-                        // Run a parameterized raw query matching the raw HTTP profile
-                        var q = s.Advanced.AsyncRawQuery<object>("from @all_docs where id() = $id")
-                            .AddParameter("id", queryOp.Id);
-                        var _ = await q.ToListAsync(ct).ConfigureAwait(false);
+                        // Build parameterized query from QueryOperation
+                        var query = s.Advanced.AsyncRawQuery<object>(queryOp.QueryText);
+
+                        // Add all parameters
+                        foreach (var param in queryOp.Parameters)
+                        {
+                            query = query.AddParameter(param.Key, param.Value);
+                        }
+
+                        // Execute query - client transport focuses on functional correctness
+                        // Query metadata (index name, staleness) is captured by RawHttpTransport
+                        var results = await query.ToListAsync(ct).ConfigureAwait(false);
+
+                        return new TransportResult(300, 4096, resultCount: results.Count);
                     }
-                    return new TransportResult(300, 4096);
                 case BulkInsertOperation<string> bulkOp:
                     using (var bulkInsert = _store.BulkInsert())
                     {

@@ -25,6 +25,11 @@ public sealed class StackOverflowQueryWorkload : IWorkload
     public OperationBase NextOperation(Random rng)
     {
         var questionId = _questionIds[rng.Next(_questionIds.Length)];
-        return new QueryOperation { Id = $"questions/{questionId}" };
+        var docId = $"questions/{questionId}";
+        return new QueryOperation
+        {
+            QueryText = "from @all_docs where id() = $id",
+            Parameters = new Dictionary<string, object?> { ["id"] = docId }
+        };
     }
 }

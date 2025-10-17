@@ -124,8 +124,22 @@ public class BenchmarkRunner(RunOptions opts)
             }
         }
 
+        // Discover workload metadata for QueryUsersByName profile (after dataset import and index wait)
+        UsersWorkloadMetadata? usersMetadata = null;
+        if (opts.Profile == WorkloadProfile.QueryUsersByName)
+        {
+            usersMetadata = await UsersWorkloadHelper.DiscoverOrLoadMetadataAsync(
+                opts.Url,
+                effectiveDatabase);
+
+            if (usersMetadata == null)
+            {
+                throw new InvalidOperationException("Users metadata not available. Ensure Users dataset is imported and indexes are not stale.");
+            }
+        }
+
         // Build workload with discovered metadata
-        var workload = BuildWorkload(opts, stackOverflowMetadata);
+        var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata);
 
         if (opts.Preload > 0)
             await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
@@ -404,10 +418,10 @@ public class BenchmarkRunner(RunOptions opts)
         return res;
     }
 
-    private static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata)
+    private static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, UsersWorkloadMetadata? usersMetadata)
     {
         if (opts.Profile == WorkloadProfile.Unspecified)
-            throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id.");
+            throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id|query-users-by-name.");
 
         if (opts.Profile != WorkloadProfile.Mixed)
         {
@@ -437,6 +451,7 @@ public class BenchmarkRunner(RunOptions opts)
             WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, startingKey: opts.Preload),
             WorkloadProfile.StackOverflowReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
             WorkloadProfile.StackOverflowQueries => new StackOverflowQueryWorkload(stackOverflowMetadata!),
+            WorkloadProfile.QueryUsersByName => new UsersByNameQueryWorkload(usersMetadata!),
             _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
         };
     }
@@ -640,6 +655,14 @@ public class BenchmarkRunner(RunOptions opts)
 
         long success = 0, errors = 0, bytesOut = 0, bytesIn = 0;
 
+        // Query metadata tracking (thread-safe)
+        long queryOps = 0;
+        var indexUsage = new ConcurrentDictionary<string, long>();
+        long totalResults = 0;
+        int minResultCount = int.MaxValue;
+        int maxResultCount = int.MinValue;
+        long staleQueries = 0;
+
         var hist = new LatencyRecorder(recordLatencies: step.Record);
 
         context.CpuTracker.Reset();
@@ -672,6 +695,41 @@ public class BenchmarkRunner(RunOptions opts)
                             Interlocked.Increment(ref success);
                             Interlocked.Add(ref bytesOut, res.BytesOut);
                             Interlocked.Add(ref bytesIn, res.BytesIn);
+
+                            // Capture query metadata if available
+                            if (res.IndexName != null || res.ResultCount.HasValue || res.IsStale.HasValue)
+                            {
+                                Interlocked.Increment(ref queryOps);
+
+                                if (res.IndexName != null)
+                                {
+                                    indexUsage.AddOrUpdate(res.IndexName, 1, (_, count) => count + 1);
+                                }
+
+                                if (res.ResultCount.HasValue)
+                                {
+                                    Interlocked.Add(ref totalResults, res.ResultCount.Value);
+
+                                    // Update min/max using lock-free compare-and-swap pattern
+                                    int currentMin, currentMax;
+                                    do
+                                    {
+                                        currentMin = minResultCount;
+                                    } while (res.ResultCount.Value < currentMin &&
+                                             Interlocked.CompareExchange(ref minResultCount, res.ResultCount.Value, currentMin) != currentMin);
+
+                                    do
+                                    {
+                                        currentMax = maxResultCount;
+                                    } while (res.ResultCount.Value > currentMax &&
+                                             Interlocked.CompareExchange(ref maxResultCount, res.ResultCount.Value, currentMax) != currentMax);
+                                }
+
+                                if (res.IsStale == true)
+                                {
+                                    Interlocked.Increment(ref staleQueries);
+                                }
+                            }
                         }
                         else
                         {
@@ -708,6 +766,37 @@ public class BenchmarkRunner(RunOptions opts)
         var linkBps = opts.LinkMbps * 1_000_000.0;
         var netUtil = linkBps > 0 ? netBps / linkBps : 0.0;
 
+        // Prepare query metadata for StepResult if any query operations were tracked
+        IReadOnlyDictionary<string, long>? finalIndexUsage = null;
+        List<IndexUsageSummary>? topIndexes = null;
+        int? finalMinResultCount = null;
+        int? finalMaxResultCount = null;
+        double? finalAvgResultCount = null;
+
+        if (queryOps > 0)
+        {
+            finalIndexUsage = new Dictionary<string, long>(indexUsage);
+
+            // Build top-N index summary (top 5 indexes by usage)
+            topIndexes = indexUsage
+                .OrderByDescending(kvp => kvp.Value)
+                .Take(5)
+                .Select(kvp => new IndexUsageSummary
+                {
+                    IndexName = kvp.Key,
+                    UsageCount = kvp.Value,
+                    UsagePercent = queryOps > 0 ? (double)kvp.Value / queryOps * 100.0 : null
+                })
+                .ToList();
+
+            if (minResultCount != int.MaxValue)
+                finalMinResultCount = minResultCount;
+            if (maxResultCount != int.MinValue)
+                finalMaxResultCount = maxResultCount;
+            if (queryOps > 0)
+                finalAvgResultCount = (double)totalResults / queryOps;
+        }
+
         var stepResult = new StepResult
         {
             Concurrency = step.Concurrency,
@@ -742,6 +831,16 @@ public class BenchmarkRunner(RunOptions opts)
             SnmpIoWriteBytesPerSec = serverMetrics.SnmpIoWriteBytesPerSec,
             ServerSnmpRequestsPerSec = serverMetrics.ServerSnmpRequestsPerSec,
             SnmpErrorsPerSec = serverMetrics.SnmpErrorsPerSec,
+
+            // Query metadata (populated for query workload profiles)
+            QueryOperations = queryOps > 0 ? queryOps : null,
+            IndexUsage = finalIndexUsage,
+            TopIndexes = topIndexes,
+            MinResultCount = finalMinResultCount,
+            MaxResultCount = finalMaxResultCount,
+            AvgResultCount = finalAvgResultCount,
+            TotalResults = queryOps > 0 ? totalResults : null,
+            StaleQueryCount = staleQueries > 0 ? staleQueries : null,
         };
         
         return (stepResult, hist);

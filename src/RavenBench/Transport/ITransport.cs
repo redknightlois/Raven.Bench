@@ -6,12 +6,31 @@ using RavenBench.Util;
 
 namespace RavenBench.Transport;
 
-public readonly struct TransportResult(long bytesOut, long bytesIn, string? errorDetails = null)
+/// <summary>
+/// Represents the result of a transport operation execution.
+/// Includes byte counts, error details, and optional query-specific metadata.
+/// </summary>
+public readonly struct TransportResult(long bytesOut, long bytesIn, string? errorDetails = null, string? indexName = null, int? resultCount = null, bool? isStale = null)
 {
     public long BytesOut { get; } = bytesOut;
     public long BytesIn { get; } = bytesIn;
     public string? ErrorDetails { get; } = errorDetails;
     public bool IsSuccess => ErrorDetails == null;
+
+    /// <summary>
+    /// Index name used by the query (populated for query operations).
+    /// </summary>
+    public string? IndexName { get; } = indexName;
+
+    /// <summary>
+    /// Number of results returned (populated for query operations).
+    /// </summary>
+    public int? ResultCount { get; } = resultCount;
+
+    /// <summary>
+    /// Whether the index was stale at query time (populated for query operations).
+    /// </summary>
+    public bool? IsStale { get; } = isStale;
 }
 
 public readonly struct CalibrationResult(double ttfbMs, double totalMs, long bytesDown, Version httpVersion, bool isSuccess = true, string? errorDetails = null)

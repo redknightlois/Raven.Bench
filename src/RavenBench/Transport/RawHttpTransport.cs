@@ -72,7 +72,7 @@ public sealed class RawHttpTransport : ITransport
             ReadOperation readOp => await GetAsync(readOp.Id, ct).ConfigureAwait(false),
             InsertOperation<string> insertOp => await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false),
             UpdateOperation<string> updateOp => await PutAsyncInternal(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false),
-            QueryOperation queryOp => await PostQueryAsync(queryOp.Id, ct).ConfigureAwait(false),
+            QueryOperation queryOp => await PostQueryAsync(queryOp, ct).ConfigureAwait(false),
             BulkInsertOperation<string> bulkOp => await PostBulkDocsAsync(bulkOp.Documents, ct).ConfigureAwait(false),
             _ => new TransportResult(0, 0)
         };
@@ -84,7 +84,7 @@ public sealed class RawHttpTransport : ITransport
         await PutAsyncInternal(id, document, cts.Token).ConfigureAwait(false);
     }
 
-    private async Task<TransportResult> PostQueryAsync(string id, CancellationToken ct)
+    private async Task<TransportResult> PostQueryAsync(QueryOperation queryOp, CancellationToken ct)
     {
         try
         {
@@ -95,12 +95,15 @@ public sealed class RawHttpTransport : ITransport
             req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
             req.Headers.ExpectContinue = false;
 
-            // RavenDB parameterized query against @all_docs by id
-            var queryPayload = JsonSerializer.Serialize(new
+            // Build parameterized query payload
+            var payload = new
             {
-                Query = "from @all_docs where id() = $id",
-                QueryParameters = new { id }
-            });
+                Query = queryOp.QueryText,
+                QueryParameters = queryOp.Parameters,
+                MetadataOnly = false
+            };
+
+            var queryPayload = JsonSerializer.Serialize(payload);
             req.Content = new StringContent(queryPayload, Encoding.UTF8, "application/json");
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -115,26 +118,44 @@ public sealed class RawHttpTransport : ITransport
                     return new TransportResult(0, 0, errorDetails);
                 }
 
-                long bytesIn = 0;
-                if (resp.Content.Headers.ContentLength.HasValue)
-                {
-                    bytesIn = resp.Content.Headers.ContentLength.Value;
-                }
-                else
-                {
-                    await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-                    if (_bufferPool.TryDequeue(out var buffer) == false)
-                        buffer = new byte[32768];
-                    int totalRead = 0, bytesRead;
-                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
-                        totalRead += bytesRead;
-                    bytesIn = totalRead;
-                    _bufferPool.TryEnqueue(buffer);
-                }
+                // Parse response to extract query metadata (IndexName, ResultCount, IsStale)
+                // Always buffer the response to accurately measure bytes and avoid stream consumption issues
+                await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
 
+                if (_bufferPool.TryDequeue(out var buffer) == false)
+                    buffer = new byte[32768];
+
+                using var ms = new MemoryStream();
+                int bytesRead;
+                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                {
+                    ms.Write(buffer, 0, bytesRead);
+                }
+                _bufferPool.TryEnqueue(buffer);
+
+                long bytesIn = ms.Length;
+                ms.Position = 0;
+
+                // Parse JSON from buffered response
+                using var doc = await JsonDocument.ParseAsync(ms, cancellationToken: ct).ConfigureAwait(false);
+
+                var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
+                    ? indexProp.GetString()
+                    : null;
+
+                var resultCount = doc.RootElement.TryGetProperty("Results", out var resultsProp) && resultsProp.ValueKind == JsonValueKind.Array
+                    ? resultsProp.GetArrayLength()
+                    : (int?)null;
+
+                var isStale = doc.RootElement.TryGetProperty("IsStale", out var staleProp)
+                    ? staleProp.GetBoolean()
+                    : (bool?)null;
+
+                // Calculate byte counts
                 long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
                 bytesOut += 400; // headers approx
-                return new TransportResult(bytesOut, bytesIn);
+
+                return new TransportResult(bytesOut, bytesIn, indexName: indexName, resultCount: resultCount, isStale: isStale);
             }
         }
         catch (TaskCanceledException)

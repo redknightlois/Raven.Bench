@@ -82,7 +82,7 @@ internal static class CliParsing
     private static WorkloadProfile ParseProfile(string profile)
     {
         if (string.IsNullOrWhiteSpace(profile))
-            throw new ArgumentException("--profile is required. Valid options: mixed, writes, reads, query-by-id");
+            throw new ArgumentException("--profile is required. Valid options: mixed, writes, reads, query-by-id, query-users-by-name");
 
         return profile.Trim().ToLowerInvariant() switch
         {
@@ -93,7 +93,8 @@ internal static class CliParsing
             "bulk-writes" or "bulkwrites" => WorkloadProfile.BulkWrites,
             "stackoverflow-reads" or "so-reads" => WorkloadProfile.StackOverflowReads,
             "stackoverflow-queries" or "so-queries" => WorkloadProfile.StackOverflowQueries,
-            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries")
+            "query-users-by-name" or "queryusersbyname" => WorkloadProfile.QueryUsersByName,
+            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")
         };
     }
 
