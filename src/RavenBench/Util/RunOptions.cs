@@ -81,5 +81,6 @@ public enum WorkloadProfile
     QueryById,
     BulkWrites,
     StackOverflowReads,
-    StackOverflowQueries
+    StackOverflowQueries,
+    QueryUsersByName
 }

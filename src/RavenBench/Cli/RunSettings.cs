@@ -27,7 +27,7 @@ public sealed class RunSettings : CommandSettings
     public string? Updates { get; init; }
 
     [CommandOption("--profile")]
-    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes")]
+    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")]
     public string? Profile { get; init; }
 
     [CommandOption("--bulk-batch-size")]

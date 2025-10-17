@@ -124,4 +124,24 @@ public sealed class StepResult
     public double? SnmpErrorsPerSec { get; init; }
 
     public string? Reason { get; set; }
+
+    // Query metadata (populated for query workload profiles)
+    public long? QueryOperations { get; init; }
+    public IReadOnlyDictionary<string, long>? IndexUsage { get; init; }
+    public List<IndexUsageSummary>? TopIndexes { get; init; }
+    public int? MinResultCount { get; init; }
+    public int? MaxResultCount { get; init; }
+    public double? AvgResultCount { get; init; }
+    public long? TotalResults { get; init; }
+    public long? StaleQueryCount { get; init; }
+}
+
+/// <summary>
+/// Summarizes index usage for a single index (used in top-N summaries).
+/// </summary>
+public sealed class IndexUsageSummary
+{
+    public required string IndexName { get; init; }
+    public required long UsageCount { get; init; }
+    public double? UsagePercent { get; init; }
 }

@@ -58,6 +58,16 @@ namespace RavenBench.Reporting
             new("SnmpIoWriteBytesPerSec", summary => summary.Options.SnmpEnabled, s => s.SnmpIoWriteBytesPerSec),
             new("ServerSnmpRequestsPerSec", summary => summary.Options.SnmpEnabled, s => s.ServerSnmpRequestsPerSec),
             new("SnmpErrorsPerSec", summary => summary.Options.SnmpEnabled && summary.Options.Snmp.Profile == SnmpProfile.Extended, s => s.SnmpErrorsPerSec),
+
+            // Query metadata - visible when any step has query metadata
+            new("QueryOperations", summary => summary.Steps.Any(s => s.QueryOperations.HasValue), s => s.QueryOperations),
+            new("MinResultCount", summary => summary.Steps.Any(s => s.MinResultCount.HasValue), s => s.MinResultCount),
+            new("MaxResultCount", summary => summary.Steps.Any(s => s.MaxResultCount.HasValue), s => s.MaxResultCount),
+            new("AvgResultCount", summary => summary.Steps.Any(s => s.AvgResultCount.HasValue), s => s.AvgResultCount),
+            new("TotalResults", summary => summary.Steps.Any(s => s.TotalResults.HasValue), s => s.TotalResults),
+            new("StaleQueryCount", summary => summary.Steps.Any(s => s.StaleQueryCount.HasValue), s => s.StaleQueryCount),
+            new("PrimaryIndex", summary => summary.Steps.Any(s => s.IndexUsage != null && s.IndexUsage.Count > 0), s => s.IndexUsage?.OrderByDescending(kvp => kvp.Value).FirstOrDefault().Key),
+            new("PrimaryIndexUsage", summary => summary.Steps.Any(s => s.IndexUsage != null && s.IndexUsage.Count > 0), s => s.IndexUsage?.OrderByDescending(kvp => kvp.Value).FirstOrDefault().Value),
         };
 
         public static List<CsvField> GetVisibleFields(BenchmarkSummary summary)

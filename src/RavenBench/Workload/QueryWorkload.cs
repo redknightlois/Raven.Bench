@@ -17,7 +17,12 @@ public sealed class QueryWorkload : IWorkload
     public OperationBase NextOperation(Random rng)
     {
         var k = _distribution.NextKey(rng, (int)Math.Min(_maxKey, int.MaxValue));
-        return new QueryOperation { Id = IdFor(k) };
+        var docId = IdFor(k);
+        return new QueryOperation
+        {
+            QueryText = "from @all_docs where id() = $id",
+            Parameters = new Dictionary<string, object?> { ["id"] = docId }
+        };
     }
 
     private static string IdFor(long i) => $"bench/{i:D8}";
