@@ -43,7 +43,8 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `--warmup <duration>` and `--duration <duration>`: per-step timing, e.g., `20s`, `60s`.
   - `--distribution <uniform|zipfian|latest>`: key selection strategy (default: `uniform`).
   - `--doc-size <bytes|KB|MB>`: payload size for writes/updates (default: `1KB`).
-  - `--profile <mixed|writes|reads|query-by-id|bulk-writes|stackoverflow-reads|stackoverflow-queries>`: required. Selects which workload to run.
+  - `--profile <mixed|writes|reads|query-by-id|bulk-writes|stackoverflow-reads|stackoverflow-queries|query-users-by-name>`: required. Selects which workload to run.
+   - `--query-profile <equality|range|text-prefix|text-search|text-search-rare|text-search-common|text-search-mixed>`: query type for query workloads (default: `equality`). Only valid with query profiles.
   - `--reads/--writes/--updates <weight|percent>`: only valid with `--profile mixed`; values normalize to 100%.
   - `--dataset <stackoverflow>`: Auto-downloads and imports dataset before benchmark (optional, required for StackOverflow profiles).
   - `--dataset-profile <small|half|full>`: Predefined dataset sizes with automatic database naming:
@@ -97,6 +98,11 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-queries --dataset stackoverflow --dataset-profile half --concurrency 8..128x2`
 - StackOverflow with custom size (auto-imports to StackOverflow-12GB with 10 post dumps)
   - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-reads --dataset stackoverflow --dataset-size 10 --concurrency 8..256x2`
+- StackOverflow text search queries (auto-imports to StackOverflow-5GB)
+   - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-queries --query-profile text-search --dataset stackoverflow --dataset-profile small --concurrency 8..128x2`
+   - Text search variants: `text-search-rare` (high selectivity), `text-search-common` (low selectivity), `text-search-mixed` (50/50 mix)
+- Users range queries (requires Users dataset)
+  - `Raven.Bench run --url http://localhost:8080 --profile query-users-by-name --query-profile range --dataset stackoverflow --dataset-profile small --concurrency 8..128x2`
 - HTTP/3 (strict) or auto negotiate
   - Strict HTTP/3: `--http-version 3 --strict-http-version`
   - Negotiable HTTP/2: `--http-version http2`
@@ -120,7 +126,8 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `--profile query-by-id`: parameterized query by id only. Requires `--preload N`. Raw HTTP posts to `/databases/<db>/queries` with `from @all_docs where id() = $id`. Measures query endpoint overhead vs. direct reads.
   - `--profile bulk-writes`: bulk insert batches via `/bulk_docs` endpoint. Use `--bulk-batch-size` (default: 100) and `--bulk-depth` (default: 1) to control batch size and parallelism. Mirrors `batch-writes.lua` behavior.
   - `--profile stackoverflow-reads` (or `so-reads`): Random reads from StackOverflow dataset: 50% `questions/{1..N}`, 50% `users/{1..M}`. Use `--so-max-question-id` (default: 12350817) and `--so-max-user-id` (default: 5987285). Requires StackOverflow dataset. Mirrors `full-random-reads.lua`.
-  - `--profile stackoverflow-queries` (or `so-queries`): Parameterized queries against questions collection only. Use `--so-max-question-id`. Requires StackOverflow dataset. Mirrors `consistent-questions.lua`.
+   - `--profile stackoverflow-queries` (or `so-queries`): Parameterized queries against questions collection. Use `--query-profile` to select query type (equality by ID, text-prefix, text-search variants for different selectivity). Requires StackOverflow dataset.
+  - `--profile query-users-by-name`: Parameterized queries against users collection. Use `--query-profile` to select query type (equality by name or range by reputation). Requires Users dataset.
 
 **HTTP Version and Compression**
 - Version negotiation

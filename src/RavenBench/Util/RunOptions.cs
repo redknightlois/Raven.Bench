@@ -56,6 +56,10 @@ public sealed class RunOptions
     // Required workload profile selection
     public WorkloadProfile Profile { get; init; } = WorkloadProfile.Unspecified;
 
+    // Query profile selection (equality, range, text) for query workloads
+    // Defaults to Equality for backward compatibility
+    public QueryProfile QueryProfile { get; init; } = QueryProfile.Equality;
+
     public int BulkBatchSize { get; init; } = 100;
     public int BulkDepth { get; init; } = 1;
 
@@ -83,4 +87,46 @@ public enum WorkloadProfile
     StackOverflowReads,
     StackOverflowQueries,
     QueryUsersByName
+}
+
+/// <summary>
+/// Query profile type for parameterized query workloads.
+/// Determines which query template to use (equality, range, or text search).
+/// </summary>
+public enum QueryProfile
+{
+    /// <summary>
+    /// Equality queries (e.g., WHERE Name = $name)
+    /// </summary>
+    Equality = 0,
+
+    /// <summary>
+    /// Range queries (e.g., WHERE Reputation BETWEEN $min AND $max)
+    /// </summary>
+    Range,
+
+    /// <summary>
+    /// Prefix text search (e.g., WHERE startsWith(Title, $prefix))
+    /// </summary>
+    TextPrefix,
+
+    /// <summary>
+    /// Full-text search (e.g., WHERE search(Title, $term))
+    /// </summary>
+    TextSearch,
+
+    /// <summary>
+    /// Full-text search using only rare terms (high selectivity)
+    /// </summary>
+    TextSearchRare,
+
+    /// <summary>
+    /// Full-text search using only common terms (low selectivity)
+    /// </summary>
+    TextSearchCommon,
+
+    /// <summary>
+    /// Full-text search mixing rare and common terms (50/50)
+    /// </summary>
+    TextSearchMixed
 }

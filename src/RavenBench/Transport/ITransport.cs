@@ -10,7 +10,7 @@ namespace RavenBench.Transport;
 /// Represents the result of a transport operation execution.
 /// Includes byte counts, error details, and optional query-specific metadata.
 /// </summary>
-public readonly struct TransportResult(long bytesOut, long bytesIn, string? errorDetails = null, string? indexName = null, int? resultCount = null, bool? isStale = null)
+public readonly struct TransportResult(long bytesOut, long bytesIn, string? errorDetails = null, string? indexName = null, int? resultCount = null, bool? isStale = null, double? queryDurationMs = null)
 {
     public long BytesOut { get; } = bytesOut;
     public long BytesIn { get; } = bytesIn;
@@ -31,6 +31,12 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     /// Whether the index was stale at query time (populated for query operations).
     /// </summary>
     public bool? IsStale { get; } = isStale;
+
+    /// <summary>
+    /// Query execution duration in milliseconds as reported by RavenDB (populated for query operations).
+    /// This is the server-side query execution time, not the full round-trip time.
+    /// </summary>
+    public double? QueryDurationMs { get; } = queryDurationMs;
 }
 
 public readonly struct CalibrationResult(double ttfbMs, double totalMs, long bytesDown, Version httpVersion, bool isSuccess = true, string? errorDetails = null)

@@ -12,6 +12,7 @@ using RavenBench.Util;
 using RavenBench.Diagnostics;
 using RavenBench.Metrics.Snmp;
 using System.Text.Json;
+using System.Text;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -27,6 +28,7 @@ namespace RavenBench.Transport;
 public sealed class RavenClientTransport : ITransport
 {
     private readonly IDocumentStore _store;
+    private readonly string _db;
     private readonly string _compressionMode;
     private readonly Version _httpVersion;
 
@@ -36,6 +38,7 @@ public sealed class RavenClientTransport : ITransport
 
     public RavenClientTransport(string url, string database, string compressionMode, Version httpVersion)
     {
+        _db = database;
         _compressionMode = compressionMode.ToLowerInvariant();
         _httpVersion = httpVersion;
 
@@ -103,13 +106,17 @@ public sealed class RavenClientTransport : ITransport
             switch (op)
             {
                 case ReadOperation readOp:
+                {
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
-                        var _ = await s.LoadAsync<object>(readOp.Id, ct).ConfigureAwait(false);
+                        var doc = await s.LoadAsync<object>(readOp.Id, ct).ConfigureAwait(false);
+                        long bytesIn = EstimateDocumentSize(doc);
+                        long headerBytes = EstimateHeaderSize("GET", $"/databases/{_db}/docs?id={Uri.EscapeDataString(readOp.Id)}");
+                        return new TransportResult(headerBytes, bytesIn);
                     }
-                    // bytes unknown; estimate ~doc size
-                    return new TransportResult(300, 4096);
+                }
                 case InsertOperation<string> insertOp:
+                {
                     // Store raw JSON to maintain consistency with RawHttpTransport
                     using (var session = _store.OpenAsyncSession())
                     {
@@ -119,8 +126,11 @@ public sealed class RavenClientTransport : ITransport
                         await session.SaveChangesAsync(ct).ConfigureAwait(false);
                     }
                     var outBytes = insertOp.Payload?.Length ?? 0;
-                    return new TransportResult(outBytes + 300, 256);
+                    long headerBytes = EstimateHeaderSize("PUT", $"/databases/{_db}/docs?id={Uri.EscapeDataString(insertOp.Id)}", outBytes);
+                    return new TransportResult(headerBytes + outBytes, 256);
+                }
                 case UpdateOperation<string> updateOp:
+                {
                     // Store raw JSON to maintain consistency with RawHttpTransport
                     using (var session = _store.OpenAsyncSession())
                     {
@@ -130,8 +140,11 @@ public sealed class RavenClientTransport : ITransport
                         await session.SaveChangesAsync(ct).ConfigureAwait(false);
                     }
                     var updateOutBytes = updateOp.Payload?.Length ?? 0;
-                    return new TransportResult(updateOutBytes + 300, 256);
+                    long headerBytes = EstimateHeaderSize("PUT", $"/databases/{_db}/docs?id={Uri.EscapeDataString(updateOp.Id)}", updateOutBytes);
+                    return new TransportResult(headerBytes + updateOutBytes, 256);
+                }
                 case QueryOperation queryOp:
+                {
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
                         // Build parameterized query from QueryOperation
@@ -143,13 +156,29 @@ public sealed class RavenClientTransport : ITransport
                             query = query.AddParameter(param.Key, param.Value);
                         }
 
-                        // Execute query - client transport focuses on functional correctness
-                        // Query metadata (index name, staleness) is captured by RawHttpTransport
-                        var results = await query.ToListAsync(ct).ConfigureAwait(false);
+                        // Execute query and capture statistics
+                        var results = await query.Statistics(out var stats).ToListAsync(ct).ConfigureAwait(false);
 
-                        return new TransportResult(300, 4096, resultCount: results.Count);
+                        // Estimate bytes out: query payload + headers
+                        long queryPayloadBytes = EstimateQueryPayloadSize(queryOp);
+                        long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/queries", queryPayloadBytes);
+                        long bytesOut = queryPayloadBytes + headerBytes;
+
+                        // Estimate bytes in: serialize results and add metadata overhead
+                        long bytesIn = EstimateQueryResponseSize(results, stats);
+
+                        return new TransportResult(
+                            bytesOut: bytesOut,
+                            bytesIn: bytesIn,
+                            indexName: stats.IndexName,
+                            resultCount: results.Count,
+                            isStale: stats.IsStale,
+                            queryDurationMs: stats.DurationInMs
+                        );
                     }
+                }
                 case BulkInsertOperation<string> bulkOp:
+                {
                     using (var bulkInsert = _store.BulkInsert())
                     {
                         foreach (var docToWrite in bulkOp.Documents)
@@ -159,7 +188,9 @@ public sealed class RavenClientTransport : ITransport
                         }
                     }
                     var bulkOutBytes = bulkOp.Documents.Sum(d => (d.Document?.Length ?? 0) + 50);
-                    return new TransportResult(bulkOutBytes, 256 * bulkOp.Documents.Count);
+                    long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/bulk_docs", bulkOutBytes);
+                    return new TransportResult(headerBytes + bulkOutBytes, 256 * bulkOp.Documents.Count);
+                }
                 default:
                     return new TransportResult(0, 0);
             }
@@ -457,6 +488,124 @@ public sealed class RavenClientTransport : ITransport
             return null;
 
         return parts[1].ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Estimates the size of HTTP headers for a request, similar to RawHttpTransport.CalculateHeaderSize.
+    /// Includes request line, standard headers, and blank line.
+    /// </summary>
+    private long EstimateHeaderSize(string method, string path, long contentLength = 0)
+    {
+        // Request line: "METHOD /path HTTP/1.1\r\n"
+        string requestLine = $"{method} {path} HTTP/1.1\r\n";
+        long size = Encoding.UTF8.GetByteCount(requestLine);
+
+        // Standard headers (approximated)
+        var headers = new[]
+        {
+            "Accept: application/json",
+            "Content-Type: application/json",
+            $"Content-Length: {contentLength}",
+            "User-Agent: RavenDB-Client",
+            "Connection: keep-alive"
+        };
+
+        foreach (var header in headers)
+        {
+            size += Encoding.UTF8.GetByteCount($"{header}\r\n");
+        }
+
+        // Blank line after headers
+        size += Encoding.UTF8.GetByteCount("\r\n");
+
+        return size;
+    }
+
+    /// <summary>
+    /// Estimates the size of the query JSON payload sent to RavenDB server.
+    /// This includes the query text and serialized parameters.
+    /// </summary>
+    private static long EstimateQueryPayloadSize(QueryOperation queryOp)
+    {
+        // Approximate JSON structure: {"Query":"...", "QueryParameters":{...}}
+        long size = Encoding.UTF8.GetByteCount("{\"Query\":\"") +
+                    Encoding.UTF8.GetByteCount(queryOp.QueryText) +
+                    Encoding.UTF8.GetByteCount("\",\"QueryParameters\":{");
+
+        bool first = true;
+        foreach (var param in queryOp.Parameters)
+        {
+            if (!first) size += Encoding.UTF8.GetByteCount(",");
+            first = false;
+
+            // Parameter key and value
+            size += Encoding.UTF8.GetByteCount($"\"{param.Key}\":");
+            if (param.Value is string strValue)
+            {
+                size += Encoding.UTF8.GetByteCount($"\"{strValue}\"");
+            }
+            else
+            {
+                // For non-string values, approximate
+                size += Encoding.UTF8.GetByteCount(param.Value?.ToString() ?? "null");
+            }
+        }
+
+        size += Encoding.UTF8.GetByteCount("}}");
+        return size;
+    }
+
+    /// <summary>
+    /// Estimates the size of the query response JSON payload received from RavenDB server.
+    /// This includes the results array, metadata fields (IndexName, IsStale, DurationInMs), and JSON overhead.
+    /// </summary>
+    private static long EstimateQueryResponseSize(List<object> results, QueryStatistics stats)
+    {
+        // Serialize results to estimate their JSON size
+        long resultsSize = 0;
+        try
+        {
+            var resultsJson = JsonSerializer.Serialize(results);
+            resultsSize = Encoding.UTF8.GetByteCount(resultsJson);
+        }
+        catch
+        {
+            // Fallback: estimate based on count * average document size
+            resultsSize = results.Count * 512; // Rough estimate for average document
+        }
+
+        // Add metadata fields size
+        long metadataSize = 0;
+        if (stats.IndexName != null)
+            metadataSize += Encoding.UTF8.GetByteCount($"\"IndexName\":\"{stats.IndexName}\",");
+        metadataSize += Encoding.UTF8.GetByteCount($"\"IsStale\":{stats.IsStale.ToString().ToLower()},");
+        if (stats.DurationInMs > 0)
+            metadataSize += Encoding.UTF8.GetByteCount($"\"DurationInMs\":{stats.DurationInMs},");
+
+        // JSON structure overhead: {"Results":[...], "IndexName":..., "IsStale":..., "DurationInMs":...}
+        long overhead = Encoding.UTF8.GetByteCount("{\"Results\":[],\"IndexName\":\"\",\"IsStale\":false,\"DurationInMs\":0}");
+
+        return resultsSize + metadataSize + overhead;
+    }
+
+    /// <summary>
+    /// Estimates the size of a single document in JSON format.
+    /// </summary>
+    private static long EstimateDocumentSize(object? doc)
+    {
+        if (doc == null)
+            return 0;
+
+        try
+        {
+            var docJson = JsonSerializer.Serialize(doc);
+            return Encoding.UTF8.GetByteCount(docJson);
+        }
+        catch
+        {
+            // Fallback: rough estimate
+            return 512;
+        }
     }
 
 }

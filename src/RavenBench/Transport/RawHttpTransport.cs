@@ -67,15 +67,72 @@ public sealed class RawHttpTransport : ITransport
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
-        return op switch
+        try
         {
-            ReadOperation readOp => await GetAsync(readOp.Id, ct).ConfigureAwait(false),
-            InsertOperation<string> insertOp => await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false),
-            UpdateOperation<string> updateOp => await PutAsyncInternal(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false),
-            QueryOperation queryOp => await PostQueryAsync(queryOp, ct).ConfigureAwait(false),
-            BulkInsertOperation<string> bulkOp => await PostBulkDocsAsync(bulkOp.Documents, ct).ConfigureAwait(false),
-            _ => new TransportResult(0, 0)
-        };
+            switch (op)
+            {
+                case ReadOperation readOp:
+                    return await GetAsync(readOp.Id, ct).ConfigureAwait(false);
+                case InsertOperation<string> insertOp:
+                    return await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false);
+                case UpdateOperation<string> updateOp:
+                    return await PutAsyncInternal(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false);
+                case QueryOperation queryOp:
+                    return await PostQueryAsync(queryOp, ct).ConfigureAwait(false);
+                case BulkInsertOperation<string> bulkOp:
+                    return await PostBulkDocsAsync(bulkOp.Documents, ct).ConfigureAwait(false);
+                default:
+                    return new TransportResult(0, 0);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // TaskCanceledException from timeout is expected during benchmark runs
+            // Return a result without error details to avoid logging as error
+            return new TransportResult(0, 0);
+        }
+        catch (HttpRequestException httpEx)
+        {
+            var errorMsg = $"HTTP {httpEx.Data["StatusCode"] ?? "Error"}: {httpEx.Message}";
+            return new TransportResult(0, 0, errorMsg);
+        }
+        catch (Exception ex)
+        {
+            return new TransportResult(0, 0, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Calculates the size of HTTP headers in bytes for accurate network utilization measurement.
+    /// Includes request line, all headers, and the blank line separator.
+    /// </summary>
+    private static long CalculateHeaderSize(HttpRequestMessage req)
+    {
+        // Request line: "POST /path HTTP/1.1\r\n"
+        string requestLine = $"{req.Method} {req.RequestUri!.PathAndQuery} HTTP/{req.Version}\r\n";
+        long size = Encoding.UTF8.GetByteCount(requestLine);
+
+        // Headers
+        foreach (var header in req.Headers)
+        {
+            string headerLine = $"{header.Key}: {string.Join(", ", header.Value)}\r\n";
+            size += Encoding.UTF8.GetByteCount(headerLine);
+        }
+
+        // Content headers (if any)
+        if (req.Content != null)
+        {
+            foreach (var header in req.Content.Headers)
+            {
+                string headerLine = $"{header.Key}: {string.Join(", ", header.Value)}\r\n";
+                size += Encoding.UTF8.GetByteCount(headerLine);
+            }
+        }
+
+        // Blank line after headers
+        size += Encoding.UTF8.GetByteCount("\r\n");
+
+        return size;
     }
 
     public async Task PutAsync<T>(string id, T document)
@@ -151,11 +208,22 @@ public sealed class RawHttpTransport : ITransport
                     ? staleProp.GetBoolean()
                     : (bool?)null;
 
-                // Calculate byte counts
-                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
-                bytesOut += 400; // headers approx
+                // Extract query duration from response (server-side execution time)
+                double? queryDurationMs = null;
+                if (doc.RootElement.TryGetProperty("DurationInMs", out var durationProp))
+                {
+                    if (durationProp.ValueKind == JsonValueKind.Number)
+                    {
+                        queryDurationMs = durationProp.GetDouble();
+                    }
+                }
 
-                return new TransportResult(bytesOut, bytesIn, indexName: indexName, resultCount: resultCount, isStale: isStale);
+                // Calculate byte counts
+                long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+                long headerBytes = CalculateHeaderSize(req);
+                long bytesOut = headerBytes + bodyBytes;
+
+                return new TransportResult(bytesOut, bytesIn, indexName: indexName, resultCount: resultCount, isStale: isStale, queryDurationMs: queryDurationMs);
             }
         }
         catch (TaskCanceledException)

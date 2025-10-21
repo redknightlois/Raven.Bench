@@ -30,6 +30,10 @@ public sealed class RunSettings : CommandSettings
     [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")]
     public string? Profile { get; init; }
 
+    [CommandOption("--query-profile")]
+    [Description("Query profile for query workloads: equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed (default: equality)")]
+    public string? QueryProfile { get; init; }
+
     [CommandOption("--bulk-batch-size")]
     [Description("Number of documents per bulk batch (default: 100)")]
     public int BulkBatchSize { get; init; } = 100;

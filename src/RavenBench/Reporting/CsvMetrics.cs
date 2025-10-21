@@ -66,6 +66,7 @@ namespace RavenBench.Reporting
             new("AvgResultCount", summary => summary.Steps.Any(s => s.AvgResultCount.HasValue), s => s.AvgResultCount),
             new("TotalResults", summary => summary.Steps.Any(s => s.TotalResults.HasValue), s => s.TotalResults),
             new("StaleQueryCount", summary => summary.Steps.Any(s => s.StaleQueryCount.HasValue), s => s.StaleQueryCount),
+            new("QueryProfile", summary => summary.Steps.Any(s => s.QueryProfile.HasValue), s => s.QueryProfile?.ToString()),
             new("PrimaryIndex", summary => summary.Steps.Any(s => s.IndexUsage != null && s.IndexUsage.Count > 0), s => s.IndexUsage?.OrderByDescending(kvp => kvp.Value).FirstOrDefault().Key),
             new("PrimaryIndexUsage", summary => summary.Steps.Any(s => s.IndexUsage != null && s.IndexUsage.Count > 0), s => s.IndexUsage?.OrderByDescending(kvp => kvp.Value).FirstOrDefault().Value),
         };

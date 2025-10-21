@@ -134,6 +134,7 @@ public sealed class StepResult
     public double? AvgResultCount { get; init; }
     public long? TotalResults { get; init; }
     public long? StaleQueryCount { get; init; }
+    public Util.QueryProfile? QueryProfile { get; init; }
 }
 
 /// <summary>

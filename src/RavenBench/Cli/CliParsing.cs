@@ -25,6 +25,7 @@ internal static class CliParsing
             Writes = ParseNullableWeight(s.Writes),
             Updates = ParseNullableWeight(s.Updates),
             Profile = ParseProfile(s.Profile),
+            QueryProfile = ParseQueryProfile(s.QueryProfile),
             DocumentSizeBytes = ParseSize(s.DocSize),
             ConcurrencyStart = concurrencyStart,
             ConcurrencyEnd = concurrencyEnd,
@@ -95,6 +96,25 @@ internal static class CliParsing
             "stackoverflow-queries" or "so-queries" => WorkloadProfile.StackOverflowQueries,
             "query-users-by-name" or "queryusersbyname" => WorkloadProfile.QueryUsersByName,
             _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")
+        };
+    }
+
+    private static Util.QueryProfile ParseQueryProfile(string? queryProfile)
+    {
+        // Default to Equality for backward compatibility
+        if (string.IsNullOrWhiteSpace(queryProfile))
+            return Util.QueryProfile.Equality;
+
+        return queryProfile.Trim().ToLowerInvariant() switch
+        {
+            "equality" or "eq" => Util.QueryProfile.Equality,
+            "range" => Util.QueryProfile.Range,
+            "text-prefix" or "textprefix" or "prefix" => Util.QueryProfile.TextPrefix,
+            "text-search" or "textsearch" or "search" => Util.QueryProfile.TextSearch,
+            "text-search-rare" or "textsearchrare" or "search-rare" => Util.QueryProfile.TextSearchRare,
+            "text-search-common" or "textsearchcommon" or "search-common" => Util.QueryProfile.TextSearchCommon,
+            "text-search-mixed" or "textsearchmixed" or "search-mixed" => Util.QueryProfile.TextSearchMixed,
+            _ => throw new ArgumentException($"Invalid query profile: {queryProfile}. Valid options: equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
         };
     }
 

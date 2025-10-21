@@ -1,3 +1,4 @@
+using System;
 using FluentAssertions;
 using RavenBench.Cli;
 using RavenBench.Util;
@@ -44,9 +45,121 @@ public class CliParsingTests
         };
 
         var opts = settings.ToRunOptions();
-        
+
         opts.Reads.Should().Be(3);
         opts.Writes.Should().Be(1);
         opts.Updates.Should().Be(0);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_Defaults_To_Equality()
+    {
+        var settings = new RunSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-queries"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.Equality);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_TextSearch()
+    {
+        var settings = new RunSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-queries",
+            QueryProfile = "text-search"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.TextSearch);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_TextSearchRare()
+    {
+        var settings = new RunSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-queries",
+            QueryProfile = "text-search-rare"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.TextSearchRare);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_TextSearchCommon()
+    {
+        var settings = new RunSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-queries",
+            QueryProfile = "text-search-common"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.TextSearchCommon);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_TextSearchMixed()
+    {
+        var settings = new RunSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-queries",
+            QueryProfile = "text-search-mixed"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.TextSearchMixed);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_Range()
+    {
+        var settings = new RunSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "query-users-by-name",
+            QueryProfile = "range"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.Range);
+    }
+
+    [Fact]
+    public void Throws_On_Invalid_Query_Profile()
+    {
+        var settings = new RunSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-queries",
+            QueryProfile = "invalid"
+        };
+
+        var act = () => settings.ToRunOptions();
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("Invalid query profile: invalid. Valid options: equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
     }
 }

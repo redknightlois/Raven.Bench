@@ -116,7 +116,8 @@ public class BenchmarkRunner(RunOptions opts)
         {
             stackOverflowMetadata = await StackOverflowWorkloadHelper.DiscoverOrLoadMetadataAsync(
                 opts.Url,
-                effectiveDatabase);
+                effectiveDatabase,
+                opts.Seed);
 
             if (stackOverflowMetadata == null)
             {
@@ -130,7 +131,8 @@ public class BenchmarkRunner(RunOptions opts)
         {
             usersMetadata = await UsersWorkloadHelper.DiscoverOrLoadMetadataAsync(
                 opts.Url,
-                effectiveDatabase);
+                effectiveDatabase,
+                opts.Seed);
 
             if (usersMetadata == null)
             {
@@ -418,7 +420,7 @@ public class BenchmarkRunner(RunOptions opts)
         return res;
     }
 
-    private static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, UsersWorkloadMetadata? usersMetadata)
+    internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, UsersWorkloadMetadata? usersMetadata)
     {
         if (opts.Profile == WorkloadProfile.Unspecified)
             throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id|query-users-by-name.");
@@ -450,8 +452,8 @@ public class BenchmarkRunner(RunOptions opts)
             WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
             WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, startingKey: opts.Preload),
             WorkloadProfile.StackOverflowReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
-            WorkloadProfile.StackOverflowQueries => new StackOverflowQueryWorkload(stackOverflowMetadata!),
-            WorkloadProfile.QueryUsersByName => new UsersByNameQueryWorkload(usersMetadata!),
+            WorkloadProfile.StackOverflowQueries => BuildStackOverflowQueryWorkload(opts, stackOverflowMetadata!),
+            WorkloadProfile.QueryUsersByName => BuildUsersQueryWorkload(opts, usersMetadata!),
             _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
         };
     }
@@ -481,6 +483,30 @@ public class BenchmarkRunner(RunOptions opts)
         if (opts.Preload <= 0)
             throw new InvalidOperationException("Query profile requires --preload to seed the keyspace before the run.");
         return new QueryWorkload(distribution, opts.Preload);
+    }
+
+    private static IWorkload BuildStackOverflowQueryWorkload(RunOptions opts, StackOverflowWorkloadMetadata metadata)
+    {
+        return opts.QueryProfile switch
+        {
+            QueryProfile.Equality => new StackOverflowQueryWorkload(metadata), // query by id
+            QueryProfile.TextPrefix => new QuestionsByTitlePrefixWorkload(metadata),
+            QueryProfile.TextSearch => new QuestionsByTitleSearchWorkload(metadata, 0.3), // 30% rare, 70% common
+            QueryProfile.TextSearchRare => new QuestionsByTitleSearchWorkload(metadata, 1.0), // 100% rare
+            QueryProfile.TextSearchCommon => new QuestionsByTitleSearchWorkload(metadata, 0.0), // 100% common
+            QueryProfile.TextSearchMixed => new QuestionsByTitleSearchWorkload(metadata, 0.5), // 50% rare, 50% common
+            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for StackOverflow queries. Supported profiles: equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
+        };
+    }
+
+    private static IWorkload BuildUsersQueryWorkload(RunOptions opts, UsersWorkloadMetadata metadata)
+    {
+        return opts.QueryProfile switch
+        {
+            QueryProfile.Equality => new UsersByNameQueryWorkload(metadata),
+            QueryProfile.Range => new UsersRangeQueryWorkload(metadata),
+            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for Users queries. Supported profiles: equality, range")
+        };
     }
 
     private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion, string? databaseOverride = null)
@@ -826,7 +852,6 @@ public class BenchmarkRunner(RunOptions opts)
 
             // SNMP rate metrics
             SnmpIoReadOpsPerSec = serverMetrics.SnmpIoReadOpsPerSec,
-            SnmpIoWriteOpsPerSec = serverMetrics.SnmpIoWriteOpsPerSec,
             SnmpIoReadBytesPerSec = serverMetrics.SnmpIoReadBytesPerSec,
             SnmpIoWriteBytesPerSec = serverMetrics.SnmpIoWriteBytesPerSec,
             ServerSnmpRequestsPerSec = serverMetrics.ServerSnmpRequestsPerSec,
@@ -841,6 +866,7 @@ public class BenchmarkRunner(RunOptions opts)
             AvgResultCount = finalAvgResultCount,
             TotalResults = queryOps > 0 ? totalResults : null,
             StaleQueryCount = staleQueries > 0 ? staleQueries : null,
+            QueryProfile = opts.QueryProfile != QueryProfile.Equality ? opts.QueryProfile : null, // Only include if not default
         };
         
         return (stepResult, hist);

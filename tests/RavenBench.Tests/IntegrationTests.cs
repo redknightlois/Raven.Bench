@@ -76,21 +76,21 @@ public class IntegrationTests
     {
         // INVARIANT: PayloadGenerator should integrate correctly with workload system
         // INVARIANT: Generated payloads should match size expectations
-        
+
         var distribution = new UniformDistribution();
         var workload = new MixedProfileWorkload(
             WorkloadMix.FromWeights(0, 100, 0),
             distribution,
             2048 // 2KB documents
         );
-        
+
         var rng = new Random(42);
-        
+
         // Generate several operations to test consistency
         for (int i = 0; i < 10; i++)
         {
             var op = workload.NextOperation(rng);
-            
+
             op.Should().NotBeNull();
             op.Should().BeOfType<InsertOperation<string>>(); // Should be write since 100% writes
 
@@ -109,6 +109,174 @@ public class IntegrationTests
                 payloadBytes.Should().BeLessThan(5000); // Within reasonable bounds for 2KB target
             }
         }
+    }
+
+    [Fact]
+    public void Query_Profile_Workload_Building_Integration()
+    {
+        // INVARIANT: BenchmarkRunner should correctly build workloads based on query profiles
+        // INVARIANT: Different query profiles should produce different workload types
+
+        var usersMetadata = new UsersWorkloadMetadata
+        {
+            SampleNames = new[] { "Alice", "Bob" },
+            SampleCount = 2,
+            TotalUserCount = 100,
+            ReputationBuckets = new[]
+            {
+                new ReputationBucket { MinReputation = 1, MaxReputation = 100, EstimatedDocCount = 50 },
+                new ReputationBucket { MinReputation = 100, MaxReputation = 1000, EstimatedDocCount = 50 }
+            },
+            MinReputation = 1,
+            MaxReputation = 1000,
+            ComputedAt = DateTime.UtcNow
+        };
+
+        var stackOverflowMetadata = new StackOverflowWorkloadMetadata
+        {
+            QuestionIds = new[] { 1, 2, 3 },
+            UserIds = new[] { 1, 2 },
+            QuestionCount = 3,
+            UserCount = 2,
+            TitlePrefixes = new[] { "How", "What" },
+            SearchTermsRare = new[] { "algorithm" },
+            SearchTermsCommon = new[] { "error", "help" },
+            ComputedAt = DateTime.UtcNow
+        };
+
+        // Test Users equality workload
+        var usersEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.Equality };
+        var usersEqualityWorkload = BenchmarkRunner.BuildWorkload(usersEqualityOpts, stackOverflowMetadata, usersMetadata);
+        usersEqualityWorkload.Should().BeOfType<UsersByNameQueryWorkload>();
+
+        // Test Users range workload
+        var usersRangeOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.Range };
+        var usersRangeWorkload = BenchmarkRunner.BuildWorkload(usersRangeOpts, stackOverflowMetadata, usersMetadata);
+        usersRangeWorkload.Should().BeOfType<UsersRangeQueryWorkload>();
+
+        // Test StackOverflow equality workload (query by id)
+        var soEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.Equality };
+        var soEqualityWorkload = BenchmarkRunner.BuildWorkload(soEqualityOpts, stackOverflowMetadata, usersMetadata);
+        soEqualityWorkload.Should().BeOfType<StackOverflowQueryWorkload>();
+
+        // Test StackOverflow text prefix workload
+        var soPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.TextPrefix };
+        var soPrefixWorkload = BenchmarkRunner.BuildWorkload(soPrefixOpts, stackOverflowMetadata, usersMetadata);
+        soPrefixWorkload.Should().BeOfType<QuestionsByTitlePrefixWorkload>();
+
+        // Test StackOverflow text search workload
+        var soSearchOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.TextSearch };
+        var soSearchWorkload = BenchmarkRunner.BuildWorkload(soSearchOpts, stackOverflowMetadata, usersMetadata);
+        soSearchWorkload.Should().BeOfType<QuestionsByTitleSearchWorkload>();
+    }
+
+    [Fact]
+    public void Query_Profile_Operations_Generation_Integration()
+    {
+        // INVARIANT: Workloads should generate appropriate operations for their query profiles
+        // INVARIANT: Operations should have correct query text and parameters
+
+        var usersMetadata = new UsersWorkloadMetadata
+        {
+            SampleNames = new[] { "Alice", "Bob" },
+            SampleCount = 2,
+            TotalUserCount = 100,
+            ReputationBuckets = new[]
+            {
+                new ReputationBucket { MinReputation = 10, MaxReputation = 100, EstimatedDocCount = 50 }
+            },
+            MinReputation = 10,
+            MaxReputation = 100,
+            ComputedAt = DateTime.UtcNow
+        };
+
+        var stackOverflowMetadata = new StackOverflowWorkloadMetadata
+        {
+            QuestionIds = new[] { 1, 2, 3 },
+            UserIds = new[] { 1, 2 },
+            QuestionCount = 3,
+            UserCount = 2,
+            TitlePrefixes = new[] { "How", "What" },
+            SearchTermsRare = new[] { "algorithm" },
+            SearchTermsCommon = new[] { "error", "help" },
+            ComputedAt = DateTime.UtcNow
+        };
+
+        var rng = new Random(42);
+
+        // Test Users equality query
+        var usersEqualityWorkload = new UsersByNameQueryWorkload(usersMetadata);
+        var eqOp = usersEqualityWorkload.NextOperation(rng);
+        eqOp.Should().BeOfType<QueryOperation>();
+        var eqQueryOp = (QueryOperation)eqOp;
+        eqQueryOp.QueryText.Should().Be("from Users where Name = $name");
+        eqQueryOp.Parameters.Should().ContainKey("name");
+
+        // Test Users range query
+        var usersRangeWorkload = new UsersRangeQueryWorkload(usersMetadata);
+        var rangeOp = usersRangeWorkload.NextOperation(rng);
+        rangeOp.Should().BeOfType<QueryOperation>();
+        var rangeQueryOp = (QueryOperation)rangeOp;
+        rangeQueryOp.QueryText.Should().Be("from Users where Reputation between $min and $max");
+        rangeQueryOp.Parameters.Should().ContainKey("min");
+        rangeQueryOp.Parameters.Should().ContainKey("max");
+
+        // Test StackOverflow text prefix query
+        var prefixWorkload = new QuestionsByTitlePrefixWorkload(stackOverflowMetadata);
+        var prefixOp = prefixWorkload.NextOperation(rng);
+        prefixOp.Should().BeOfType<QueryOperation>();
+        var prefixQueryOp = (QueryOperation)prefixOp;
+        prefixQueryOp.QueryText.Should().Be("from questions where startsWith(Title, $prefix)");
+        prefixQueryOp.Parameters.Should().ContainKey("prefix");
+
+        // Test StackOverflow text search query
+        var searchWorkload = new QuestionsByTitleSearchWorkload(stackOverflowMetadata);
+        var searchOp = searchWorkload.NextOperation(rng);
+        searchOp.Should().BeOfType<QueryOperation>();
+        var searchQueryOp = (QueryOperation)searchOp;
+        searchQueryOp.QueryText.Should().Be("from questions where search(Title, $term)");
+        searchQueryOp.Parameters.Should().ContainKey("term");
+    }
+
+    [Fact]
+    public void BuildWorkload_Throws_On_Invalid_Query_Profile_Combinations()
+    {
+        // INVARIANT: BuildWorkload should throw NotSupportedException for unsupported query profile combinations
+        // INVARIANT: Error messages should clearly indicate supported profiles for each workload type
+
+        // StackOverflow queries do not support range queries
+        var soRangeOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.Range };
+        var act1 = () => BenchmarkRunner.BuildWorkload(soRangeOpts, null, null);
+        act1.Should().Throw<NotSupportedException>()
+            .WithMessage("Query profile 'Range' is not supported for StackOverflow queries. Supported profiles: equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
+
+        // StackOverflow queries do not support text-prefix for users profile
+        var usersPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextPrefix };
+        var act2 = () => BenchmarkRunner.BuildWorkload(usersPrefixOpts, null, null);
+        act2.Should().Throw<NotSupportedException>()
+            .WithMessage("Query profile 'TextPrefix' is not supported for Users queries. Supported profiles: equality, range");
+
+        // StackOverflow queries do not support text-search for users profile
+        var usersSearchOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextSearch };
+        var act3 = () => BenchmarkRunner.BuildWorkload(usersSearchOpts, null, null);
+        act3.Should().Throw<NotSupportedException>()
+            .WithMessage("Query profile 'TextSearch' is not supported for Users queries. Supported profiles: equality, range");
+
+        // StackOverflow queries support text-prefix
+        var soTextPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.TextPrefix };
+        var validMetadata = new StackOverflowWorkloadMetadata
+        {
+            TitlePrefixes = new[] { "How", "What" },
+            SearchTermsRare = new[] { "algorithm" },
+            SearchTermsCommon = new[] { "error" },
+            QuestionIds = new[] { 1, 2 },
+            UserIds = new[] { 1 },
+            QuestionCount = 2,
+            UserCount = 1,
+            ComputedAt = DateTime.UtcNow
+        };
+        var workload = BenchmarkRunner.BuildWorkload(soTextPrefixOpts, validMetadata, null);
+        workload.Should().BeOfType<QuestionsByTitlePrefixWorkload>();
     }
     
     private static RunOptions CreateBasicOptions() => new()
