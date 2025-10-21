@@ -389,12 +389,14 @@ public sealed class RawHttpTransport : ITransport
         try
         {
             var url = BuildUrl(id);
-            
+
             using var req = CreateRequest(HttpMethod.Put, url);
             req.Headers.AcceptEncoding.Clear();
             req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
             req.Headers.ExpectContinue = false;
-            req.Content = new StringContent(JsonSerializer.Serialize(document), Encoding.UTF8, "application/json");
+
+            string jsonPayload = document is string s ? s : JsonSerializer.Serialize(document);
+            req.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -430,7 +432,7 @@ public sealed class RawHttpTransport : ITransport
 
                     _bufferPool.TryEnqueue(buffer); // Return to pool
                 }
-                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(document));
+                long bytesOut = req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload);
                 bytesOut += 400; // headers approx
                 return new TransportResult(bytesOut, bytesIn);
             }
