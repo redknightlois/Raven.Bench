@@ -71,11 +71,11 @@ public sealed class RunSettings : CommandSettings
     public string DocSize { get; init; } = "1KB";
 
     [CommandOption("--transport")]
-    [Description("Transport mode: raw, sdk (default: raw)")]
+    [Description("Transport mode: raw (HTTP direct), client (RavenDB .NET client) (default: raw)")]
     public string Transport { get; init; } = "raw";
 
     [CommandOption("--compression")]
-    [Description("Compression mode: identity, gzip, brotli (default: identity)")]
+    [Description("Compression mode: identity, gzip, brotli, zstd (default: identity)")]
     public string Compression { get; init; } = "identity";
 
     [CommandOption("--mode")]

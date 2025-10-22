@@ -51,9 +51,11 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
     - `small`: ~5GB data → database `StackOverflow-5GB`
     - `half`: ~20GB data → database `StackOverflow-20GB`
     - `full`: ~50GB data → database `StackOverflow-50GB`
-  - `--dataset-size <N>`: Custom dataset size: N post dump files (~1GB each + 2GB users). Auto-generates database name like `StackOverflow-12GB` for N=10. Overridden by `--dataset-profile`.
-  - `--http-version <auto|1.1|2|3>` and `--strict-http-version`: version negotiation and enforcement.
-  - `--transport <raw|client>` and `--compression <identity|gzip|zstd|br|deflate>`:
+   - `--dataset-size <N>`: Custom dataset size: N post dump files (~1GB each + 2GB users). Auto-generates database name like `StackOverflow-12GB` for N=10. Overridden by `--dataset-profile`.
+   - `--dataset-skip-if-exists`: Skip dataset import if data already exists (default: true).
+   - `--dataset-cache-dir <path>`: Directory for caching downloaded dataset files.
+   - `--http-version <auto|1.1|2.0|3.0>` and `--strict-http-version`: version negotiation and enforcement.
+   - `--transport <raw|client>` and `--compression <identity|gzip|zstd|br|deflate>`:
     - `raw` uses HTTP directly; identity/gzip/br/deflate supported.
     - `client` uses RavenDB .NET client; identity/gzip/zstd supported (zstd recommended for realistic runs).
   - `--concurrency <start..endxfactor>`: geometric ramp (default: `8..512x2`).
@@ -74,7 +76,9 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
     - See [docs/snmp-metric-catalog.md](docs/snmp-metric-catalog.md) for metric details and troubleshooting
   - `--network-limited` and `--link-mbps <double>`: annotate verdicts for known link speeds.
   - `--raw-endpoint <path-with-{id}>`: with `--transport raw`, test a custom endpoint (e.g., `/databases/db/docs?id={id}`).
-  - `--tp-workers/--tp-iocp <int>`: adjust ThreadPool minimums (defaults are high to avoid client-side starvation).
+   - `--tp-workers/--tp-iocp <int>`: adjust ThreadPool minimums (defaults are high to avoid client-side starvation).
+   - `--expected-cores <int>`: Expected CPU core count for validation.
+   - `--notes <string>`: Custom notes to include in output.
 
 
 **Quick Starts**
@@ -125,7 +129,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `--profile reads`: read-by-id only. Requires `--preload N` to seed the keyspace; distribution applies.
   - `--profile query-by-id`: parameterized query by id only. Requires `--preload N`. Raw HTTP posts to `/databases/<db>/queries` with `from @all_docs where id() = $id`. Measures query endpoint overhead vs. direct reads.
   - `--profile bulk-writes`: bulk insert batches via `/bulk_docs` endpoint. Use `--bulk-batch-size` (default: 100) and `--bulk-depth` (default: 1) to control batch size and parallelism. Mirrors `batch-writes.lua` behavior.
-  - `--profile stackoverflow-reads` (or `so-reads`): Random reads from StackOverflow dataset: 50% `questions/{1..N}`, 50% `users/{1..M}`. Use `--so-max-question-id` (default: 12350817) and `--so-max-user-id` (default: 5987285). Requires StackOverflow dataset. Mirrors `full-random-reads.lua`.
+  - `--profile stackoverflow-reads` (or `so-reads`): Random reads from StackOverflow dataset: 50% `questions/{sampled-ids}`, 50% `users/{sampled-ids}`. Automatically samples existing document IDs from the database. Requires StackOverflow dataset. Mirrors `full-random-reads.lua`.
    - `--profile stackoverflow-queries` (or `so-queries`): Parameterized queries against questions collection. Use `--query-profile` to select query type (equality by ID, text-prefix, text-search variants for different selectivity). Requires StackOverflow dataset.
   - `--profile query-users-by-name`: Parameterized queries against users collection. Use `--query-profile` to select query type (equality by name or range by reputation). Requires Users dataset.
 

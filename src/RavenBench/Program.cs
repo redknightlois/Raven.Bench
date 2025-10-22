@@ -28,7 +28,7 @@ internal static class Program
         catch (Exception ex)
         {
             // Show the error message
-            AnsiConsole.MarkupLine($"[red]Error:[/] {ex.Message}");
+            AnsiConsole.WriteException(ex);
 
             // Add helpful hint for common mistakes
             if (ex is CommandParseException && ex.Message.Contains("Unknown option"))
