@@ -41,6 +41,24 @@ public class IntegrationTests
             step.Normalized.P50.Should().BeGreaterThan(0);
             step.Normalized.P95.Should().BeGreaterOrEqualTo(step.Normalized.P50);
             step.Normalized.P99.Should().BeGreaterOrEqualTo(step.Normalized.P95);
+
+            // Validate raw tail latency metrics
+            step.P9999.Should().BeGreaterThan(0, "raw p99.99 should capture extreme tail latency");
+            step.PMax.Should().BeGreaterThan(0, "raw pMax should capture worst-case latency");
+            step.P9999.Should().BeGreaterOrEqualTo(step.Raw.P999, "p99.99 should be >= p99.9");
+            step.PMax.Should().BeGreaterOrEqualTo(step.P9999, "pMax should be >= p99.99");
+
+            // Validate normalized tail latency metrics
+            step.NormalizedP9999.Should().BeGreaterThan(0, "normalized p99.99 should capture baseline-adjusted tail latency");
+            step.NormalizedPMax.Should().BeGreaterThan(0, "normalized pMax should capture baseline-adjusted worst-case latency");
+            step.NormalizedP9999.Should().BeGreaterOrEqualTo(step.Normalized.P999, "normalized p99.99 should be >= normalized p99.9");
+            step.NormalizedPMax.Should().BeGreaterOrEqualTo(step.NormalizedP9999, "normalized pMax should be >= normalized p99.99");
+
+            // Validate coordinated omission correction counts
+            step.SampleCount.Should().BeGreaterThan(0, "SampleCount should track actual operations");
+            step.CorrectedCount.Should().BeGreaterOrEqualTo(step.SampleCount,
+                "CorrectedCount should be >= SampleCount when coordinated omission corrections are applied");
+
             step.ClientCpu.Should().BeGreaterOrEqualTo(0);
             step.NetworkUtilization.Should().BeGreaterOrEqualTo(0);
             step.BytesOut.Should().BeGreaterThan(0);
@@ -313,8 +331,14 @@ internal static class IntegrationTestHelper
                 ErrorRate = 0.01, // 1% error rate
                 BytesOut = 1000 + i * 100,
                 BytesIn = 800 + i * 80,
+                SampleCount = 1000 + i * 500, // Actual operations observed
                 Raw = new Percentiles(10.0 + i, 12.5 + i, 15.0 + i, 20.0 + i, 30.0 + i, 40.0 + i),
                 Normalized = new Percentiles(9.0 + i, 11.5 + i, 14.0 + i, 18.0 + i, 28.0 + i, 38.0 + i),
+                P9999 = 50.0 + i * 5, // p99.99 raw tail latency
+                PMax = 60.0 + i * 10, // Maximum raw latency
+                NormalizedP9999 = 48.0 + i * 5, // Normalized p99.99 (baseline-adjusted)
+                NormalizedPMax = 58.0 + i * 10, // Normalized pMax (baseline-adjusted)
+                CorrectedCount = 1050 + i * 520, // TotalCount including CO corrections (slightly higher than SampleCount)
                 ClientCpu = 0.25 + i * 0.1,
                 NetworkUtilization = 0.1 + i * 0.05
             });

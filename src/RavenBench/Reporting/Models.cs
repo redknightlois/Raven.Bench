@@ -93,9 +93,32 @@ public sealed class StepResult
     public Percentiles Raw { get; set; }
     public Percentiles Normalized { get; set; }
 
+    // High-percentile latency metrics for tail analysis (raw values)
+    // p99.99 percentile in milliseconds (captures extreme tail behavior)
+    public double P9999 { get; set; }
+
+    // Maximum observed latency in milliseconds (worst-case single operation)
+    public double PMax { get; set; }
+
+    // Normalized tail metrics (baseline-adjusted, same as Normalized percentiles)
+    // These subtract the baseline RTT to show additional latency due to load
+    public double NormalizedP9999 { get; set; }
+    public double NormalizedPMax { get; set; }
+
+    // Number of actual operations observed (before coordinated omission correction)
+    // This includes all completed operations (both successes and errors) that were recorded in the histogram
+    public long SampleCount { get; init; }
+
+    // Total histogram count including synthetic samples from coordinated omission correction
+    // This will be >= SampleCount when corrections are applied
+    public long CorrectedCount { get; set; }
+
+    // Timestamp when maximum latency was observed (null if not tracked)
+    public DateTimeOffset? MaxTimestamp { get; set; }
+
     public double ClientCpu { get; init; }
     public double NetworkUtilization { get; init; }
-    
+
     // Server-side metrics from RavenDB
     public double? ServerCpu { get; init; }
     public long? ServerMemoryMB { get; init; }

@@ -42,10 +42,14 @@ namespace RavenBench.Cli
             new("p90 ms", _ => true, s => FormatNumber(s.Normalized.P90), TableScope.Normalized, c => c.RightAligned()),
             new("p99 ms", _ => true, s => FormatNumber(s.Normalized.P99), TableScope.Normalized, c => c.RightAligned()),
             new("p999 ms", _ => true, s => FormatNumber(s.Normalized.P999), TableScope.Normalized, c => c.RightAligned()),
+            new("p99.99 ms", _ => true, s => FormatNumber(s.NormalizedP9999), TableScope.Normalized, c => c.RightAligned()),
+            new("pMax ms", _ => true, s => FormatNumber(s.NormalizedPMax), TableScope.Normalized, c => c.RightAligned()),
             new("p50 ms", _ => true, s => FormatNumber(s.Raw.P50), TableScope.Raw, c => c.RightAligned()),
             new("p90 ms", _ => true, s => FormatNumber(s.Raw.P90), TableScope.Raw, c => c.RightAligned()),
             new("p99 ms", _ => true, s => FormatNumber(s.Raw.P99), TableScope.Raw, c => c.RightAligned()),
             new("p999 ms", _ => true, s => FormatNumber(s.Raw.P999), TableScope.Raw, c => c.RightAligned()),
+            new("p99.99 ms", _ => true, s => FormatNumber(s.P9999), TableScope.Raw, c => c.RightAligned()),
+            new("pMax ms", _ => true, s => FormatNumber(s.PMax), TableScope.Raw, c => c.RightAligned()),
 
             new("Errors %", summary => summary.Steps.Any(s => s.ErrorRate > 0), s => s.ErrorRate == 0 ? "N/A" : (s.ErrorRate * 100).ToString("F1"), TableScope.Both, c => c.RightAligned()),
             

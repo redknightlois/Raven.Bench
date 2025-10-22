@@ -323,6 +323,11 @@ public class BenchmarkRunner(RunOptions opts)
                 rawValues[i] = snapshot.GetPercentile(percentiles[i]) / 1000.0;
             }
 
+            // Calculate high-percentile tail metrics (p99.9, p99.99, max)
+            // These capture extreme outliers that standard percentiles may miss
+            var p9999 = snapshot.GetPercentile(99.99) / 1000.0;  // p99.99 in milliseconds
+            var pMax = snapshot.MaxMicros / 1000.0;  // Maximum latency in milliseconds
+
             var rawPercentiles = new Percentiles(rawValues[0], rawValues[1], rawValues[2], rawValues[3], rawValues[4], rawValues[5]);
 
             // Apply RTT-based normalization using baseline latency from calibration
@@ -347,6 +352,31 @@ public class BenchmarkRunner(RunOptions opts)
             
             s.Raw = rawPercentiles;
             s.Normalized = normalizedPercentiles;
+
+            // Populate tail latency metrics from histogram snapshot
+            // P9999 and PMax capture extreme outliers beyond standard percentiles
+            s.P9999 = p9999;
+            s.PMax = pMax;
+
+            // Apply same baseline normalization to tail metrics as we do for percentiles
+            // This ensures normalized view shows additional latency due to load consistently
+            if (startupCalibration?.Endpoints.Count > 0)
+            {
+                var baselineRttMs = startupCalibration.Endpoints.Min(e => e.ObservedMs);
+                s.NormalizedP9999 = Math.Max(0, p9999 - baselineRttMs);
+                s.NormalizedPMax = Math.Max(0, pMax - baselineRttMs);
+            }
+            else
+            {
+                // No calibration available - normalized = raw
+                s.NormalizedP9999 = p9999;
+                s.NormalizedPMax = pMax;
+            }
+
+            // CorrectedCount is the total histogram count including synthetic samples
+            // from coordinated omission correction. It will be >= SampleCount when
+            // slow responses trigger backfilling of "should-have-been" samples
+            s.CorrectedCount = snapshot.TotalCount;
 
             steps.Add(s);
             maxNetUtil = Math.Max(maxNetUtil, s.NetworkUtilization);
@@ -860,6 +890,12 @@ public class BenchmarkRunner(RunOptions opts)
             ErrorRate = errRate,
             BytesOut = bytesOut,
             BytesIn = bytesIn,
+
+            // SampleCount tracks actual operations observed (before coordinated omission correction)
+            // This is the total number of operations (success + errors) that completed and were recorded
+            // in the histogram. Must match histogram's raw sample count before CO backfilling.
+            SampleCount = ops,
+
             ClientCpu = cpu, // 0..1
             NetworkUtilization = netUtil,
             ServerCpu = serverMetrics.CpuUsagePercent,
