@@ -273,11 +273,13 @@ public class BenchmarkRunner(RunOptions opts)
         
         while (concurrency <= opts.ConcurrencyEnd)
         {
-            var warmupResult = await WarmupWithProgress(context, new StepParameters
+            // Warmup without baseline (first step, no coordinated omission correction)
+            var (warmupResult, warmupHist) = await WarmupWithProgress(context, new StepParameters
             {
                 Concurrency = concurrency,
                 Duration = opts.Warmup,
-                Record = false
+                Record = true,  // Record during warmup to derive baseline
+                BaselineLatencyMicros = 0  // No baseline for warmup
             });
 
             // Check if warmup failed with high error rate - terminate gracefully
@@ -289,19 +291,36 @@ public class BenchmarkRunner(RunOptions opts)
                 break;
             }
 
+            // Derive baseline latency from warmup's median (P50) for coordinated omission correction
+            // Use P50 as a stable estimate of typical latency under light load
+            var warmupSnapshot = warmupHist.Snapshot();
+            var baselineLatencyMicros = (long)warmupSnapshot.GetPercentile(50);
+            if (baselineLatencyMicros < 1)
+            {
+                // Fallback: if warmup didn't record anything, use a minimal baseline
+                // to avoid division by zero in coordinated omission correction
+                baselineLatencyMicros = 100;  // 100 microseconds = 0.1ms baseline
+            }
+
             var (s, hist) = await MeasureWithProgress(context, new StepParameters
             {
                 Concurrency = concurrency,
                 Duration = opts.Duration,
-                Record = true
+                Record = true,
+                BaselineLatencyMicros = baselineLatencyMicros
             });
 
-            // Calculate percentiles
+            // Take snapshot once and reuse for all percentile calculations
+            // IMPORTANT: Snapshot() resets the recorder's interval histogram, so call it exactly once per step
+            // Avoids repeated histogram cloning and provides access to coordinated-omission-corrected data
+            var snapshot = hist.Snapshot();
+
+            // Calculate percentiles from snapshot
             int[] percentiles = { 50, 75, 90, 95, 99, 999 };
             var rawValues = new double[6];
             for (int i = 0; i < percentiles.Length; i++)
             {
-                rawValues[i] = hist.GetPercentile(percentiles[i]) / 1000.0;
+                rawValues[i] = snapshot.GetPercentile(percentiles[i]) / 1000.0;
             }
 
             var rawPercentiles = new Percentiles(rawValues[0], rawValues[1], rawValues[2], rawValues[3], rawValues[4], rawValues[5]);
@@ -362,9 +381,9 @@ public class BenchmarkRunner(RunOptions opts)
         };
     }
 
-    private async Task<StepResult> WarmupWithProgress(BenchmarkContext context, StepParameters step)
+    private async Task<(StepResult, LatencyRecorder)> WarmupWithProgress(BenchmarkContext context, StepParameters step)
     {
-        var (result, _) = await AnsiConsole.Progress()
+        var (result, hist) = await AnsiConsole.Progress()
             .AutoClear(true)
             .Columns(new ProgressColumn[]
             {
@@ -388,7 +407,7 @@ public class BenchmarkRunner(RunOptions opts)
                 return await run;
             });
 
-        return result;
+        return (result, hist);
     }
 
     private async Task<(StepResult result, LatencyRecorder hist)> MeasureWithProgress(BenchmarkContext context, StepParameters step)
@@ -705,6 +724,11 @@ public class BenchmarkRunner(RunOptions opts)
             {
                 await started.Task.ConfigureAwait(false);
                 var rnd = new Random(context.Rng.Next());
+
+                // Coordinated omission correction: use baseline latency as expected interval
+                // When a request takes longer than baseline, HDRHistogram backfills synthetic samples
+                var baseline = step.BaselineLatencyMicros;
+
                 while (cts.IsCancellationRequested == false)
                 {
                     var op = context.Workload.NextOperation(rnd);
@@ -714,7 +738,13 @@ public class BenchmarkRunner(RunOptions opts)
                         var res = await context.Transport.ExecuteAsync(op, cts.Token).ConfigureAwait(false);
                         var us = ElapsedMicros(t0);
                         if (step.Record)
-                            hist.Record(us);
+                        {
+                            // Apply coordinated omission correction if baseline is available
+                            if (baseline > 0)
+                                hist.RecordWithExpectedInterval(us, baseline);
+                            else
+                                hist.Record(us);
+                        }
 
                         if (res.IsSuccess)
                         {
