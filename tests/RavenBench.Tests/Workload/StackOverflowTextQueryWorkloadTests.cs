@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using FluentAssertions;
 using RavenBench;
-using RavenBench.Util;
-using RavenBench.Workload;
+using RavenBench.Core;
+using RavenBench.Core.Workload;
 using Xunit;
 
 namespace RavenBench.Tests.Workload;

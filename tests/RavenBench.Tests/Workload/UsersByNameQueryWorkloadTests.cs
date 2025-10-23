@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using FluentAssertions;
-using RavenBench.Workload;
+using RavenBench.Core.Workload;
 using Xunit;
 
 namespace RavenBench.Tests.Workload;

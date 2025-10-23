@@ -1,7 +1,7 @@
-using RavenBench.Metrics;
-using RavenBench.Transport;
-using RavenBench.Util;
-using RavenBench.Workload;
+using RavenBench.Core.Metrics;
+using RavenBench.Core.Transport;
+using RavenBench.Core;
+using RavenBench.Core.Workload;
 
 namespace RavenBench;
 

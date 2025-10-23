@@ -1,7 +1,7 @@
 using System;
 using System.Text.Json;
 using FluentAssertions;
-using RavenBench.Util;
+using RavenBench.Core;
 using Xunit;
 
 namespace RavenBench.Tests;

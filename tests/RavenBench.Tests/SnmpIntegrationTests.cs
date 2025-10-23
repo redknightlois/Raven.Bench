@@ -1,9 +1,9 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentAssertions;
-using RavenBench.Metrics;
-using RavenBench.Transport;
-using RavenBench.Util;
+using RavenBench.Core.Metrics;
+using RavenBench.Core.Transport;
+using RavenBench.Core;
 using Xunit;
 
 namespace RavenBench.Tests;

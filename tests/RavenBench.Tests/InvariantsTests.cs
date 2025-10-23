@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using FluentAssertions;
 using RavenBench.Analysis;
-using RavenBench.Reporting;
-using RavenBench.Util;
+using RavenBench.Core.Reporting;
+using RavenBench.Core;
 using Xunit;
 
 namespace RavenBench.Tests;

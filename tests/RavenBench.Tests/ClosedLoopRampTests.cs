@@ -5,11 +5,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench;
-using RavenBench.Metrics;
-using RavenBench.Reporting;
-using RavenBench.Transport;
-using RavenBench.Util;
-using RavenBench.Workload;
+using RavenBench.Core.Metrics;
+using RavenBench.Core.Reporting;
+using RavenBench.Core.Transport;
+using RavenBench.Core;
+using RavenBench.Core.Workload;
 using Xunit;
 
 namespace RavenBench.Tests;
@@ -58,8 +58,8 @@ public class ClosedLoopRampTests
         {
             var steps = new List<StepResult>();
             var concurrency = 2;
-            var tracker = new RavenBench.Metrics.ProcessCpuTracker();
-            using var serverTracker = new RavenBench.Metrics.ServerMetricsTracker(transport, _opts);
+            var tracker = new ProcessCpuTracker();
+            using var serverTracker = new ServerMetricsTracker(transport, _opts);
             var context = new BenchmarkContext
             {
                 Transport = transport,

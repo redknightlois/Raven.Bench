@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using CsvHelper;
+using RavenBench.Core.Reporting;
 
 namespace RavenBench.Reporting
 {

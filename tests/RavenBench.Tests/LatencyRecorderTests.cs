@@ -3,7 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using RavenBench.Metrics;
+using RavenBench.Core.Metrics;
 using Xunit;
 
 namespace RavenBench.Tests;

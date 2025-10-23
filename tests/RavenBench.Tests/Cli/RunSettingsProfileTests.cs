@@ -1,6 +1,6 @@
 using FluentAssertions;
 using RavenBench.Cli;
-using RavenBench.Util;
+using RavenBench.Core;
 using Xunit;
 
 namespace RavenBench.Tests.Cli;

@@ -1,6 +1,8 @@
 using RavenBench.Analysis;
+using RavenBench.Core.Reporting;
+using RavenBench.Core;
+using RavenBench.Core.Metrics;
 using RavenBench.Reporting;
-using RavenBench.Util;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -296,7 +298,7 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
 
     private static IEnumerable<string> CheckForSnmpDiscrepancy(BenchmarkSummary summary)
     {
-        if (summary.Options.SnmpEnabled == false || summary.Options.Snmp.Profile != Util.SnmpProfile.Extended)
+        if (summary.Options.SnmpEnabled == false || summary.Options.Snmp.Profile != SnmpProfile.Extended)
             yield break;
 
         foreach (var s in summary.Steps)
@@ -317,17 +319,17 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
         }
     }
 
-    private static (List<Reporting.SnmpTimeSeries>?, Reporting.SnmpAggregations?) BuildSnmpData(List<Metrics.ServerMetrics>? history)
+    private static (List<SnmpTimeSeries>?, SnmpAggregations?) BuildSnmpData(List<ServerMetrics>? history)
     {
         if (history == null || history.Count == 0)
             return (null, null);
 
-        var timeSeries = new List<Reporting.SnmpTimeSeries>();
+        var timeSeries = new List<SnmpTimeSeries>();
 
         // Build time series from server metrics history
         foreach (var snapshot in history)
         {
-            timeSeries.Add(new Reporting.SnmpTimeSeries
+            timeSeries.Add(new SnmpTimeSeries
             {
                 Timestamp = snapshot.Timestamp,
                 MachineCpu = snapshot.MachineCpu,
@@ -355,7 +357,7 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
         var countReadBytes = history.Count(h => h.SnmpIoReadBytesPerSec.HasValue);
         var countWriteBytes = history.Count(h => h.SnmpIoWriteBytesPerSec.HasValue);
 
-        var aggregations = new Reporting.SnmpAggregations
+        var aggregations = new SnmpAggregations
         {
             TotalSnmpIoReadOps = countReadOps > 0 ? totalReadOps : null,
             AverageSnmpIoReadOpsPerSec = countReadOps > 0 ? totalReadOps / countReadOps : null,

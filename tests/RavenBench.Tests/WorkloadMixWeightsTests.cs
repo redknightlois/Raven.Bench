@@ -1,5 +1,5 @@
 using FluentAssertions;
-using RavenBench.Workload;
+using RavenBench.Core.Workload;
 using Xunit;
 
 namespace RavenBench.Tests;

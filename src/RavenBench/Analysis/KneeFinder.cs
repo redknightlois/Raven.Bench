@@ -1,4 +1,4 @@
-using RavenBench.Reporting;
+using RavenBench.Core.Reporting;
 
 namespace RavenBench.Analysis;
 

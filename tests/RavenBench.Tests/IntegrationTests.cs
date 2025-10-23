@@ -2,11 +2,11 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
-using RavenBench.Metrics;
-using RavenBench.Reporting;
-using RavenBench.Transport;
-using RavenBench.Util;
-using RavenBench.Workload;
+using RavenBench.Core.Metrics;
+using RavenBench.Core.Reporting;
+using RavenBench.Core.Transport;
+using RavenBench.Core;
+using RavenBench.Core.Workload;
 using Xunit;
 
 namespace RavenBench.Tests;

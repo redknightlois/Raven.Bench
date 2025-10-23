@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using FluentAssertions;
 using Lextm.SharpSnmpLib;
-using RavenBench.Metrics.Snmp;
+using RavenBench.Core.Metrics.Snmp;
 using Xunit;
 
 namespace RavenBench.Tests.Snmp;

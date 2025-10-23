@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using RavenBench.Reporting;
-using RavenBench.Util;
+using RavenBench.Core.Reporting;
+using RavenBench.Core;
 
 namespace RavenBench.Reporting
 {

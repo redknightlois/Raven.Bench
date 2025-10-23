@@ -1,11 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using RavenBench.Metrics;
-using RavenBench.Transport;
-using RavenBench.Workload;
-using RavenBench.Diagnostics;
-using RavenBench.Util;
-using RavenBench.Reporting;
+using RavenBench.Core.Metrics;
+using RavenBench.Core.Transport;
+using RavenBench.Core.Workload;
+using RavenBench.Core.Diagnostics;
+using RavenBench.Core;
+using RavenBench.Core.Reporting;
 using Spectre.Console;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations;
@@ -379,14 +379,11 @@ public class BenchmarkRunner(RunOptions opts)
             // slow responses trigger backfilling of "should-have-been" samples
             s.CorrectedCount = snapshot.TotalCount;
 
-            // Export histogram artifacts if directory is configured
-            if (string.IsNullOrEmpty(opts.LatencyHistogramsDir) == false)
+            // Always build histogram data for JSON output
+            var artifact = BuildHistogramArtifact(snapshot, s.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
+            if (artifact != null)
             {
-                var artifact = ExportHistogramArtifact(snapshot, s.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
-                if (artifact != null)
-                {
-                    histogramArtifacts.Add(artifact);
-                }
+                histogramArtifacts.Add(artifact);
             }
 
             steps.Add(s);
@@ -424,86 +421,90 @@ public class BenchmarkRunner(RunOptions opts)
     }
 
     /// <summary>
-    /// Export histogram data. Always builds the full percentile distribution for JSON.
-    /// Optionally writes hlog/csv files if directory is specified.
+    /// Build histogram data for JSON. Always creates the full percentile distribution.
+    /// Optionally writes hlog/csv files if outputPrefix is specified.
     /// </summary>
-    private static HistogramArtifact? ExportHistogramArtifact(
+    private static HistogramArtifact? BuildHistogramArtifact(
         HistogramSnapshot snapshot,
         int concurrency,
-        string outputPrefix,
+        string? outputPrefix,
         HistogramExportFormat format)
     {
         var histogram = snapshot.GetHistogram();
         if (histogram == null || histogram.TotalCount == 0)
             return null;
 
-        // Ensure output directory exists (in case prefix includes a directory path)
-        var outputDir = Path.GetDirectoryName(outputPrefix);
-        if (string.IsNullOrEmpty(outputDir) == false)
-        {
-            Directory.CreateDirectory(outputDir);
-        }
-
         string? hlogPath = null;
         string? csvPath = null;
 
-        // Optional: write hlog file if requested
-        if (format == HistogramExportFormat.Hlog || format == HistogramExportFormat.Both)
+        // Only export files if output prefix is specified
+        if (string.IsNullOrEmpty(outputPrefix) == false)
         {
-            hlogPath = $"{outputPrefix}-step-c{concurrency:D4}.hlog";
-
-            try
+            // Ensure output directory exists (in case prefix includes a directory path)
+            var outputDir = Path.GetDirectoryName(outputPrefix);
+            if (string.IsNullOrEmpty(outputDir) == false)
             {
-                using var fs = File.Create(hlogPath);
-                using var writer = new StreamWriter(fs);
+                Directory.CreateDirectory(outputDir);
+            }
 
-                writer.WriteLine("# HdrHistogram Percentile Distribution");
-                writer.WriteLine($"# Concurrency: {concurrency}");
-                writer.WriteLine($"# TotalCount: {histogram.TotalCount}");
-                writer.WriteLine($"# MaxValueMicros: {snapshot.MaxMicros}");
-                writer.WriteLine("# Percentile,LatencyMicros,LatencyMs");
+            // Optional: write hlog file if requested
+            if (format == HistogramExportFormat.Hlog || format == HistogramExportFormat.Both)
+            {
+                hlogPath = $"{outputPrefix}-step-c{concurrency:D4}.hlog";
 
-                foreach (var p in HistogramArtifact.StandardPercentiles)
+                try
                 {
-                    var valueMicros = histogram.GetValueAtPercentile(p);
-                    var valueMs = valueMicros / 1000.0;
-                    writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
+                    using var fs = File.Create(hlogPath);
+                    using var writer = new StreamWriter(fs);
+
+                    writer.WriteLine("# HdrHistogram Percentile Distribution");
+                    writer.WriteLine($"# Concurrency: {concurrency}");
+                    writer.WriteLine($"# TotalCount: {histogram.TotalCount}");
+                    writer.WriteLine($"# MaxValueMicros: {snapshot.MaxMicros}");
+                    writer.WriteLine("# Percentile,LatencyMicros,LatencyMs");
+
+                    foreach (var p in HistogramArtifact.StandardPercentiles)
+                    {
+                        var valueMicros = histogram.GetValueAtPercentile(p);
+                        var valueMs = valueMicros / 1000.0;
+                        writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Raven.Bench] Warning: Failed to export hlog for concurrency {concurrency}: {ex.Message}");
+                    hlogPath = null;
                 }
             }
-            catch (Exception ex)
+
+            // Optional: write CSV file if requested
+            if (format == HistogramExportFormat.Csv || format == HistogramExportFormat.Both)
             {
-                Console.WriteLine($"[Raven.Bench] Warning: Failed to export hlog for concurrency {concurrency}: {ex.Message}");
-                hlogPath = null;
-            }
-        }
+                csvPath = $"{outputPrefix}-step-c{concurrency:D4}.csv";
 
-        // Optional: write CSV file if requested
-        if (format == HistogramExportFormat.Csv || format == HistogramExportFormat.Both)
-        {
-            csvPath = $"{outputPrefix}-step-c{concurrency:D4}.csv";
-
-            try
-            {
-                using var fs = File.Create(csvPath);
-                using var writer = new StreamWriter(fs);
-
-                writer.WriteLine("Percentile,LatencyMicros,LatencyMs");
-
-                // Simpler CSV - just the key percentiles most people care about
-                var csvPercentiles = new[] { 0.0, 50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99, 99.999, 100.0 };
-                foreach (var p in csvPercentiles)
+                try
                 {
-                    var valueMicros = histogram.GetValueAtPercentile(p);
-                    var valueMs = valueMicros / 1000.0;
-                    writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
+                    using var fs = File.Create(csvPath);
+                    using var writer = new StreamWriter(fs);
+
+                    writer.WriteLine("Percentile,LatencyMicros,LatencyMs");
+
+                    // Simpler CSV - just the key percentiles most people care about
+                    var csvPercentiles = new[] { 0.0, 50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99, 99.999, 100.0 };
+                    foreach (var p in csvPercentiles)
+                    {
+                        var valueMicros = histogram.GetValueAtPercentile(p);
+                        var valueMs = valueMicros / 1000.0;
+                        writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Raven.Bench] Warning: Failed to export CSV for concurrency {concurrency}: {ex.Message}");
+                    csvPath = null;
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Raven.Bench] Warning: Failed to export CSV for concurrency {concurrency}: {ex.Message}");
-                csvPath = null;
-            }
-        }
+        }  // End of file export block
 
         // Build the full percentile distribution for JSON
         var percentiles = HistogramArtifact.StandardPercentiles.ToArray();
@@ -1161,7 +1162,7 @@ public class BenchmarkRunner(RunOptions opts)
                     "SNMP is enabled but no metrics were retrieved. Possible causes:\n" +
                     $"  - SNMP service not running on server\n" +
                     $"  - Firewall blocking SNMP port {opts.Snmp.Port}\n" +
-                    $"  - Community string mismatch (RavenDB uses '{SnmpOptions.Community}')\n" +
+                    $"  - Community string mismatch (RavenDB uses 'ravendb')\n" +
                     "  - Server SNMP not enabled (set Monitoring.Snmp.Enabled=true in server settings.json)\n" +
                     "\nBenchmark cannot proceed with SNMP enabled but unavailable.");
             }

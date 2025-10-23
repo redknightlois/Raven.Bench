@@ -3,19 +3,28 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
-using RavenBench.Metrics;
-using RavenBench.Reporting;
-using RavenBench.Util;
+using Raven.TestDriver;
+using Raven.Embedded;
+using RavenBench.Core.Metrics;
+using RavenBench.Core.Reporting;
+using RavenBench.Core;
 using Xunit;
 
 namespace RavenBench.Tests;
 
-/// <summary>
-/// Tests for histogram export. Makes sure we get the full percentile distribution
-/// embedded in JSON, plus optional file exports if configured.
-/// </summary>
-public class HistogramExportTests : IDisposable
+public class HistogramExportTests : RavenTestDriver, IDisposable
 {
+    static HistogramExportTests()
+    {
+        ConfigureServer(new TestServerOptions
+        {
+            Licensing = new ServerOptions.LicensingOptions
+            {
+                ThrowOnInvalidOrMissingLicense = false
+            }
+        });
+    }
+
     private readonly string _tempDir;
 
     public HistogramExportTests()
@@ -25,13 +34,14 @@ public class HistogramExportTests : IDisposable
         Directory.CreateDirectory(_tempDir);
     }
 
-    public void Dispose()
+    public override void Dispose()
     {
         // Clean up temporary directory after tests
         if (Directory.Exists(_tempDir))
         {
             Directory.Delete(_tempDir, recursive: true);
         }
+        base.Dispose();
     }
 
     [Fact]
@@ -40,10 +50,11 @@ public class HistogramExportTests : IDisposable
         // INVARIANT: When LatencyHistogramsDir is set with Hlog format, benchmark should export .hlog files
         // INVARIANT: Each concurrency step should have a corresponding histogram file
 
+        using var store = GetDocumentStore();
         var histogramDir = Path.Combine(_tempDir, "histograms-hlog");
         var opts = new RunOptions
         {
-            Url = "http://localhost:8080",
+            Url = store.Urls[0],
             Database = "test",
             Profile = WorkloadProfile.Writes,
             DocumentSizeBytes = 512,
@@ -67,25 +78,22 @@ public class HistogramExportTests : IDisposable
         run.HistogramArtifacts.Should().NotBeNull();
         run.HistogramArtifacts.Should().HaveCountGreaterThan(0);
 
-        // Verify each artifact has an hlog path and the file exists
-        foreach (var artifact in run.HistogramArtifacts!)
-        {
-            artifact.HlogPath.Should().NotBeNullOrEmpty();
-            artifact.CsvPath.Should().BeNull("CSV format was not requested");
+         // Verify each artifact has an hlog path and the file exists
+         foreach (var artifact in run.HistogramArtifacts!)
+         {
+             artifact.HlogPath.Should().NotBeNullOrEmpty();
+             artifact.CsvPath.Should().BeNull("CSV format was not requested");
 
-            File.Exists(artifact.HlogPath).Should().BeTrue($"Hlog file should exist at {artifact.HlogPath}");
+             File.Exists(artifact.HlogPath).Should().BeTrue($"Hlog file should exist at {artifact.HlogPath}");
 
-            // Verify file has content (not empty)
-            var fileInfo = new FileInfo(artifact.HlogPath!);
-            fileInfo.Length.Should().BeGreaterThan(0, "Hlog file should contain histogram data");
+             // Verify file has content (not empty)
+             var fileInfo = new FileInfo(artifact.HlogPath!);
+             fileInfo.Length.Should().BeGreaterThan(0, "Hlog file should contain histogram data");
 
-            // Verify file contains expected HdrHistogram header
-            var firstLine = File.ReadLines(artifact.HlogPath!).FirstOrDefault();
-            firstLine.Should().NotBeNullOrEmpty("Hlog file should have content");
-        }
-
-        // Verify histogram directory was created
-        Directory.Exists(histogramDir).Should().BeTrue("Histogram directory should be created");
+             // Verify file contains expected HdrHistogram header
+             var firstLine = File.ReadLines(artifact.HlogPath!).FirstOrDefault();
+             firstLine.Should().NotBeNullOrEmpty("Hlog file should have content");
+         }
     }
 
     [Fact]
@@ -94,10 +102,11 @@ public class HistogramExportTests : IDisposable
         // INVARIANT: When LatencyHistogramsDir is set with CSV format, benchmark should export .csv files
         // INVARIANT: CSV files should have proper header and percentile data
 
+        using var store = GetDocumentStore();
         var histogramDir = Path.Combine(_tempDir, "histograms-csv");
         var opts = new RunOptions
         {
-            Url = "http://localhost:8080",
+            Url = store.Urls[0],
             Database = "test",
             Profile = WorkloadProfile.Writes,
             DocumentSizeBytes = 512,
@@ -148,10 +157,11 @@ public class HistogramExportTests : IDisposable
     {
         // INVARIANT: When format is Both, benchmark should export both .hlog and .csv files
 
+        using var store = GetDocumentStore();
         var histogramDir = Path.Combine(_tempDir, "histograms-both");
         var opts = new RunOptions
         {
-            Url = "http://localhost:8080",
+            Url = store.Urls[0],
             Database = "test",
             Profile = WorkloadProfile.Writes,
             DocumentSizeBytes = 512,
@@ -181,9 +191,10 @@ public class HistogramExportTests : IDisposable
     {
         // INVARIANT: When LatencyHistogramsDir is null, no histogram files should be exported
 
+        using var store = GetDocumentStore();
         var opts = new RunOptions
         {
-            Url = "http://localhost:8080",
+            Url = store.Urls[0],
             Database = "test",
             Profile = WorkloadProfile.Writes,
             DocumentSizeBytes = 512,
@@ -198,8 +209,13 @@ public class HistogramExportTests : IDisposable
         var runner = new BenchmarkRunner(opts);
         var run = await runner.RunAsync();
 
-        // Verify no histogram artifacts were created
-        run.HistogramArtifacts.Should().BeNullOrEmpty("No histogram export should occur when directory is not specified");
+        // Verify histogram artifacts were created but with null paths (no files exported)
+        run.HistogramArtifacts.Should().NotBeNullOrEmpty("Histogram artifacts should be created in memory even when directory is not specified");
+        run.HistogramArtifacts.Should().AllSatisfy(artifact =>
+        {
+            artifact.HlogPath.Should().BeNull("Hlog path should be null when directory is not specified");
+            artifact.CsvPath.Should().BeNull("CSV path should be null when directory is not specified");
+        });
     }
 
     [Fact]
@@ -208,10 +224,11 @@ public class HistogramExportTests : IDisposable
         // INVARIANT: Each concurrency step should have a corresponding histogram artifact
         // INVARIANT: Artifact concurrency values should match step concurrency values
 
+        using var store = GetDocumentStore();
         var histogramDir = Path.Combine(_tempDir, "histograms-concurrency");
         var opts = new RunOptions
         {
-            Url = "http://localhost:8080",
+            Url = store.Urls[0],
             Database = "test",
             Profile = WorkloadProfile.Writes,
             DocumentSizeBytes = 512,

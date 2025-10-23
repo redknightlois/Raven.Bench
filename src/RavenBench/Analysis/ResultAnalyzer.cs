@@ -1,5 +1,5 @@
-using RavenBench.Reporting;
-using RavenBench.Util;
+using RavenBench.Core.Reporting;
+using RavenBench.Core;
 
 namespace RavenBench.Analysis;
 

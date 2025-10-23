@@ -1,6 +1,6 @@
 using System;
 using FluentAssertions;
-using RavenBench.Metrics.Snmp;
+using RavenBench.Core.Metrics.Snmp;
 using Xunit;
 
 namespace RavenBench.Tests.Snmp;

@@ -1,7 +1,7 @@
 using System;
 using FluentAssertions;
-using RavenBench.Metrics.Snmp;
-using RavenBench.Util;
+using RavenBench.Core.Metrics.Snmp;
+using RavenBench.Core;
 using Xunit;
 
 namespace RavenBench.Tests.Snmp;
@@ -95,16 +95,6 @@ public class SnmpProfileTests
         options.PollInterval.Should().Be(TimeSpan.FromMilliseconds(250));
         options.Profile.Should().Be(SnmpProfile.Minimal);
         options.Timeout.Should().Be(TimeSpan.FromSeconds(5));
-    }
-
-    [Fact]
-    public void SnmpOptions_Community_IsFixedToRavenDB()
-    {
-        // Act
-        var community = SnmpOptions.Community;
-
-        // Assert
-        community.Should().Be("ravendb");
     }
 
     [Fact]

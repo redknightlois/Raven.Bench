@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using RavenBench.Diagnostics;
-using RavenBench.Metrics;
-using RavenBench.Transport;
-using RavenBench.Workload;
+using RavenBench.Core.Diagnostics;
+using RavenBench.Core.Metrics;
+using RavenBench.Core.Metrics.Snmp;
+using RavenBench.Core.Transport;
+using RavenBench.Core.Workload;
+using RavenBench.Core;
 
 namespace RavenBench.Tests;
 
@@ -62,9 +64,9 @@ public sealed class TestTransport : ITransport
 
     public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(_serverMetrics);
 
-    public Task<RavenBench.Metrics.Snmp.SnmpSample> GetSnmpMetricsAsync(RavenBench.Util.SnmpOptions snmpOptions, string? databaseName = null)
+    public Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
     {
-        var sample = new RavenBench.Metrics.Snmp.SnmpSample
+        var sample = new SnmpSample
         {
             MachineCpu = 50.0,
             ProcessCpu = 30.0,
