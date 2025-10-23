@@ -5,11 +5,12 @@ namespace RavenBench.Analysis;
 public static class KneeFinder
 {
     /// <summary>
-    /// Finds the knee where added concurrency no longer produces meaningful throughput gains
-    /// and latency rises significantly. Heuristics:
-    /// - Don’t declare a knee before entering a "danger zone" (p50 >= 100 ms)
-    /// - Primary rule: Δthr below threshold while Δp95 above threshold
-    /// - Confirmation: if the next step still increases throughput >3% vs prev, defer knee
+    /// Finds the knee where added concurrency no longer produces meaningful quality gains.
+    /// Quality = throughput / P99.9 latency (higher is better).
+    /// Heuristics:
+    /// - Don't declare a knee before entering a "danger zone" (p50 >= 100 ms)
+    /// - Primary rule: quality degrades (current quality < previous quality)
+    /// - Confirmation: if the next step still recovers quality >3% vs prev, defer knee
     /// - Always stop on excessive errors
     /// </summary>
     public static StepResult? FindKnee(IReadOnlyList<StepResult> steps, double dThr, double dP95, double maxErr)
@@ -26,6 +27,9 @@ public static class KneeFinder
             return only;
         }
 
+        // Helper to calculate quality score (throughput / P99.9)
+        double Quality(StepResult s) => s.Raw.P999 > 0 ? s.Throughput / s.Raw.P999 : 0.0;
+
         for (int i = 1; i < steps.Count; i++)
         {
             var prev = steps[i - 1];
@@ -38,54 +42,53 @@ public static class KneeFinder
                 return prev;
             }
 
-            // Don’t consider knees until we are in danger zone
+            // Don't consider knees until we are in danger zone
             var inDanger = prev.Raw.P50 >= P50DangerMs || cur.Raw.P50 >= P50DangerMs;
             if (inDanger == false)
                 continue;
 
-            var dthr = prev.Throughput > 0 ? (cur.Throughput - prev.Throughput) / prev.Throughput : 0.0;
-            var dp95 = prev.Raw.P95 > 0 ? (cur.Raw.P95 - prev.Raw.P95) / (prev.Raw.P95 + 1e-9) : 0.0;
+            var prevQuality = Quality(prev);
+            var curQuality = Quality(cur);
+
+            // Quality degradation: current quality is lower than previous
+            if (curQuality < prevQuality * 0.95) // 5% degradation threshold
+            {
+                // If the next step still recovers quality >3% vs prev, defer
+                if (i + 1 < steps.Count)
+                {
+                    var next = steps[i + 1];
+                    var nextQuality = Quality(next);
+                    var recovery = prevQuality > 0 ? (nextQuality - prevQuality) / prevQuality : 0.0;
+                    if (recovery > NextRecoveryThreshold)
+                        continue;
+                }
+                prev.Reason = $"Quality↓ (Q={prevQuality:F1} → {curQuality:F1})";
+                return prev;
+            }
 
             // Smoothing with previous deltas if possible
             if (i >= 2)
             {
                 var p2 = steps[i - 2];
-                var dthrAvg = 0.5 * ((prev.Throughput - p2.Throughput) / Math.Max(1e-9, p2.Throughput)) + 0.5 * dthr;
-                var dp95Avg = 0.5 * ((prev.Raw.P95 - p2.Raw.P95) / Math.Max(1e-9, p2.Raw.P95)) + 0.5 * dp95;
-                if (dthrAvg < dThr && dp95Avg > dP95)
+                var p2Quality = Quality(p2);
+                var dQualityPrev = p2Quality > 0 ? (prevQuality - p2Quality) / p2Quality : 0.0;
+                var dQualityCur = prevQuality > 0 ? (curQuality - prevQuality) / prevQuality : 0.0;
+                var dQualityAvg = 0.5 * dQualityPrev + 0.5 * dQualityCur;
+
+                // If smoothed quality gain is minimal or negative
+                if (dQualityAvg < 0.02) // Less than 2% quality gain
                 {
-                    // If the next step still recovers >3% throughput vs prev, defer
                     if (i + 1 < steps.Count)
                     {
                         var next = steps[i + 1];
-                        var rec = prev.Throughput > 0 ? (next.Throughput - prev.Throughput) / prev.Throughput : 0.0;
-                        if (rec > NextRecoveryThreshold)
+                        var nextQuality = Quality(next);
+                        var recovery = prevQuality > 0 ? (nextQuality - prevQuality) / prevQuality : 0.0;
+                        if (recovery > NextRecoveryThreshold)
                             continue;
                     }
-                    prev.Reason = $"Δthr<{dThr:P0} & Δp95>{dP95:P0} (smoothed)";
+                    prev.Reason = $"Quality stagnant (smoothed ΔQ={dQualityAvg:P1})";
                     return prev;
                 }
-            }
-
-            // Direct rule
-            if (dthr < dThr && dp95 > dP95)
-            {
-                if (i + 1 < steps.Count)
-                {
-                    var next = steps[i + 1];
-                    var rec = prev.Throughput > 0 ? (next.Throughput - prev.Throughput) / prev.Throughput : 0.0;
-                    if (rec > NextRecoveryThreshold)
-                        continue;
-                }
-                prev.Reason = $"Δthr<{dThr:P0} & Δp95>{dP95:P0}";
-                return prev;
-            }
-
-            // Monotonic degradation
-            if (cur.Throughput < prev.Throughput && cur.Raw.P95 > prev.Raw.P95)
-            {
-                prev.Reason = "Thr↓ & p95↑";
-                return prev;
             }
         }
 

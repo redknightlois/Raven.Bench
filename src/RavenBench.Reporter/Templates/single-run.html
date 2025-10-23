@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RavenBench Single Run Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 24px; color: #0f172a; background-color: #f8fafc; }
+    h1, h2 { color: #0f172a; margin-bottom: 12px; }
+    h1 { font-size: 28px; }
+    h2 { font-size: 20px; margin-top: 32px; }
+    section { background: #ffffff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1); margin-bottom: 24px; }
+    .meta-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px; }
+    .meta-item { background: #f1f5f9; padding: 12px; border-radius: 8px; font-size: 14px; }
+    .meta-item strong { display: block; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; color: #475569; }
+    .notes { margin-top: 16px; padding: 12px; background: #e0f2fe; border-left: 4px solid #0ea5e9; border-radius: 8px; }
+    .chart-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+    .chart-row-single { display: block; margin: 16px auto; max-width: 960px; }
+    .chart-box { min-width: 0; height: 400px; position: relative; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+    .chart-box-full { width: 960px; max-width: 100%; height: 400px; margin: 16px auto; position: relative; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+    canvas.chart-canvas { display: block; width: 100% !important; height: 100% !important; max-height: 360px; }
+    .chart-fallback { font-size: 14px; color: #475569; text-align: center; padding: 16px; }
+    .table-wrapper { overflow-x: auto; margin-top: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; background: #ffffff; }
+    th, td { padding: 8px; border: 1px solid #e2e8f0; text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    th { background-color: #e2e8f0; font-weight: 600; color: #0f172a; }
+    footer { text-align: center; font-size: 11px; color: #475569; margin-top: 32px; }
+
+    /* Print-specific styles for reliable PDF rendering */
+    @page {
+      size: A4 landscape;
+      margin: 12mm;
+    }
+
+    @media print {
+      /* Force color preservation */
+      * {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      /* Lock layout for the page box */
+      body {
+        margin: 0;
+        background: white;
+      }
+
+      /* Page break protection */
+      section {
+        page-break-inside: avoid;
+      }
+
+      .chart-box,
+      .chart-box-full {
+        page-break-inside: avoid;
+      }
+
+      /* Remove sticky positioning */
+      header.sticky,
+      .sticky {
+        position: static !important;
+      }
+
+      /* Ensure tables don't break badly */
+      .table-wrapper {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header style="background: #ffffff; border-radius: 8px; padding: 16px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);">
+    <h1 id="report-title" style="margin: 0 0 8px 0; font-size: 24px;">RavenBench Single Run Report</h1>
+    <div id="meta-summary-inline" style="font-size: 13px; color: #64748b; display: flex; flex-wrap: wrap; gap: 16px;"></div>
+    <p class="notes" id="report-notes" style="display:none; margin-top: 12px;"></p>
+  </header>
+
+  <section>
+    <h2>Best Configuration</h2>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Concurrency</th>
+            <th>Quality Score</th>
+            <th>Throughput (ops/s)</th>
+            <th>P95 (ms)</th>
+            <th>P99 (ms)</th>
+            <th>P99.9 (ms)</th>
+            <th>Server CPU %</th>
+            <th>Server MB</th>
+            <th>Error %</th>
+          </tr>
+        </thead>
+        <tbody id="best-step-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Scaling &amp; Closed-Loop</h2>
+    <div class="chart-row">
+      <div class="chart-box"><canvas id="throughputChart" class="chart-canvas"></canvas></div>
+      <div class="chart-box"><canvas id="tailLatencyChart" class="chart-canvas"></canvas></div>
+    </div>
+    <div id="rpsErrorContainer" style="display:none;">
+      <div class="chart-box-full"><canvas id="rpsErrorChart" class="chart-canvas"></canvas></div>
+    </div>
+  </section>
+
+  <section id="latency-overlay-section" style="display:none;">
+    <h2>Percentile Curves</h2>
+    <div class="chart-row">
+      <div class="chart-box"><canvas id="percentileOverlayChart" class="chart-canvas"></canvas></div>
+      <div class="chart-box"><canvas id="percentileOverlayZoomChart" class="chart-canvas"></canvas></div>
+    </div>
+    <div class="chart-row">
+      <div class="chart-box"><canvas id="percentileKneeChart" class="chart-canvas"></canvas></div>
+      <div class="chart-box"><canvas id="percentileKneeZoomChart" class="chart-canvas"></canvas></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Resource Correlation</h2>
+    <div id="resourceChartRow" class="chart-row">
+      <div class="chart-box"><canvas id="cpuChart" class="chart-canvas"></canvas></div>
+      <div id="memoryChartContainer" class="chart-box" style="display:none;">
+        <canvas id="memoryChart" class="chart-canvas"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Raw Step Data</h2>
+    <details open>
+      <summary>Expand to view step metrics</summary>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Concurrency</th>
+              <th>StepIndex</th>
+              <th>TargetRps</th>
+              <th>AchievedRps</th>
+              <th>RPSerr%</th>
+              <th>P50</th>
+              <th>P75</th>
+              <th>P90</th>
+              <th>P95</th>
+              <th>P99</th>
+              <th>P99.9</th>
+              <th>P99.99</th>
+              <th>LatMean</th>
+              <th>LatStdev</th>
+              <th>PMax</th>
+              <th>SampleCount</th>
+              <th>CorrectedCount</th>
+              <th>ClientCpu%</th>
+              <th>ServerCpu%</th>
+              <th>ServerMemoryMB</th>
+              <th>NetworkUtil%</th>
+              <th>BytesOut</th>
+              <th>BytesIn</th>
+              <th>ErrorRate%</th>
+              <th>ErrorsTotal</th>
+              <th>Timeouts</th>
+              <th>HTTP4xx</th>
+              <th>HTTP5xx</th>
+            </tr>
+          </thead>
+          <tbody id="raw-data-body"></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <footer>
+    RavenBench Reporter — generated via PuppeteerSharp
+  </footer>
+
+  <script id="report-context" type="application/json">__REPORT_CONTEXT__</script>
+  <script id="summary-data" type="application/json">__SUMMARY_JSON__</script>
+  <script>
+    (function () {
+      try {
+      if (window.Chart) {
+        const annotationPlugin = window.ChartAnnotation || window['chartjs-plugin-annotation'];
+        if (annotationPlugin) {
+          Chart.register(annotationPlugin);
+        }
+      }
+
+      const contextElement = document.getElementById('report-context');
+      const summaryElement = document.getElementById('summary-data');
+
+      if (!contextElement || !summaryElement) {
+        console.error('Report template is missing expected data payloads.');
+        window.__reportRendered = true;
+        return;
+      }
+
+      const context = JSON.parse(contextElement.textContent || '{}');
+      const summary = JSON.parse(summaryElement.textContent || '{}');
+      const steps = (summary.steps || []).slice().sort((a, b) => a.concurrency - b.concurrency);
+
+      window.__reportRendered = false;
+
+      const title = context.title || 'RavenBench Single Run Report';
+      document.getElementById('report-title').textContent = title;
+
+      // Map WorkloadProfile enum values to friendly names
+      const profileNames = {
+        0: 'Unspecified',
+        1: 'Mixed',
+        2: 'Writes',
+        3: 'Reads',
+        4: 'QueryById',
+        5: 'BulkWrites',
+        6: 'StackOverflowReads',
+        7: 'StackOverflowQueries',
+        8: 'QueryUsersByName'
+      };
+      const scenarioName = summary.options?.profile !== undefined
+        ? (profileNames[summary.options.profile] || String(summary.options.profile))
+        : 'Scenario';
+
+      // Compact inline metadata
+      const metaSummaryInline = document.getElementById('meta-summary-inline');
+      const metaItems = [
+        `Profile: ${scenarioName}`,
+        `Transport: ${summary.options?.transport ?? 'n/a'}`,
+        `HTTP: ${summary.effectiveHttpVersion ?? 'n/a'}`,
+        `Generated: ${context.generatedAt ?? 'n/a'}`
+      ];
+      metaSummaryInline.textContent = metaItems.join(' • ');
+
+      const notes = (context.notes || '').trim();
+      const notesElement = document.getElementById('report-notes');
+      if (notes.length > 0) {
+        notesElement.textContent = notes;
+        notesElement.style.display = 'block';
+      }
+
+      if (steps.length === 0) {
+        console.warn('No step data available in summary.');
+        window.__reportRendered = true;
+        return;
+      }
+
+      if (typeof Chart !== 'function') {
+        document.querySelectorAll('.chart-box').forEach(box => {
+          box.innerHTML = '<div class="chart-fallback">Charts unavailable (Chart.js not loaded)</div>';
+        });
+        window.__reportRendered = true;
+        return;
+      }
+
+      const achievedAccessor = step => {
+        if (typeof step.achievedRps === 'number' && Number.isFinite(step.achievedRps)) {
+          return step.achievedRps;
+        }
+        if (typeof step.throughput === 'number' && Number.isFinite(step.throughput)) {
+          return step.throughput;
+        }
+        return null;
+      };
+
+      const targetAccessor = step => {
+        if (typeof step.targetRps === 'number' && Number.isFinite(step.targetRps)) {
+          return step.targetRps;
+        }
+        if (typeof step.requestedRps === 'number' && Number.isFinite(step.requestedRps)) {
+          return step.requestedRps;
+        }
+        return null;
+      };
+
+      const concurrency = steps.map(step => step.concurrency ?? 0);
+      const achievedRps = steps.map(achievedAccessor);
+      const targetRps = steps.map(targetAccessor);
+
+      const p95 = steps.map(step => step.raw?.p95 ?? null);
+      const p99 = steps.map(step => step.raw?.p99 ?? null);
+      const p999 = steps.map(step => step.raw?.p999 ?? null);
+      const p9999 = steps.map(step => step.p9999 ?? null);
+
+      const stepRatios = [];
+      for (let i = 1; i < concurrency.length; i++) {
+        const prev = concurrency[i - 1];
+        const curr = concurrency[i];
+        if (prev > 0 && curr > 0) {
+          stepRatios.push(curr / prev);
+        }
+      }
+
+      const median = arr => {
+        if (arr.length === 0) return null;
+        const sorted = arr.slice().sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        if (sorted.length % 2 === 0) {
+          return (sorted[mid - 1] + sorted[mid]) / 2;
+        }
+        return sorted[mid];
+      };
+
+      // Find best step by quality score (throughput / P99.9)
+      let bestIdx = 0;
+      let bestQuality = 0;
+      steps.forEach((step, index) => {
+        const throughput = achievedAccessor(step) || 0;
+        const p999Val = step.raw?.p999 || 1;
+        const quality = p999Val > 0 ? throughput / p999Val : 0;
+        if (quality > bestQuality) {
+          bestQuality = quality;
+          bestIdx = index;
+        }
+      });
+
+      let kneeIdx = bestIdx; // Use best quality as knee for chart annotations
+
+      const formatNumber = (value, digits, opts = {}) => {
+        if (!Number.isFinite(value)) {
+          return '';
+        }
+        const formatter = new Intl.NumberFormat('en-US', {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+          ...opts
+        });
+        return formatter.format(value);
+      };
+
+      // Show best configuration
+      const bestStepBody = document.getElementById('best-step-body');
+      const bestStep = steps[bestIdx];
+      const bestAchieved = achievedRps[bestIdx];
+      const bestRow = document.createElement('tr');
+      const serverCpu = bestStep?.serverCpu ?? null;
+      const serverMemory = bestStep?.serverMemoryMB ?? null;
+      const errorPercent = typeof bestStep?.errorRate === 'number' ? bestStep.errorRate * 100 : null;
+
+      bestRow.innerHTML = [
+        `<td>${bestStep?.concurrency ?? ''}</td>`,
+        `<td>${formatNumber(bestQuality, 1)}</td>`,
+        `<td>${formatNumber(bestAchieved, 0)}</td>`,
+        `<td>${formatNumber(p95[bestIdx] ?? null, 1)}</td>`,
+        `<td>${formatNumber(p99[bestIdx] ?? null, 1)}</td>`,
+        `<td>${formatNumber(p999[bestIdx] ?? null, 1)}</td>`,
+        `<td>${formatNumber(serverCpu, 1)}</td>`,
+        `<td>${formatNumber(serverMemory, 0)}</td>`,
+        `<td>${formatNumber(errorPercent, 2)}</td>`
+      ].join('');
+      bestStepBody.appendChild(bestRow);
+
+      // Throughput vs Concurrency
+      const throughputDatasets = [{
+        label: 'Achieved RPS',
+        data: achievedRps,
+        borderColor: '#2563eb',
+        backgroundColor: '#2563eb',
+        tension: 0.15,
+        pointRadius: 4
+      }];
+
+      const targetExists = targetRps.some(val => typeof val === 'number' && Number.isFinite(val));
+      if (targetExists) {
+        throughputDatasets.push({
+          label: 'Target RPS',
+          data: targetRps,
+          borderColor: '#f97316',
+          backgroundColor: '#f97316',
+          borderDash: [6, 4],
+          pointStyle: 'cross',
+          pointRadius: 4
+        });
+      }
+
+      new Chart(document.getElementById('throughputChart'), {
+        type: 'line',
+        data: {
+          labels: concurrency,
+          datasets: throughputDatasets
+        },
+        options: {
+          animation: false,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Concurrency' } },
+            y: { title: { display: true, text: 'Requests / sec' }, beginAtZero: true }
+          },
+          plugins: {
+            annotation: {
+              annotations: {
+                kneeLine: {
+                  type: 'line',
+                  scaleID: 'x',
+                  value: concurrency[kneeIdx],
+                  borderColor: '#94a3b8',
+                  borderWidth: 1,
+                  borderDash: [4, 4],
+                  label: {
+                    display: true,
+                    content: 'Knee',
+                    position: 'end',
+                    color: '#475569',
+                    backgroundColor: 'rgba(148, 163, 184, 0.15)',
+                    font: { size: 10 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      // Tail Latency vs Concurrency (log-y)
+      const tailLatencyDatasets = [];
+      const maybeAddDataset = (label, values, color) => {
+        const exists = values.some(val => typeof val === 'number' && val > 0);
+        if (!exists) return;
+        tailLatencyDatasets.push({
+          label,
+          data: values.map(val => (val && val > 0 ? val : null)),
+          borderColor: color,
+          backgroundColor: color,
+          tension: 0.2,
+          pointRadius: 3,
+          spanGaps: true
+        });
+      };
+
+      maybeAddDataset('P95', p95, '#16a34a');
+      maybeAddDataset('P99', p99, '#dc2626');
+      maybeAddDataset('P99.9', p999, '#9333ea');
+      maybeAddDataset('P99.99', p9999, '#0ea5e9');
+
+      if (tailLatencyDatasets.length === 0) {
+        maybeAddDataset('Latency Mean', steps.map(step => step.latMean ?? null), '#0ea5e9');
+      }
+
+      new Chart(document.getElementById('tailLatencyChart'), {
+        type: 'line',
+        data: {
+          labels: concurrency,
+          datasets: tailLatencyDatasets
+        },
+        options: {
+          animation: false,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Concurrency' } },
+            y: {
+              title: { display: true, text: 'Latency (ms)' },
+              type: 'linear',
+              beginAtZero: true
+            }
+          }
+        }
+      });
+
+      // RPS Tracking Error
+      if (targetExists) {
+        const rpsError = steps.map((step, index) => {
+          const target = targetRps[index];
+          const actual = achievedRps[index];
+          if (!target || target === 0) return null;
+          return ((actual - target) / target) * 100;
+        });
+
+        document.getElementById('rpsErrorContainer').style.display = 'block';
+        new Chart(document.getElementById('rpsErrorChart'), {
+          type: 'line',
+          data: {
+            labels: concurrency,
+            datasets: [{
+              label: 'Tracking Error (%)',
+              data: rpsError,
+              borderColor: '#dc2626',
+              backgroundColor: 'rgba(220, 38, 38, 0.15)',
+              pointRadius: 3,
+              spanGaps: true
+          }]
+        },
+        options: {
+          animation: false,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Concurrency' } },
+            y: {
+              title: { display: true, text: 'Error %' },
+                beginAtZero: false
+              }
+            },
+            plugins: {
+              annotation: {
+                annotations: {
+                  zeroLine: {
+                    type: 'line',
+                    scaleID: 'y',
+                    value: 0,
+                    borderColor: '#94a3b8',
+                    borderWidth: 1
+                  }
+                }
+              }
+            }
+          }
+        });
+      }
+
+      // Percentile overlay
+      const overlaySection = document.getElementById('latency-overlay-section');
+      const histogramArtifacts = Array.isArray(summary.histogramArtifacts) ? summary.histogramArtifacts : [];
+      const overlayDatasets = [];
+
+      // Helper to get throughput/RPS for an artifact
+      const getArtifactThroughput = (artifact) => {
+        const stepIndex = artifact.stepIndex;
+        if (stepIndex !== undefined && stepIndex < steps.length) {
+          const step = steps[stepIndex];
+          return achievedAccessor(step) || 0;
+        }
+        return 0;
+      };
+
+      // Calculate line width based on throughput ranking (rank-based, not ratio)
+      const calculateLineWidth = (rankIndex, totalRuns) => {
+        if (rankIndex === 0) return 4; // Best: very thick
+        if (rankIndex === 1) return 3; // Second best: thick
+        if (rankIndex === 2) return 2.5; // Third best: medium-thick
+        return 1.5; // Rest: thin
+      };
+
+      // Smart color palette: prioritize visibility for best performers
+      const getSmartColor = (rankIndex, totalRuns) => {
+        // Top 3: Highly visible and distinct primary colors
+        const topColors = [
+          '#dc2626',  // Rank 1 (best): Bright red
+          '#2563eb',  // Rank 2: Bright blue
+          '#16a34a'   // Rank 3: Bright green
+        ];
+
+        // Rest (4-10): Same base gray hue with decreasing saturation
+        const restColors = [
+          '#64748b',  // Rank 4: Medium gray
+          '#94a3b8',  // Rank 5: Light gray
+          '#cbd5e1',  // Rank 6: Lighter gray
+          '#e2e8f0',  // Rank 7: Very light gray
+          '#f1f5f9',  // Rank 8: Almost white gray
+          '#f8fafc',  // Rank 9: Pale gray
+          '#f8fafc'   // Rank 10+: Pale gray
+        ];
+
+        if (rankIndex < 3) return topColors[rankIndex];
+        if (rankIndex < 10) return restColors[rankIndex - 3];
+        // Fallback for more than 10 runs
+        return '#f8fafc';
+      };
+
+      if (histogramArtifacts.length > 0) {
+        // Define the anchor percentiles for equal spacing (Gil Tene style)
+        const anchorPercentiles = [0, 90, 99, 99.9, 99.99, 99.999, 99.9999, 100];
+
+        // Map percentile to equally-spaced index
+        const percentileToIndex = (p) => {
+          if (p <= 0) return 0.0;
+          if (p >= 100) return 7.0;
+          if (p <= 90) return (p / 90) * 1.0; // 0-90% maps to 0.0-1.0
+          if (p <= 99) return 1.0 + ((p - 90) / 9) * 1.0; // 90-99% maps to 1.0-2.0
+          if (p <= 99.9) return 2.0 + ((p - 99) / 0.9) * 1.0; // 99-99.9% maps to 2.0-3.0
+          if (p <= 99.99) return 3.0 + ((p - 99.9) / 0.09) * 1.0; // 99.9-99.99% maps to 3.0-4.0
+          if (p <= 99.999) return 4.0 + ((p - 99.99) / 0.009) * 1.0; // 99.99-99.999% maps to 4.0-5.0
+          if (p <= 99.9999) return 5.0 + ((p - 99.999) / 0.0009) * 1.0; // 99.999-99.9999% maps to 5.0-6.0
+          return 6.0 + ((p - 99.9999) / (100 - 99.9999)) * 1.0; // 99.9999-100% maps to 6.0-7.0
+        };
+
+        // Sort artifacts by quality score (throughput / p99.9 latency) - higher is better
+        const artifactsWithMetrics = histogramArtifacts.map((artifact, index) => {
+          // Find matching step by concurrency
+          const matchingStep = steps.find(s => s.concurrency === artifact.concurrency);
+          let throughput = 0;
+          let p999 = 1;
+          if (matchingStep) {
+            throughput = achievedAccessor(matchingStep) || 0;
+            p999 = matchingStep.raw?.p999 || 1;
+          }
+          // Quality score: higher throughput with lower latency is better
+          const qualityScore = p999 > 0 ? throughput / p999 : 0;
+          return {
+            artifact,
+            originalIndex: index,
+            throughput,
+            p999,
+            qualityScore
+          };
+        });
+
+        artifactsWithMetrics.sort((a, b) => b.qualityScore - a.qualityScore);
+        const maxThroughput = Math.max(...artifactsWithMetrics.map(m => m.throughput));
+
+        // Find knee point for filtering
+        let kneeArtifactIndex = 0;
+        artifactsWithMetrics.forEach((item, idx) => {
+          if (item.artifact.concurrency === concurrency[kneeIdx]) {
+            kneeArtifactIndex = idx;
+          }
+        });
+
+        artifactsWithMetrics.forEach((item, rankIndex) => {
+          const { artifact, throughput } = item;
+          const percentiles = artifact.percentiles ?? [];
+          const latencyMs = artifact.latencyInMilliseconds ?? [];
+          if (percentiles.length === 0 || latencyMs.length === 0) {
+            return;
+          }
+          const label = artifact.concurrency
+            ? `C=${artifact.concurrency}`
+            : artifact.stepIndex !== undefined
+              ? `Step=${artifact.stepIndex}`
+              : `Step ${rankIndex + 1}`;
+
+          // Map all percentiles to their floating-point index positions
+          const transformedData = percentiles.map((p, i) => ({
+            x: percentileToIndex(p),
+            y: Math.max(latencyMs[i], 0.001)
+          }));
+
+          overlayDatasets.push({
+            label,
+            data: transformedData,
+            borderColor: getSmartColor(rankIndex, artifactsWithMetrics.length),
+            backgroundColor: 'transparent',
+            pointRadius: 0,
+            borderWidth: calculateLineWidth(rankIndex, artifactsWithMetrics.length),
+            showLine: true,
+            tension: 0.4,
+            anchorPercentiles: anchorPercentiles,
+            artifactIndex: rankIndex,
+            isKneeOrBetter: rankIndex <= kneeArtifactIndex
+          });
+        });
+      } else {
+        steps.forEach((step, index) => {
+          const label = `C=${step.concurrency ?? index + 1}`;
+          const percentilePoints = [
+            { p: 50, v: step.raw?.p50 },
+            { p: 75, v: step.raw?.p75 },
+            { p: 90, v: step.raw?.p90 },
+            { p: 95, v: step.raw?.p95 },
+            { p: 99, v: step.raw?.p99 },
+            { p: 99.9, v: step.raw?.p999 },
+            { p: 99.99, v: step.p9999 }
+          ].filter(point => typeof point.v === 'number' && point.v > 0);
+          if (percentilePoints.length === 0) return;
+          overlayDatasets.push({
+            label,
+            data: percentilePoints.map(point => ({ x: point.p, y: Math.max(point.v, 0.001) })),
+            borderColor: pickColor(index),
+            backgroundColor: 'transparent',
+            borderWidth: 1,
+            pointRadius: 2,
+            showLine: true
+          });
+        });
+      }
+
+      if (overlayDatasets.length > 0) {
+        overlaySection.style.display = 'block';
+        const anchorPercentiles = overlayDatasets[0].anchorPercentiles || [];
+
+        // Common chart options
+        const createChartOptions = (titleText, maxIdx, tickPositions, legendDisplay = true) => ({
+          parsing: false,
+          normalized: true,
+          animation: false,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'linear',
+              title: { display: true, text: titleText },
+              min: 0,
+              max: maxIdx,
+              ticks: {
+                autoSkip: false,
+                maxRotation: 0,
+                minRotation: 0,
+                callback: function(value) {
+                  return tickPositions[value] || '';
+                }
+              }
+            },
+            y: {
+              title: { display: true, text: 'Latency (ms)' },
+              type: 'linear',
+              beginAtZero: true
+            }
+          },
+          plugins: {
+            legend: {
+              display: legendDisplay,
+              position: 'top',
+              labels: { boxWidth: 10, font: { size: 10 } },
+              maxHeight: 80
+            }
+          }
+        });
+
+        // Full chart tick positions (0-7 for all anchors)
+        const fullTicks = {
+          0: '0%',
+          1: '90%',
+          2: '99%',
+          3: '99.9%',
+          4: '99.99%',
+          5: '99.999%',
+          6: '99.9999%',
+          7: '100%'
+        };
+
+        // Zoomed chart tick positions (0-3 for 0%, 90%, 99%, 99.9%)
+        const zoomTicks = {
+          0: '0%',
+          1: '90%',
+          2: '99%',
+          3: '99.9%'
+        };
+
+        // Chart 1: Full percentile curve (0-100%)
+        new Chart(document.getElementById('percentileOverlayChart'), {
+          type: 'line',
+          data: { datasets: overlayDatasets },
+          options: createChartOptions('Percentile (All Runs)', 7, fullTicks)
+        });
+
+        // Chart 2: Zoomed chart (0-99.9%)
+        const zoomDatasets = overlayDatasets.map(dataset => ({
+          ...dataset,
+          data: dataset.data.filter(point => point.x <= 3)
+        }));
+
+        new Chart(document.getElementById('percentileOverlayZoomChart'), {
+          type: 'line',
+          data: { datasets: zoomDatasets },
+          options: createChartOptions('Percentile 0-99.9% (All Runs)', 3, zoomTicks)
+        });
+
+        // Chart 3 & 4: Knee-point filtered charts (only show if more than 1 run up to knee)
+        const kneeDatasets = overlayDatasets.filter(ds => ds.isKneeOrBetter);
+        if (kneeDatasets.length > 1) {
+          new Chart(document.getElementById('percentileKneeChart'), {
+            type: 'line',
+            data: { datasets: kneeDatasets },
+            options: createChartOptions('Percentile (Up to Knee)', 7, fullTicks)
+          });
+
+          const kneeZoomDatasets = kneeDatasets.map(dataset => ({
+            ...dataset,
+            data: dataset.data.filter(point => point.x <= 3)
+          }));
+
+          new Chart(document.getElementById('percentileKneeZoomChart'), {
+            type: 'line',
+            data: { datasets: kneeZoomDatasets },
+            options: createChartOptions('Percentile 0-99.9% (Up to Knee)', 3, zoomTicks)
+          });
+        } else {
+          // Hide the knee charts if only 1 or fewer runs
+          document.getElementById('percentileKneeChart').parentElement.style.display = 'none';
+          document.getElementById('percentileKneeZoomChart').parentElement.style.display = 'none';
+        }
+      }
+
+      // CPU vs Concurrency
+      const clientCpu = steps.map(step => step.clientCpu ?? null);
+      const serverCpuSeries = steps.map(step => step.serverCpu ?? null);
+      const cpuDatasets = [];
+      if (clientCpu.some(v => typeof v === 'number')) {
+        cpuDatasets.push({
+          label: 'Client CPU %',
+          data: clientCpu,
+          borderColor: '#2563eb',
+          backgroundColor: 'rgba(37, 99, 235, 0.15)',
+          pointRadius: 3,
+          spanGaps: true
+        });
+      }
+      if (serverCpuSeries.some(v => typeof v === 'number')) {
+        cpuDatasets.push({
+          label: 'Server CPU %',
+          data: serverCpuSeries,
+          borderColor: '#16a34a',
+          backgroundColor: 'rgba(22, 163, 74, 0.15)',
+          pointRadius: 3,
+          spanGaps: true
+        });
+      }
+
+      new Chart(document.getElementById('cpuChart'), {
+        type: 'line',
+        data: { labels: concurrency, datasets: cpuDatasets },
+        options: {
+          animation: false,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Concurrency' } },
+            y: {
+              title: { display: true, text: 'CPU %' },
+              suggestedMin: 0,
+              suggestedMax: 100
+            }
+          }
+        }
+      });
+
+      // Memory vs Concurrency
+      const memorySeries = steps.map(step => step.serverMemoryMB ?? null);
+      const hasMemoryData = memorySeries.some(v => typeof v === 'number');
+      if (hasMemoryData) {
+        document.getElementById('memoryChartContainer').style.display = 'block';
+        new Chart(document.getElementById('memoryChart'), {
+          type: 'line',
+          data: {
+            labels: concurrency,
+            datasets: [{
+              label: 'Server Memory (MB)',
+              data: memorySeries,
+              borderColor: '#9333ea',
+              backgroundColor: 'rgba(147, 51, 234, 0.15)',
+              pointRadius: 3,
+              spanGaps: true
+            }]
+          },
+          options: {
+            animation: false,
+            maintainAspectRatio: false,
+            scales: {
+              x: { title: { display: true, text: 'Concurrency' } },
+              y: { title: { display: true, text: 'Memory (MB)' } }
+            }
+          }
+        });
+      } else {
+        // If no memory data, make the CPU chart use single-column layout
+        const resourceRow = document.getElementById('resourceChartRow');
+        if (resourceRow) {
+          resourceRow.className = 'chart-row-single';
+        }
+      }
+
+      // Raw data table
+      const rawDataBody = document.getElementById('raw-data-body');
+      rawDataBody.innerHTML = steps.map((step, index) => {
+        const achieved = achievedAccessor(step);
+        const target = targetAccessor(step);
+        const rpsErr = (target && target !== 0) ? ((achieved - target) / target) * 100 : null;
+        const formatLatency = value => formatNumber(value, 1);
+        const formatPercent = value => Number.isFinite(value) ? formatNumber(value, 2) : '';
+        const bytesOut = step.bytesOut ?? '';
+        const bytesIn = step.bytesIn ?? '';
+
+        return [
+          '<tr>',
+          `<td>${step.concurrency ?? ''}</td>`,
+          `<td>${step.stepIndex ?? ''}</td>`,
+          `<td>${target ?? ''}</td>`,
+          `<td>${formatNumber(achieved, 2)}</td>`,
+          `<td>${formatPercent(rpsErr)}</td>`,
+          `<td>${formatLatency(step.raw?.p50)}</td>`,
+          `<td>${formatLatency(step.raw?.p75)}</td>`,
+          `<td>${formatLatency(step.raw?.p90)}</td>`,
+          `<td>${formatLatency(step.raw?.p95)}</td>`,
+          `<td>${formatLatency(step.raw?.p99)}</td>`,
+          `<td>${formatLatency(step.raw?.p999)}</td>`,
+          `<td>${formatLatency(step.p9999)}</td>`,
+          `<td>${formatLatency(step.latMean)}</td>`,
+          `<td>${formatLatency(step.latStdev)}</td>`,
+          `<td>${formatLatency(step.pMax)}</td>`,
+          `<td>${step.sampleCount ?? ''}</td>`,
+          `<td>${step.correctedCount ?? ''}</td>`,
+          `<td>${formatNumber(step.clientCpu ?? null, 2)}</td>`,
+          `<td>${formatNumber(step.serverCpu ?? null, 2)}</td>`,
+          `<td>${step.serverMemoryMB ?? ''}</td>`,
+          `<td>${formatNumber(step.networkUtilization ?? null, 2)}</td>`,
+          `<td>${bytesOut}</td>`,
+          `<td>${bytesIn}</td>`,
+          `<td>${formatPercent(typeof step.errorRate === 'number' ? step.errorRate * 100 : null)}</td>`,
+          `<td>${step.errorsTotal ?? ''}</td>`,
+          `<td>${step.timeouts ?? ''}</td>`,
+          `<td>${step.http4xx ?? ''}</td>`,
+          `<td>${step.http5xx ?? ''}</td>`,
+          '</tr>'
+        ].join('');
+      }).join('');
+
+      function pickColor(index) {
+        const palette = [
+          '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#0ea5e9',
+          '#f97316', '#059669', '#facc15', '#7c3aed', '#ef4444'
+        ];
+        return palette[index % palette.length];
+      }
+
+      window.__reportRendered = true;
+      } catch (error) {
+        console.error('Failed to render report', error);
+        window.__reportRendered = true;
+      }
+    })();
+  </script>
+</body>
+</html>

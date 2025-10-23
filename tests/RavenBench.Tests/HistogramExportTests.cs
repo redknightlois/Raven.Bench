@@ -271,6 +271,8 @@ public class HistogramExportTests : RavenTestDriver, IDisposable
             Percentiles = new[] { 0.0, 50.0, 99.0, 100.0 },
             LatencyInMicroseconds = new long[] { 100, 1000, 5000, 50000 },
             LatencyInMilliseconds = new[] { 0.1, 1.0, 5.0, 50.0 },
+            BinEdges = new long[] { 0, 1000, 2000 },
+            BinCounts = new long[] { 500, 300, 200 },
             HlogPath = "/path/to/step-c0016.hlog",
             CsvPath = "/path/to/step-c0016.csv"
         };

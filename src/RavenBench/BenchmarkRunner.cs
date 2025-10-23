@@ -518,6 +518,17 @@ public class BenchmarkRunner(RunOptions opts)
             latencyInMilliseconds[i] = Math.Round(valueMicros / 1000.0, 4);
         }
 
+        // Extract histogram bin data for reconstructing the distribution
+        // RecordedValues() returns (value, count) pairs for all non-zero bins
+        var binEdgesList = new List<long>();
+        var binCountsList = new List<long>();
+
+        foreach (var bucket in histogram.RecordedValues())
+        {
+            binEdgesList.Add(bucket.ValueIteratedTo);
+            binCountsList.Add(bucket.CountAddedInThisIterationStep);
+        }
+
         return new HistogramArtifact
         {
             Concurrency = concurrency,
@@ -526,6 +537,8 @@ public class BenchmarkRunner(RunOptions opts)
             Percentiles = percentiles,
             LatencyInMicroseconds = latencyInMicroseconds,
             LatencyInMilliseconds = latencyInMilliseconds,
+            BinEdges = binEdgesList.ToArray(),
+            BinCounts = binCountsList.ToArray(),
             HlogPath = hlogPath,
             CsvPath = csvPath
         };

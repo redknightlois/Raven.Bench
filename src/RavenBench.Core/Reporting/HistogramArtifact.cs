@@ -46,6 +46,11 @@ public sealed class HistogramArtifact
     public required long[] LatencyInMicroseconds { get; init; }
     public required double[] LatencyInMilliseconds { get; init; }
 
+    // Histogram bin data for reconstructing the full distribution
+    // Parallel arrays: BinEdges[i] is the lower bound (in microseconds) and BinCounts[i] is the frequency
+    public long[] BinEdges { get; init; } = Array.Empty<long>();
+    public long[] BinCounts { get; init; } = Array.Empty<long>();
+
     // File paths are optional - only populated if you enabled file export
     public string? HlogPath { get; init; }
     public string? CsvPath { get; init; }
