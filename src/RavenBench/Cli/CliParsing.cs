@@ -61,7 +61,10 @@ internal static class CliParsing
             DatasetProfile = s.DatasetProfile,
             DatasetSize = s.DatasetSize,
             DatasetSkipIfExists = s.DatasetSkipIfExists,
-            DatasetCacheDir = s.DatasetCacheDir
+            DatasetCacheDir = s.DatasetCacheDir,
+            OutputDir = s.OutputDir,
+            LatencyHistogramsDir = null, // Will be derived from OutputDir in RunCommand
+            LatencyHistogramsFormat = ParseHistogramExportFormat(s.HistogramsFormat)
         };
     }
 
@@ -205,6 +208,17 @@ internal static class CliParsing
             "raw" => LatencyDisplayType.Raw,
             "both" => LatencyDisplayType.Both,
             _ => throw new ArgumentException($"Invalid latency display type: {latencies}. Valid options: normalized, raw, both")
+        };
+    }
+
+    private static HistogramExportFormat ParseHistogramExportFormat(string format)
+    {
+        return format.ToLowerInvariant() switch
+        {
+            "hlog" => HistogramExportFormat.Hlog,
+            "csv" => HistogramExportFormat.Csv,
+            "both" => HistogramExportFormat.Both,
+            _ => throw new ArgumentException($"Invalid histogram export format: {format}. Valid options: hlog, csv, both")
         };
     }
 

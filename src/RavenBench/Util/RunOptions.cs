@@ -70,10 +70,15 @@ public sealed class RunOptions
     public bool DatasetSkipIfExists { get; init; } = true; // Skip import if dataset appears to exist
     public string? DatasetCacheDir { get; init; }
 
+    public string? OutputDir { get; init; }  // Prefix for all output files when using --output-prefix
+
     // Legacy SNMP properties for backwards compatibility - prefer using Snmp property
     public bool SnmpEnabled => Snmp.Enabled;
     public int SnmpPort => Snmp.Port;
     public TimeSpan SnmpPollInterval => Snmp.PollInterval;
+
+    public string? LatencyHistogramsDir { get; init; }
+    public HistogramExportFormat LatencyHistogramsFormat { get; init; } = HistogramExportFormat.Hlog;
 }
 
 public enum WorkloadProfile
@@ -129,4 +134,11 @@ public enum QueryProfile
     /// Full-text search mixing rare and common terms (50/50)
     /// </summary>
     TextSearchMixed
+}
+
+public enum HistogramExportFormat
+{
+    Hlog = 0,  // HdrHistogram log format - more data points
+    Csv,       // Simple CSV - just the key percentiles
+    Both       // Write both files
 }

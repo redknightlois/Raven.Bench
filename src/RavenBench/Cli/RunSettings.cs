@@ -102,12 +102,16 @@ public sealed class RunSettings : CommandSettings
     [Description("Knee detection rule: dthr=X%,dp95=Y% (default: dthr=5%,dp95=20%)")]
     public string KneeRule { get; init; } = "dthr=5%,dp95=20%";
 
+    [CommandOption("--output-prefix")]
+    [Description("Output path prefix for all artifacts (creates: {prefix}.json, {prefix}.csv, {prefix}-step-cXXXX.hlog)")]
+    public string? OutputDir { get; init; }
+
     [CommandOption("--out")]
-    [Description("Output path for JSON results")]
+    [Description("Output path for JSON results (use --output-prefix for unified output)")]
     public string? OutJson { get; init; }
 
     [CommandOption("--out-csv")]
-    [Description("Output path for CSV results")]
+    [Description("Output path for CSV results (use --output-prefix for unified output)")]
     public string? OutCsv { get; init; }
 
     [CommandOption("--seed")]
@@ -182,4 +186,8 @@ public sealed class RunSettings : CommandSettings
     [CommandOption("--snmp-timeout")]
     [Description("SNMP timeout (e.g., 5s, 10s) (default: 5s)")]
     public string SnmpTimeout { get; init; } = "5s";
+
+    [CommandOption("--histograms-format")]
+    [Description("Histogram export format: hlog, csv, both (default: hlog, auto-enabled when CSV output specified)")]
+    public string HistogramsFormat { get; init; } = "hlog";
 }

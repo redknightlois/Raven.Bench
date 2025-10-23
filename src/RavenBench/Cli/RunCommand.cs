@@ -32,6 +32,131 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             return -2;
         }
 
+        // If using --output-prefix, derive all output paths from it
+        if (string.IsNullOrEmpty(opts.OutputDir) == false)
+        {
+            var prefix = opts.OutputDir;
+            var jsonPath = $"{prefix}.json";
+            var csvPath = $"{prefix}.csv";
+            var histogramPrefix = prefix; // Histograms will use: {prefix}-step-c0004.hlog
+
+            opts = new RunOptions
+            {
+                Url = opts.Url,
+                Database = opts.Database,
+                Reads = opts.Reads,
+                Writes = opts.Writes,
+                Updates = opts.Updates,
+                Distribution = opts.Distribution,
+                DocumentSizeBytes = opts.DocumentSizeBytes,
+                Transport = opts.Transport,
+                Compression = opts.Compression,
+                Mode = opts.Mode,
+                ConcurrencyStart = opts.ConcurrencyStart,
+                ConcurrencyEnd = opts.ConcurrencyEnd,
+                ConcurrencyFactor = opts.ConcurrencyFactor,
+                Warmup = opts.Warmup,
+                Duration = opts.Duration,
+                MaxErrorRate = opts.MaxErrorRate,
+                KneeThroughputDelta = opts.KneeThroughputDelta,
+                KneeP95Delta = opts.KneeP95Delta,
+                OutJson = jsonPath,
+                OutCsv = csvPath,
+                Seed = opts.Seed,
+                Preload = opts.Preload,
+                RawEndpoint = opts.RawEndpoint,
+                ThreadPoolWorkers = opts.ThreadPoolWorkers,
+                ThreadPoolIOCP = opts.ThreadPoolIOCP,
+                Notes = opts.Notes,
+                ExpectedCores = opts.ExpectedCores,
+                NetworkLimitedMode = opts.NetworkLimitedMode,
+                LinkMbps = opts.LinkMbps,
+                HttpVersion = opts.HttpVersion,
+                StrictHttpVersion = opts.StrictHttpVersion,
+                Verbose = opts.Verbose,
+                LatencyDisplay = opts.LatencyDisplay,
+                Snmp = opts.Snmp,
+                Profile = opts.Profile,
+                QueryProfile = opts.QueryProfile,
+                BulkBatchSize = opts.BulkBatchSize,
+                BulkDepth = opts.BulkDepth,
+                Dataset = opts.Dataset,
+                DatasetProfile = opts.DatasetProfile,
+                DatasetSize = opts.DatasetSize,
+                DatasetSkipIfExists = opts.DatasetSkipIfExists,
+                DatasetCacheDir = opts.DatasetCacheDir,
+                OutputDir = opts.OutputDir,
+                LatencyHistogramsDir = histogramPrefix,
+                LatencyHistogramsFormat = opts.LatencyHistogramsFormat
+            };
+
+            AnsiConsole.MarkupLine($"[dim]Output prefix: {prefix}[/]");
+            AnsiConsole.MarkupLine($"[dim]  JSON: {jsonPath}[/]");
+            AnsiConsole.MarkupLine($"[dim]  CSV: {csvPath}[/]");
+            AnsiConsole.MarkupLine($"[dim]  Histograms: {histogramPrefix}-step-cXXXX.hlog[/]");
+        }
+        // Auto-enable histogram export when you specify --out-csv
+        else if (string.IsNullOrEmpty(opts.LatencyHistogramsDir) &&
+                 string.IsNullOrEmpty(opts.OutCsv) == false)
+        {
+            var outputPath = opts.OutCsv;
+            var outputDir = Path.GetDirectoryName(outputPath) ?? ".";
+            var outputName = Path.GetFileNameWithoutExtension(outputPath);
+            var histogramPrefix = Path.Combine(outputDir, outputName);
+
+            opts = new RunOptions
+            {
+                Url = opts.Url,
+                Database = opts.Database,
+                Reads = opts.Reads,
+                Writes = opts.Writes,
+                Updates = opts.Updates,
+                Distribution = opts.Distribution,
+                DocumentSizeBytes = opts.DocumentSizeBytes,
+                Transport = opts.Transport,
+                Compression = opts.Compression,
+                Mode = opts.Mode,
+                ConcurrencyStart = opts.ConcurrencyStart,
+                ConcurrencyEnd = opts.ConcurrencyEnd,
+                ConcurrencyFactor = opts.ConcurrencyFactor,
+                Warmup = opts.Warmup,
+                Duration = opts.Duration,
+                MaxErrorRate = opts.MaxErrorRate,
+                KneeThroughputDelta = opts.KneeThroughputDelta,
+                KneeP95Delta = opts.KneeP95Delta,
+                OutJson = opts.OutJson,
+                OutCsv = opts.OutCsv,
+                Seed = opts.Seed,
+                Preload = opts.Preload,
+                RawEndpoint = opts.RawEndpoint,
+                ThreadPoolWorkers = opts.ThreadPoolWorkers,
+                ThreadPoolIOCP = opts.ThreadPoolIOCP,
+                Notes = opts.Notes,
+                ExpectedCores = opts.ExpectedCores,
+                NetworkLimitedMode = opts.NetworkLimitedMode,
+                LinkMbps = opts.LinkMbps,
+                HttpVersion = opts.HttpVersion,
+                StrictHttpVersion = opts.StrictHttpVersion,
+                Verbose = opts.Verbose,
+                LatencyDisplay = opts.LatencyDisplay,
+                Snmp = opts.Snmp,
+                Profile = opts.Profile,
+                QueryProfile = opts.QueryProfile,
+                BulkBatchSize = opts.BulkBatchSize,
+                BulkDepth = opts.BulkDepth,
+                Dataset = opts.Dataset,
+                DatasetProfile = opts.DatasetProfile,
+                DatasetSize = opts.DatasetSize,
+                DatasetSkipIfExists = opts.DatasetSkipIfExists,
+                DatasetCacheDir = opts.DatasetCacheDir,
+                OutputDir = opts.OutputDir,
+                LatencyHistogramsDir = histogramPrefix,
+                LatencyHistogramsFormat = opts.LatencyHistogramsFormat
+            };
+
+            AnsiConsole.MarkupLine($"[dim]Histogram export (hlog): {histogramPrefix}-step-cXXXX.hlog[/]");
+        }
+
         var runner = new BenchmarkRunner(opts);
         var run = await runner.RunAsync();
 
@@ -71,7 +196,8 @@ public sealed class RunCommand : AsyncCommand<RunSettings>
             StartupCalibration = run.StartupCalibration,
             Notes = opts.Notes,
             SnmpTimeSeries = snmpTimeSeries,
-            SnmpAggregations = snmpAggregations
+            SnmpAggregations = snmpAggregations,
+            HistogramArtifacts = run.HistogramArtifacts
         };
 
         // Write outputs
