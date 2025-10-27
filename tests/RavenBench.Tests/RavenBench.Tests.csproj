@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\RavenBench.Core\RavenBench.Core.csproj" />
     <ProjectReference Include="..\..\src\RavenBench\RavenBench.csproj" />
+    <ProjectReference Include="..\..\src\RavenBench.Reporter\RavenBench.Reporter.csproj" />
   </ItemGroup>
 
    <ItemGroup>

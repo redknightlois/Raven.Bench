@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RavenBench Multi-Run Comparison</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 24px; color: #0f172a; background-color: #f8fafc; }
+    h1, h2 { color: #0f172a; margin-bottom: 12px; }
+    h1 { font-size: 28px; }
+    h2 { font-size: 20px; margin-top: 32px; }
+    section { background: #ffffff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1); margin-bottom: 24px; }
+    .meta-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px; }
+    .meta-item { background: #f1f5f9; padding: 12px; border-radius: 8px; font-size: 14px; }
+    .meta-item strong { display: block; margin-bottom: 4px; font-size: 12px; text-transform: uppercase; color: #475569; }
+    .notes { margin-top: 16px; padding: 12px; background: #e0f2fe; border-left: 4px solid #0ea5e9; border-radius: 8px; }
+    
+    /* Run summary cards */
+    .run-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 16px 0; }
+    .run-card { background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px; }
+    .run-card.baseline { border-color: #2563eb; background: #eff6ff; }
+    .run-card-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #1e293b; }
+    .run-card-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .metric { font-size: 13px; }
+    .metric-label { color: #64748b; display: block; }
+    .metric-value { font-weight: 600; color: #0f172a; }
+    .metric-delta { font-size: 11px; margin-left: 4px; }
+    .metric-delta.positive { color: #16a34a; }
+    .metric-delta.negative { color: #dc2626; }
+    
+    /* Charts */
+    .chart-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+    .chart-box { min-width: 0; height: 400px; position: relative; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+    .chart-box-full { width: 100%; max-width: 960px; height: 400px; margin: 16px auto; position: relative; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
+    canvas.chart-canvas { display: block; width: 100% !important; height: 100% !important; max-height: 360px; }
+    
+    /* Contrast cards */
+    .contrast-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin: 16px 0; }
+    .contrast-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
+    .contrast-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #475569; }
+    .contrast-value { font-size: 18px; font-weight: 700; color: #0f172a; }
+    .contrast-delta { font-size: 14px; margin-top: 4px; }
+    
+    /* Takeaways */
+    .takeaways { background: #f0fdf4; border-left: 4px solid #16a34a; padding: 16px; border-radius: 8px; margin: 16px 0; }
+    .takeaways ul { margin: 8px 0; padding-left: 20px; }
+    .takeaways li { margin: 6px 0; color: #0f172a; }
+    
+    footer { text-align: center; font-size: 11px; color: #475569; margin-top: 32px; }
+    
+    @page {
+      size: A4 landscape;
+      margin: 12mm;
+    }
+    
+    @media print {
+      * {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      body {
+        margin: 0;
+        background: white;
+      }
+      section {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header style="background: #ffffff; border-radius: 8px; padding: 16px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);">
+    <h1 id="report-title">RavenBench Multi-Run Comparison</h1>
+    <div id="meta-summary" style="font-size: 13px; color: #64748b; margin-top: 8px;"></div>
+    <p class="notes" id="report-notes" style="display:none;"></p>
+  </header>
+
+  <section>
+    <h2>Run Summary</h2>
+    <div class="run-cards" id="run-cards"></div>
+  </section>
+
+  <section>
+    <h2>Key Takeaways</h2>
+    <div class="takeaways">
+      <ul id="key-takeaways"></ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Throughput &amp; Latency Comparison</h2>
+    <div class="chart-row">
+      <div class="chart-box"><canvas id="throughputComparisonChart" class="chart-canvas"></canvas></div>
+      <div class="chart-box"><canvas id="p99ComparisonChart" class="chart-canvas"></canvas></div>
+    </div>
+  </section>
+
+  <section id="latency-spotlight-section">
+    <h2>Latency Spotlight</h2>
+    <div class="contrast-grid" id="latency-contrasts"></div>
+    <div class="chart-box-full" style="margin-top: 20px;">
+      <canvas id="percentileComparisonChart" class="chart-canvas"></canvas>
+    </div>
+  </section>
+
+  <section id="resource-comparison-section">
+    <h2>Resource Cost Comparison</h2>
+    <div class="chart-row">
+      <div class="chart-box"><canvas id="cpuComparisonChart" class="chart-canvas"></canvas></div>
+      <div class="chart-box"><canvas id="memoryComparisonChart" class="chart-canvas"></canvas></div>
+    </div>
+  </section>
+
+  <footer>
+    RavenBench Reporter — Multi-Run Comparison
+  </footer>
+
+  <script id="report-context" type="application/json">__REPORT_CONTEXT__</script>
+  <script id="comparison-model" type="application/json">__COMPARISON_MODEL__</script>
+  <script>
+    (function () {
+      try {
+        if (window.Chart) {
+          const annotationPlugin = window.ChartAnnotation || window['chartjs-plugin-annotation'];
+          if (annotationPlugin) {
+            Chart.register(annotationPlugin);
+          }
+        }
+
+        const contextElement = document.getElementById('report-context');
+        const modelElement = document.getElementById('comparison-model');
+
+        if (!contextElement || !modelElement) {
+          console.error('Report template is missing expected data payloads.');
+          window.__reportRendered = true;
+          return;
+        }
+
+        const context = JSON.parse(contextElement.textContent || '{}');
+        const model = JSON.parse(modelElement.textContent || '{}');
+
+        window.__reportRendered = false;
+
+        // Set title and notes
+        const title = context.title || 'RavenBench Multi-Run Comparison';
+        document.getElementById('report-title').textContent = title;
+
+        const notes = (context.notes || '').trim();
+        const notesElement = document.getElementById('report-notes');
+        if (notes.length > 0) {
+          notesElement.textContent = notes;
+          notesElement.style.display = 'block';
+        }
+
+        // Meta summary
+        const metaSummary = document.getElementById('meta-summary');
+        const baseline = model.baseline;
+        if (baseline && baseline.summary) {
+          const profileNames = {
+            0: 'Unspecified', 1: 'Mixed', 2: 'Writes', 3: 'Reads',
+            4: 'QueryById', 5: 'BulkWrites', 6: 'StackOverflowReads',
+            7: 'StackOverflowQueries', 8: 'QueryUsersByName'
+          };
+          const profile = profileNames[baseline.summary.options?.profile] || 'Scenario';
+          metaSummary.textContent = `Profile: ${profile} • Transport: ${baseline.summary.options?.transport || 'n/a'} • HTTP: ${baseline.summary.effectiveHttpVersion || 'n/a'} • Generated: ${context.generatedAt || 'n/a'}`;
+        }
+
+        // Render run summary cards
+        const runCardsContainer = document.getElementById('run-cards');
+        const allRuns = [model.baseline].concat(model.contenders || []);
+        
+        allRuns.forEach((run, index) => {
+          const card = document.createElement('div');
+          card.className = index === 0 ? 'run-card baseline' : 'run-card';
+          
+          const bestStep = run.bestStep;
+          const throughput = bestStep ? bestStep.throughput.toFixed(0) : 'N/A';
+          const p99 = bestStep && bestStep.raw ? bestStep.raw.p99.toFixed(2) : 'N/A';
+          const p999 = bestStep && bestStep.raw ? bestStep.raw.p999.toFixed(2) : 'N/A';
+          const errorRate = bestStep ? (bestStep.errorRate * 100).toFixed(3) : 'N/A';
+          const concurrency = bestStep ? bestStep.concurrency : 'N/A';
+          
+          card.innerHTML = `
+            <div class="run-card-title">${run.label} ${index === 0 ? '(Baseline)' : ''}</div>
+            <div class="run-card-metrics">
+              <div class="metric">
+                <span class="metric-label">Best Throughput</span>
+                <span class="metric-value">${throughput} ops/s</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Knee Concurrency</span>
+                <span class="metric-value">${concurrency}</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">P99 Latency</span>
+                <span class="metric-value">${p99} ms</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">P99.9 Latency</span>
+                <span class="metric-value">${p999} ms</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Error Rate</span>
+                <span class="metric-value">${errorRate}%</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Quality Score</span>
+                <span class="metric-value">${run.bestQualityScore ? run.bestQualityScore.toFixed(1) : 'N/A'}</span>
+              </div>
+            </div>
+          `;
+          runCardsContainer.appendChild(card);
+        });
+
+        // Render key takeaways
+        const takeawaysList = document.getElementById('key-takeaways');
+        (model.keyTakeaways || []).forEach(takeaway => {
+          const li = document.createElement('li');
+          li.textContent = takeaway;
+          takeawaysList.appendChild(li);
+        });
+
+        // Color palette for runs
+        const runColors = ['#2563eb', '#dc2626', '#16a34a'];
+
+        // Throughput comparison chart
+        const alignedSteps = model.alignedSteps || [];
+        const concurrencies = alignedSteps.map(s => s.concurrency);
+        
+        const throughputDatasets = allRuns.map((run, index) => ({
+          label: run.label,
+          data: alignedSteps.map(step => {
+            const metrics = step.runMetrics[index];
+            return metrics ? metrics.throughput : null;
+          }),
+          borderColor: runColors[index % runColors.length],
+          backgroundColor: runColors[index % runColors.length],
+          tension: 0.2,
+          pointRadius: 4
+        }));
+
+        new Chart(document.getElementById('throughputComparisonChart'), {
+          type: 'line',
+          data: { labels: concurrencies, datasets: throughputDatasets },
+          options: {
+            animation: false,
+            maintainAspectRatio: false,
+            scales: {
+              x: { title: { display: true, text: 'Concurrency' } },
+              y: { title: { display: true, text: 'Throughput (ops/s)' }, beginAtZero: true }
+            },
+            plugins: { legend: { position: 'top' } }
+          }
+        });
+
+        // P99 comparison chart
+        const p99Datasets = allRuns.map((run, index) => ({
+          label: run.label,
+          data: alignedSteps.map(step => {
+            const metrics = step.runMetrics[index];
+            return metrics ? metrics.p99 : null;
+          }),
+          borderColor: runColors[index % runColors.length],
+          backgroundColor: runColors[index % runColors.length],
+          tension: 0.2,
+          pointRadius: 4
+        }));
+
+        new Chart(document.getElementById('p99ComparisonChart'), {
+          type: 'line',
+          data: { labels: concurrencies, datasets: p99Datasets },
+          options: {
+            animation: false,
+            maintainAspectRatio: false,
+            scales: {
+              x: { title: { display: true, text: 'Concurrency' } },
+              y: { title: { display: true, text: 'P99 Latency (ms)' }, beginAtZero: true }
+            },
+            plugins: { legend: { position: 'top' } }
+          }
+        });
+
+        // Latency contrasts
+        const latencyContrastsContainer = document.getElementById('latency-contrasts');
+        (model.latencyContrasts || []).forEach(contrast => {
+          const card = document.createElement('div');
+          card.className = 'contrast-card';
+          
+          const deltaClass = contrast.percentageDelta > 0 ? 'negative' : (contrast.percentageDelta < 0 ? 'positive' : '');
+          const deltaSign = contrast.percentageDelta > 0 ? '+' : '';
+          
+          card.innerHTML = `
+            <div class="contrast-title">${contrast.context || 'Comparison'}</div>
+            <div class="contrast-value">${contrast.baselineValue.toFixed(2)} ms → ${contrast.contenderValue.toFixed(2)} ms</div>
+            <div class="contrast-delta ${deltaClass}">${deltaSign}${contrast.percentageDelta.toFixed(1)}% (${deltaSign}${contrast.absoluteDelta.toFixed(2)} ms)</div>
+            <div style="font-size: 11px; color: #64748b; margin-top: 4px;">
+              ${contrast.baselineLabel} @ C=${contrast.baselineConcurrency || '?'} vs ${contrast.contenderLabel} @ C=${contrast.contenderConcurrency || '?'}
+            </div>
+          `;
+          latencyContrastsContainer.appendChild(card);
+        });
+
+        // Percentile comparison (using histogram artifacts if available)
+        const percentileDatasets = [];
+        allRuns.forEach((run, index) => {
+          const histograms = run.summary.histogramArtifacts || [];
+          if (histograms.length > 0 && run.bestStep) {
+            // Find histogram for best step
+            const bestHistogram = histograms.find(h => h.concurrency === run.bestStep.concurrency);
+            if (bestHistogram) {
+              const data = bestHistogram.percentiles.map((p, i) => ({
+                x: p,
+                y: bestHistogram.latencyInMilliseconds[i]
+              }));
+              
+              percentileDatasets.push({
+                label: `${run.label} (C=${run.bestStep.concurrency})`,
+                data: data,
+                borderColor: runColors[index % runColors.length],
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.3
+              });
+            }
+          }
+        });
+
+        if (percentileDatasets.length > 0) {
+          new Chart(document.getElementById('percentileComparisonChart'), {
+            type: 'line',
+            data: { datasets: percentileDatasets },
+            options: {
+              parsing: false,
+              animation: false,
+              maintainAspectRatio: false,
+              scales: {
+                x: {
+                  type: 'linear',
+                  title: { display: true, text: 'Percentile' },
+                  min: 0,
+                  max: 100
+                },
+                y: {
+                  type: 'logarithmic',
+                  title: { display: true, text: 'Latency (ms)' }
+                }
+              },
+              plugins: { legend: { position: 'top' } }
+            }
+          });
+        }
+
+        // CPU comparison
+        const cpuDatasets = allRuns.map((run, index) => {
+          const bestStep = run.bestStep;
+          return {
+            label: run.label,
+            data: [bestStep?.serverCpu || 0],
+            backgroundColor: runColors[index % runColors.length]
+          };
+        });
+
+        new Chart(document.getElementById('cpuComparisonChart'), {
+          type: 'bar',
+          data: {
+            labels: ['Server CPU %'],
+            datasets: cpuDatasets
+          },
+          options: {
+            animation: false,
+            maintainAspectRatio: false,
+            scales: {
+              y: { title: { display: true, text: 'CPU %' }, beginAtZero: true, suggestedMax: 100 }
+            },
+            plugins: { legend: { position: 'top' } }
+          }
+        });
+
+        // Memory comparison
+        const memoryDatasets = allRuns.map((run, index) => {
+          const bestStep = run.bestStep;
+          return {
+            label: run.label,
+            data: [bestStep?.serverMemoryMB || 0],
+            backgroundColor: runColors[index % runColors.length]
+          };
+        });
+
+        new Chart(document.getElementById('memoryComparisonChart'), {
+          type: 'bar',
+          data: {
+            labels: ['Server Memory (MB)'],
+            datasets: memoryDatasets
+          },
+          options: {
+            animation: false,
+            maintainAspectRatio: false,
+            scales: {
+              y: { title: { display: true, text: 'Memory (MB)' }, beginAtZero: true }
+            },
+            plugins: { legend: { position: 'top' } }
+          }
+        });
+
+        window.__reportRendered = true;
+      } catch (error) {
+        console.error('Failed to render comparison report', error);
+        window.__reportRendered = true;
+      }
+    })();
+  </script>
+</body>
+</html>

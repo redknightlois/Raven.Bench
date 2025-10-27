@@ -16,6 +16,7 @@
 
     <ItemGroup>
       <EmbeddedResource Include="Templates\single-run.html" />
+      <EmbeddedResource Include="Templates\multi-run.html" />
     </ItemGroup>
 
 </Project>
