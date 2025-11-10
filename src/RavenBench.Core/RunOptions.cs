@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 
 namespace RavenBench.Core;
@@ -10,13 +11,68 @@ public enum LatencyDisplayType
 }
 
 /// <summary>
+/// Represents a step plan with start, end, and multiplication factor.
+/// Used for both concurrency steps (closed mode) and rate steps (rate mode).
+/// </summary>
+public readonly struct StepPlan
+{
+    public static StepPlan Empty { get; } = new StepPlan(0, 0, 0);
+
+    public int Start { get; }
+    public int End { get; }
+    public double Factor { get; }
+
+    public StepPlan(int start, int end, double factor)
+    {
+        Start = start;
+        End = end;
+        Factor = factor;
+    }
+
+    public bool IsValid => Start > 0 && End >= Start && Factor > 0;
+    public bool IsEmpty => Start == 0 && End == 0;
+
+    public StepPlan Normalize()
+    {
+        if (IsValid)
+            return this;
+
+        var normalizedStart = Math.Max(1, Start);
+        var normalizedEnd = Math.Max(normalizedStart, End);
+        var normalizedFactor = Factor <= 0 ? 1.0 : Factor;
+
+        return new StepPlan(normalizedStart, normalizedEnd, normalizedFactor);
+    }
+
+    public int Next(int current)
+    {
+        var factor = Math.Max(Factor, 1.0);
+        var next = (int)Math.Max(current * factor, current + 1);
+        return Math.Max(next, current + 1);
+    }
+}
+
+/// <summary>
+/// Load shape type for different benchmark modes.
+/// </summary>
+public enum LoadShape
+{
+    Closed,
+    Rate
+}
+
+/// <summary>
 /// Configuration options for running a benchmark, including server settings,
 /// workload parameters, concurrency settings, and output options.
 /// </summary>
-public sealed class RunOptions
+public sealed record RunOptions
 {
     public required string Url { get; init; }
     public required string Database { get; init; }
+
+    // Step plan and load shape
+    public StepPlan Step { get; init; } = new StepPlan(8, 512, 2.0);
+    public LoadShape Shape { get; init; }
 
     // Mix defined only via numeric flags (weights or percents)
     public double? Reads { get; init; }
@@ -27,9 +83,7 @@ public sealed class RunOptions
     public string Transport { get; init; } = "raw";
     public string Compression { get; init; } = "identity";
     public string Mode { get; init; } = "closed";
-    public int ConcurrencyStart { get; init; } = 8;
-    public int ConcurrencyEnd { get; init; } = 512;
-    public double ConcurrencyFactor { get; init; } = 2.0;
+    public int? RateWorkers { get; init; } // Max concurrent operations for rate mode (null = auto)
     public TimeSpan Warmup { get; init; } = TimeSpan.FromSeconds(20);
     public TimeSpan Duration { get; init; } = TimeSpan.FromSeconds(60);
     public double MaxErrorRate { get; init; } = 0.005; // 0.5%

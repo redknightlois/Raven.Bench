@@ -148,7 +148,10 @@ public class BenchmarkRunner(RunOptions opts)
 
         var steps = new List<StepResult>();
         var histogramArtifacts = new List<HistogramArtifact>();
-        var concurrency = opts.ConcurrencyStart;
+
+        var stepPlan = opts.Step.Normalize();
+        var currentValue = stepPlan.Start;
+        var endValue = stepPlan.End;
 
         var cpuTracker = new ProcessCpuTracker();
         using var serverTracker = new ServerMetricsTracker(transport, opts);
@@ -261,60 +264,36 @@ public class BenchmarkRunner(RunOptions opts)
             startupCalibration = null;
         }
         
-        // Create benchmark context to reduce parameter passing
-        var context = new BenchmarkContext
+        // Create core context for executor
+        // Create benchmark executor with all dependencies
+        var executor = new BenchmarkExecutor(
+            opts,
+            transport,
+            workload,
+            cpuTracker,
+            serverTracker,
+            opts.Snmp.Enabled ? opts.Snmp : null);
+
+        while (currentValue <= endValue)
         {
-            Transport = transport,
-            Workload = workload,
-            CpuTracker = cpuTracker,
-            ServerTracker = serverTracker,
-            Rng = _rng,
-            Options = opts
-        };
-        
-        while (concurrency <= opts.ConcurrencyEnd)
-        {
-            // Warmup without baseline (first step, no coordinated omission correction)
-            var (warmupResult, warmupHist) = await WarmupWithProgress(context, new StepParameters
+            // Create appropriate load generator based on load shape
+            ILoadGenerator loadGenerator = opts.Shape switch
             {
-                Concurrency = concurrency,
-                Duration = opts.Warmup,
-                Record = true,  // Record during warmup to derive baseline
-                BaselineLatencyMicros = 0  // No baseline for warmup
-            });
+                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, opts.RateWorkers ?? Math.Max((int)currentValue * 2, 100), _rng),
+                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng),
+                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng)
+            };
 
-            // Check if warmup failed with high error rate - terminate gracefully
-            if (warmupResult.ErrorRate > 0.5)
-            {
-                Console.WriteLine($"[Raven.Bench] Warmup failed with {warmupResult.ErrorRate:P1} error rate (>{50:P0}).");
-                var httpVersionInfo = negotiatedHttpVersion.Major == 1 ? " (common with HTTP/1 socket exhaustion)" : "";
-                Console.WriteLine($"[Raven.Bench] Stopping benchmark - system appears unstable{httpVersionInfo}.");
-                break;
-            }
+            // Calculate baseline latency for coordinated omission correction
+            var baselineLatencyMicros = startupCalibration?.Endpoints.Count > 0
+                ? (long)(startupCalibration.Endpoints.Min(e => e.ObservedMs) * 1000) // Convert ms to µs
+                : 0L;
 
-            // Derive baseline latency from warmup's median (P50) for coordinated omission correction
-            // Use P50 as a stable estimate of typical latency under light load
-            var warmupSnapshot = warmupHist.Snapshot();
-            var baselineLatencyMicros = (long)warmupSnapshot.GetPercentile(50);
-            if (baselineLatencyMicros < 1)
-            {
-                // Fallback: if warmup didn't record anything, use a minimal baseline
-                // to avoid division by zero in coordinated omission correction
-                baselineLatencyMicros = 100;  // 100 microseconds = 0.1ms baseline
-            }
+            // Execute step using the executor
+            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
 
-            var (s, hist) = await MeasureWithProgress(context, new StepParameters
-            {
-                Concurrency = concurrency,
-                Duration = opts.Duration,
-                Record = true,
-                BaselineLatencyMicros = baselineLatencyMicros
-            });
-
-            // Take snapshot once and reuse for all percentile calculations
-            // IMPORTANT: Snapshot() resets the recorder's interval histogram, so call it exactly once per step
-            // Avoids repeated histogram cloning and provides access to coordinated-omission-corrected data
-            var snapshot = hist.Snapshot();
+            // Take histogram snapshot for this step
+            var snapshot = latencyRecorder.Snapshot();
 
             // Calculate percentiles from snapshot
             int[] percentiles = { 50, 75, 90, 95, 99, 999 };
@@ -351,52 +330,46 @@ public class BenchmarkRunner(RunOptions opts)
                 normalizedPercentiles = rawPercentiles;
             }
             
-            s.Raw = rawPercentiles;
-            s.Normalized = normalizedPercentiles;
-
-            // Populate tail latency metrics from histogram snapshot
-            // P9999 and PMax capture extreme outliers beyond standard percentiles
-            s.P9999 = p9999;
-            s.PMax = pMax;
+            // Update step result with percentile data
+            stepResult.Raw = rawPercentiles;
+            stepResult.Normalized = normalizedPercentiles;
+            stepResult.P9999 = p9999;
+            stepResult.PMax = pMax;
+            stepResult.CorrectedCount = snapshot.TotalCount;
 
             // Apply same baseline normalization to tail metrics as we do for percentiles
             // This ensures normalized view shows additional latency due to load consistently
             if (startupCalibration?.Endpoints.Count > 0)
             {
                 var baselineRttMs = startupCalibration.Endpoints.Min(e => e.ObservedMs);
-                s.NormalizedP9999 = Math.Max(0, p9999 - baselineRttMs);
-                s.NormalizedPMax = Math.Max(0, pMax - baselineRttMs);
+                stepResult.NormalizedP9999 = Math.Max(0, p9999 - baselineRttMs);
+                stepResult.NormalizedPMax = Math.Max(0, pMax - baselineRttMs);
             }
             else
             {
                 // No calibration available - normalized = raw
-                s.NormalizedP9999 = p9999;
-                s.NormalizedPMax = pMax;
+                stepResult.NormalizedP9999 = p9999;
+                stepResult.NormalizedPMax = pMax;
             }
 
-            // CorrectedCount is the total histogram count including synthetic samples
-            // from coordinated omission correction. It will be >= SampleCount when
-            // slow responses trigger backfilling of "should-have-been" samples
-            s.CorrectedCount = snapshot.TotalCount;
-
             // Always build histogram data for JSON output
-            var artifact = BuildHistogramArtifact(snapshot, s.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
+            var artifact = BuildHistogramArtifact(snapshot, stepResult.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
             if (artifact != null)
             {
                 histogramArtifacts.Add(artifact);
             }
 
-            steps.Add(s);
-            maxNetUtil = Math.Max(maxNetUtil, s.NetworkUtilization);
+            steps.Add(stepResult);
+            maxNetUtil = Math.Max(maxNetUtil, stepResult.NetworkUtilization);
 
             // knee stop if error rate exceeds bound significantly
-            if (s.ErrorRate > Math.Max(opts.MaxErrorRate, 0.05))
+            if (stepResult.ErrorRate > Math.Max(opts.MaxErrorRate, 0.05))
             {
                 Console.WriteLine("[Raven.Bench] High error rate; stopping ramp.");
                 break;
             }
 
-            concurrency = (int)Math.Max(concurrency * opts.ConcurrencyFactor, concurrency + 1);
+            currentValue = stepPlan.Next(currentValue);
         }
 
         // Print verbose error summary if there were any errors
@@ -544,63 +517,7 @@ public class BenchmarkRunner(RunOptions opts)
         };
     }
 
-    private async Task<(StepResult, LatencyRecorder)> WarmupWithProgress(BenchmarkContext context, StepParameters step)
-    {
-        var (result, hist) = await AnsiConsole.Progress()
-            .AutoClear(true)
-            .Columns(new ProgressColumn[]
-            {
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new ElapsedTimeColumn(),
-                new RemainingTimeColumn()
-            })
-            .StartAsync(async ctx =>
-            {
-                var httpVersionInfo = context.Transport is RawHttpTransport raw ? $" HTTP/{raw.EffectiveHttpVersion}" : "";
-                var t = ctx.AddTask($"Warmup @ C={step.Concurrency}{httpVersionInfo}", maxValue: step.Duration.TotalSeconds);
-                var run = RunClosedLoopAsync(context, step);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (run.IsCompleted == false)
-                {
-                    t.Value = Math.Min(step.Duration.TotalSeconds, sw.Elapsed.TotalSeconds);
-                    await Task.Delay(200);
-                }
-                t.Value = t.MaxValue;
-                return await run;
-            });
 
-        return (result, hist);
-    }
-
-    private async Task<(StepResult result, LatencyRecorder hist)> MeasureWithProgress(BenchmarkContext context, StepParameters step)
-    {
-        (StepResult, LatencyRecorder) res = default;
-        await AnsiConsole.Progress()
-            .AutoClear(true)
-            .Columns(new ProgressColumn[]
-            {
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new ElapsedTimeColumn(),
-                new RemainingTimeColumn()
-            })
-            .StartAsync(async ctx =>
-            {
-                var httpVersionInfo = context.Transport is RawHttpTransport raw ? $" HTTP/{raw.EffectiveHttpVersion}" : "";
-                var t = ctx.AddTask($"Measure @ C={step.Concurrency}{httpVersionInfo}", maxValue: step.Duration.TotalSeconds);
-                var run = RunClosedLoopAsync(context, step);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (run.IsCompleted == false)
-                {
-                    t.Value = Math.Min(step.Duration.TotalSeconds, sw.Elapsed.TotalSeconds);
-                    await Task.Delay(200);
-                }
-                t.Value = t.MaxValue;
-                res = await run;
-            });
-        return res;
-    }
 
     internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, UsersWorkloadMetadata? usersMetadata)
     {

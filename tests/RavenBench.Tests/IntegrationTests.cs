@@ -307,9 +307,7 @@ public class IntegrationTests
         DocumentSizeBytes = 1024,
         Warmup = TimeSpan.FromMilliseconds(25),
         Duration = TimeSpan.FromMilliseconds(50),
-        ConcurrencyStart = 2,
-        ConcurrencyEnd = 2, // Single concurrency for simple tests
-        ConcurrencyFactor = 2,
+        Step = new StepPlan(2, 2, 1),
         Profile = WorkloadProfile.Mixed
     };
 }

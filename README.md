@@ -38,7 +38,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 
 **Usage**
 - Basic shape
-  - `Raven.Bench run --url <server> --database <db> [options]`
+  - `Raven.Bench closed --url <server> --database <db> [options]`
 - Common options
   - `--warmup <duration>` and `--duration <duration>`: per-step timing, e.g., `20s`, `60s`.
   - `--distribution <uniform|zipfian|latest>`: key selection strategy (default: `uniform`).
@@ -83,30 +83,32 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 
 **Quick Starts**
 - Expose the hose (identity raw HTTP)
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25 --distribution uniform --transport raw --compression identity --mode closed --concurrency 8..512x2 --duration 60s --out results.json --out-csv steps.csv`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25 --distribution uniform --transport raw --compression identity --concurrency 8..512x2 --duration 60s --out results.json --out-csv steps.csv`
 - Realistic client with compression
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile mixed --transport client --compression zstd --reads 75 --writes 25 --concurrency 8..1024x2 --duration 60s --latencies both`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile mixed --transport client --compression zstd --reads 75 --writes 25 --concurrency 8..1024x2 --duration 60s --latencies both`
 - Zipfian reads and small docs
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile mixed --reads 90 --writes 10 --distribution zipfian --doc-size 512B --duration 45s`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile mixed --reads 90 --writes 10 --distribution zipfian --doc-size 512B --duration 45s`
 - Write-only profile
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile writes --concurrency 16..256x2 --duration 60s`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile writes --concurrency 16..256x2 --duration 60s`
 - Read-only with preload
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile reads --preload 100000 --distribution zipfian --concurrency 8..512x2`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile reads --preload 100000 --distribution zipfian --concurrency 8..512x2`
 - Query-by-id profile
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution uniform --concurrency 8..256x2`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution uniform --concurrency 8..256x2`
 - Bulk writes (100 docs per batch)
-  - `Raven.Bench run --url http://localhost:8080 --database ycsb --profile bulk-writes --bulk-batch-size 100 --concurrency 4..64x2`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile bulk-writes --bulk-batch-size 100 --concurrency 4..64x2`
 - StackOverflow random reads with small dataset (auto-imports to StackOverflow-5GB)
-  - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-reads --dataset stackoverflow --dataset-profile small --concurrency 8..256x2 --duration 60s`
+  - `Raven.Bench closed --url http://localhost:8080 --profile stackoverflow-reads --dataset stackoverflow --dataset-profile small --concurrency 8..256x2 --duration 60s`
+- Rate-based benchmark (constant RPS steps)
+  - `Raven.Bench rate --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25 --distribution uniform --transport raw --compression identity --step 200..20000x1.5 --duration 60s --out results.json --out-csv steps.csv`
 - StackOverflow queries with half dataset (auto-imports to StackOverflow-20GB)
-  - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-queries --dataset stackoverflow --dataset-profile half --concurrency 8..128x2`
+  - `Raven.Bench closed --url http://localhost:8080 --profile stackoverflow-queries --dataset stackoverflow --dataset-profile half --concurrency 8..128x2`
 - StackOverflow with custom size (auto-imports to StackOverflow-12GB with 10 post dumps)
-  - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-reads --dataset stackoverflow --dataset-size 10 --concurrency 8..256x2`
+  - `Raven.Bench closed --url http://localhost:8080 --profile stackoverflow-reads --dataset stackoverflow --dataset-size 10 --concurrency 8..256x2`
 - StackOverflow text search queries (auto-imports to StackOverflow-5GB)
-   - `Raven.Bench run --url http://localhost:8080 --profile stackoverflow-queries --query-profile text-search --dataset stackoverflow --dataset-profile small --concurrency 8..128x2`
+   - `Raven.Bench closed --url http://localhost:8080 --profile stackoverflow-queries --query-profile text-search --dataset stackoverflow --dataset-profile small --concurrency 8..128x2`
    - Text search variants: `text-search-rare` (high selectivity), `text-search-common` (low selectivity), `text-search-mixed` (50/50 mix)
 - Users range queries (requires Users dataset)
-  - `Raven.Bench run --url http://localhost:8080 --profile query-users-by-name --query-profile range --dataset stackoverflow --dataset-profile small --concurrency 8..128x2`
+  - `Raven.Bench closed --url http://localhost:8080 --profile query-users-by-name --query-profile range --dataset stackoverflow --dataset-profile small --concurrency 8..128x2`
 - HTTP/3 (strict) or auto negotiate
   - Strict HTTP/3: `--http-version 3 --strict-http-version`
   - Negotiable HTTP/2: `--http-version http2`
@@ -190,6 +192,6 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `dotnet run --project src/RavenBench -- run --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25`
 
 **Notes and Limitations**
-- v0 supports `--mode closed` only.
+- v1 supports `closed` and `rate` commands.
 - zstd on raw transport is not supported; use `--transport client --compression zstd`.
 - Server-side attribution beyond basic CPU/memory/IO requires more counters and will improve over time.

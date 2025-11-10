@@ -16,8 +16,9 @@ namespace RavenBench.Reporting
     {
         public static readonly IReadOnlyList<CsvField> AllFields = new List<CsvField>
         {
-            new("Concurrency", _ => true, s => s.Concurrency),
+new("Concurrency", _ => true, s => s.Concurrency),
             new("Throughput", _ => true, s => s.Throughput),
+            new("TargetThroughput", _ => true, s => s.TargetThroughput),
             new("ErrorRate", _ => true, s => s.ErrorRate),
             new("BytesOut", _ => true, s => s.BytesOut),
             new("BytesIn", _ => true, s => s.BytesIn),
@@ -39,6 +40,7 @@ namespace RavenBench.Reporting
             new("Normalized.PMax", _ => true, s => s.NormalizedPMax),
             new("SampleCount", _ => true, s => s.SampleCount),
             new("CorrectedCount", _ => true, s => s.CorrectedCount),
+            new("ScheduledOperations", _ => true, s => s.ScheduledOperations),
             new("MaxTimestamp", _ => true, s => s.MaxTimestamp?.ToString("O")),
             new("ClientCpu", _ => true, s => s.ClientCpu),
             new("NetworkUtilization", _ => true, s => s.NetworkUtilization),

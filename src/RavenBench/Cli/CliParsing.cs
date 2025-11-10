@@ -1,74 +1,94 @@
 using System.Globalization;
 using RavenBench.Core;
 using System;
+using System.IO;
 
 namespace RavenBench.Cli;
 
 #nullable disable
 internal static class CliParsing
 {
-    public static RunOptions ToRunOptions(this RunSettings s)
+    public static RunOptions ToRunOptions(this ClosedSettings s)
     {
-        var (concurrencyStart, concurrencyEnd, concurrencyFactor) = ParseConcurrency(s.Concurrency);
-        var (kneeThroughputDelta, kneeP95Delta) = ParseKneeRule(s.KneeRule);
+        var stepString = s.Step ?? s.Concurrency ?? "8..512x2";
+        var stepPlan = ParseStepPlan(stepString);
+        return BuildRunOptions(s, LoadShape.Closed, stepPlan, modeOverride: "closed");
+    }
 
-        // Database is optional when using dataset profiles (will be auto-generated)
-        var database = string.IsNullOrEmpty(s.DatasetProfile) == false || string.IsNullOrEmpty(s.Dataset) == false
-            ? (s.Database ?? "temp-placeholder") // Will be overridden by dataset logic
-            : RequiredString(s.Database!, "--database");
+    public static RunOptions ToRunOptions(this RateSettings s)
+    {
+        var stepPlan = ParseStepPlan(s.Step ?? "200..20000x1.5");
+        return BuildRunOptions(s, LoadShape.Rate, stepPlan, rateWorkers: s.RateWorkers, modeOverride: "rate");
+    }
+
+    private static RunOptions BuildRunOptions(
+        BaseRunSettings settings,
+        LoadShape shape,
+        StepPlan stepPlan,
+        int? rateWorkers = null,
+        string? modeOverride = null)
+    {
+        var (kneeThroughputDelta, kneeP95Delta) = ParseKneeRule(settings.KneeRule);
+
+        var database = string.IsNullOrEmpty(settings.DatasetProfile) == false || string.IsNullOrEmpty(settings.Dataset) == false
+            ? (settings.Database ?? "temp-placeholder")
+            : RequiredString(settings.Database!, "--database");
+
+        var mode = modeOverride ?? shape.ToString().ToLowerInvariant();
 
         return new RunOptions
         {
-            Url = RequiredString(s.Url!, "--url"),
+            Url = RequiredString(settings.Url!, "--url"),
             Database = database,
-            Reads = ParseNullableWeight(s.Reads),
-            Writes = ParseNullableWeight(s.Writes),
-            Updates = ParseNullableWeight(s.Updates),
-            Profile = ParseProfile(s.Profile),
-            QueryProfile = ParseQueryProfile(s.QueryProfile),
-            DocumentSizeBytes = ParseSize(s.DocSize),
-            ConcurrencyStart = concurrencyStart,
-            ConcurrencyEnd = concurrencyEnd,
-            ConcurrencyFactor = concurrencyFactor,
-            Warmup = ParseDuration(s.Warmup),
-            Duration = ParseDuration(s.Duration),
-            MaxErrorRate = ParsePercent(s.MaxErrors),
+            Reads = ParseNullableWeight(settings.Reads),
+            Writes = ParseNullableWeight(settings.Writes),
+            Updates = ParseNullableWeight(settings.Updates),
+            Profile = ParseProfile(settings.Profile),
+            QueryProfile = ParseQueryProfile(settings.QueryProfile),
+            DocumentSizeBytes = ParseSize(settings.DocSize),
+            Step = stepPlan.Normalize(),
+            Shape = shape,
+            RateWorkers = rateWorkers,
+            Warmup = ParseDuration(settings.Warmup),
+            Duration = ParseDuration(settings.Duration),
+            MaxErrorRate = ParsePercent(settings.MaxErrors),
             KneeThroughputDelta = kneeThroughputDelta,
             KneeP95Delta = kneeP95Delta,
-            ThreadPoolWorkers = s.TpWorkers,
-            ThreadPoolIOCP = s.TpIOCP,
-            Distribution = s.Distribution,
-            Transport = s.Transport,
-            Compression = s.Compression,
-            Mode = s.Mode,
-            OutJson = s.OutJson,
-            OutCsv = s.OutCsv,
-            Seed = s.Seed,
-            Preload = s.Preload,
-            RawEndpoint = s.RawEndpoint,
-            Notes = s.Notes,
-            ExpectedCores = s.ExpectedCores,
-            NetworkLimitedMode = s.NetworkLimitedMode,
-            LinkMbps = s.LinkMbps,
-            HttpVersion = s.HttpVersion,
-            StrictHttpVersion = s.StrictHttpVersion,
-            Verbose = s.Verbose,
-            Snmp = BuildSnmpOptions(s),
-            LatencyDisplay = ParseLatencyDisplayType(s.Latencies),
-            BulkBatchSize = s.BulkBatchSize,
-            BulkDepth = s.BulkDepth,
-            Dataset = s.Dataset,
-            DatasetProfile = s.DatasetProfile,
-            DatasetSize = s.DatasetSize,
-            DatasetSkipIfExists = s.DatasetSkipIfExists,
-            DatasetCacheDir = s.DatasetCacheDir,
-            OutputDir = s.OutputDir,
-            LatencyHistogramsDir = null, // Will be derived from OutputDir in RunCommand
-            LatencyHistogramsFormat = ParseHistogramExportFormat(s.HistogramsFormat)
+            ThreadPoolWorkers = settings.TpWorkers,
+            ThreadPoolIOCP = settings.TpIOCP,
+            Distribution = settings.Distribution,
+            Transport = settings.Transport,
+            Compression = settings.Compression,
+            Mode = mode,
+            OutJson = settings.OutJson,
+            OutCsv = settings.OutCsv,
+            Seed = settings.Seed,
+            Preload = settings.Preload,
+            RawEndpoint = settings.RawEndpoint,
+            Notes = settings.Notes,
+            ExpectedCores = settings.ExpectedCores,
+            NetworkLimitedMode = settings.NetworkLimitedMode,
+            LinkMbps = settings.LinkMbps,
+            HttpVersion = settings.HttpVersion,
+            StrictHttpVersion = settings.StrictHttpVersion,
+            Verbose = settings.Verbose,
+            Snmp = BuildSnmpOptions(settings),
+            LatencyDisplay = ParseLatencyDisplayType(settings.Latencies),
+            BulkBatchSize = settings.BulkBatchSize,
+            BulkDepth = settings.BulkDepth,
+            Dataset = settings.Dataset,
+            DatasetProfile = settings.DatasetProfile,
+            DatasetSize = settings.DatasetSize,
+            DatasetSkipIfExists = settings.DatasetSkipIfExists,
+            DatasetCacheDir = settings.DatasetCacheDir,
+            OutputDir = settings.OutputDir,
+            LatencyHistogramsDir = null,
+            LatencyHistogramsFormat = ParseHistogramExportFormat(settings.HistogramsFormat)
         };
     }
 
-    private static SnmpOptions BuildSnmpOptions(RunSettings s)
+
+    private static SnmpOptions BuildSnmpOptions(BaseRunSettings s)
     {
         if (!s.SnmpEnabled)
             return SnmpOptions.Disabled;
@@ -142,16 +162,16 @@ internal static class CliParsing
 
     private static double? ParseNullableWeight(string s) => string.IsNullOrWhiteSpace(s) ? null : ParseWeight(s);
 
-    public static (int, int, double) ParseConcurrency(string s)
+    public static StepPlan ParseStepPlan(string s)
     {
         var parts = s.Split("..", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length != 2) throw new ArgumentException("Invalid --concurrency format");
+        if (parts.Length != 2) throw new ArgumentException("Invalid step plan format");
         var start = int.Parse(parts[0], CultureInfo.InvariantCulture);
         var right = parts[1];
         var x = right.IndexOf('x');
         var end = x >= 0 ? int.Parse(right.Substring(0, x), CultureInfo.InvariantCulture) : int.Parse(right, CultureInfo.InvariantCulture);
         var factor = x >= 0 ? double.Parse(right.Substring(x + 1), CultureInfo.InvariantCulture) : 2.0;
-        return (start, end, factor);
+        return new StepPlan(start, end, factor);
     }
 
     public static (double, double) ParseKneeRule(string s)
@@ -220,6 +240,33 @@ internal static class CliParsing
             "both" => HistogramExportFormat.Both,
             _ => throw new ArgumentException($"Invalid histogram export format: {format}. Valid options: hlog, csv, both")
         };
+    }
+
+    public static RunOptions ApplyOutputOptions(RunOptions opts)
+    {
+        if (string.IsNullOrEmpty(opts.OutputDir) == false)
+        {
+            var prefix = opts.OutputDir!;
+            return opts with
+            {
+                OutJson = $"{prefix}.json",
+                OutCsv = $"{prefix}.csv",
+                LatencyHistogramsDir = prefix
+            };
+        }
+
+        if (string.IsNullOrEmpty(opts.LatencyHistogramsDir) &&
+            string.IsNullOrEmpty(opts.OutCsv) == false)
+        {
+            var outputPath = opts.OutCsv!;
+            var outputDir = Path.GetDirectoryName(outputPath) ?? ".";
+            var outputName = Path.GetFileNameWithoutExtension(outputPath);
+            var histogramPrefix = Path.Combine(outputDir, outputName);
+
+            return opts with { LatencyHistogramsDir = histogramPrefix };
+        }
+
+        return opts;
     }
 
     private static string ExtractHostFromUrl(string url)

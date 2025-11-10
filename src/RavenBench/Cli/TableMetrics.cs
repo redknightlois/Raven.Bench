@@ -30,10 +30,18 @@ namespace RavenBench.Cli
         private static string FormatInt(long? value) => value?.ToString() ?? "N/A";
         private static string FormatPercent(double value) => (value * 100).ToString("F1");
 
-        public static readonly IReadOnlyList<MetricColumn> AllColumns = new List<MetricColumn>
+        public static IReadOnlyList<MetricColumn> GetColumns(BenchmarkSummary summary)
         {
-            // Common Columns
-            new("Concurrency", _ => true, s => s.Concurrency.ToString(), TableScope.Both),
+            var shape = summary.Options.Shape;
+            var loadColumnHeader = shape == LoadShape.Rate ? "Target RPS" : "Concurrency";
+            var loadColumnValue = shape == LoadShape.Rate
+                ? (Func<StepResult, string>)(s => s.TargetThroughput?.ToString("F0") ?? s.Concurrency.ToString())
+                : s => s.Concurrency.ToString();
+
+            return new List<MetricColumn>
+            {
+                // Common Columns
+                new(loadColumnHeader, _ => true, loadColumnValue, TableScope.Both),
             new("Thr/s", _ => true, s => s.Throughput.ToString("F0"), TableScope.Both, c => c.RightAligned()),
             new("Server Req/s", summary => summary.Options.SnmpEnabled && summary.Options.Snmp.Profile == SnmpProfile.Extended && summary.Steps.Any(s => s.ServerSnmpRequestsPerSec.HasValue), s => FormatNumber(s.ServerSnmpRequestsPerSec, "F0"), TableScope.Both, c => c.RightAligned()),
             
@@ -52,6 +60,7 @@ namespace RavenBench.Cli
             new("pMax ms", _ => true, s => FormatNumber(s.PMax), TableScope.Raw, c => c.RightAligned()),
 
             new("Errors %", summary => summary.Steps.Any(s => s.ErrorRate > 0), s => s.ErrorRate == 0 ? "N/A" : (s.ErrorRate * 100).ToString("F1"), TableScope.Both, c => c.RightAligned()),
+            new("Scheduled", summary => summary.Steps.Any(s => s.ScheduledOperations > s.SampleCount), s => s.ScheduledOperations > s.SampleCount ? s.ScheduledOperations.ToString() : "", TableScope.Both, c => c.RightAligned()),
             
             // Client Metrics
             new("Client CPU %", _ => true, s => FormatPercent(s.ClientCpu), TableScope.Both, c => c.RightAligned()),
@@ -74,15 +83,16 @@ namespace RavenBench.Cli
             // SNMP Extended
             new("Dirty MB", summary => summary.Options.SnmpEnabled && summary.Options.Snmp.Profile == SnmpProfile.Extended && summary.Steps.Any(s => s.DirtyMemoryMb.HasValue), s => FormatInt(s.DirtyMemoryMb), TableScope.Both, c => c.RightAligned()),
             new("Load 1m", summary => summary.Options.SnmpEnabled && summary.Options.Snmp.Profile == SnmpProfile.Extended && summary.Steps.Any(s => s.Load1Min.HasValue), s => FormatNumber(s.Load1Min, "F2"), TableScope.Both, c => c.RightAligned()),
-            new("Err/s", summary => summary.Options.SnmpEnabled && summary.Options.Snmp.Profile == SnmpProfile.Extended && summary.Steps.Any(s => s.SnmpErrorsPerSec.HasValue), s => FormatNumber(s.SnmpErrorsPerSec), TableScope.Both, c => c.RightAligned()),
-        };
+                new("Err/s", summary => summary.Options.SnmpEnabled && summary.Options.Snmp.Profile == SnmpProfile.Extended && summary.Steps.Any(s => s.SnmpErrorsPerSec.HasValue), s => FormatNumber(s.SnmpErrorsPerSec), TableScope.Both, c => c.RightAligned()),
+            };
+        }
 
         public static List<MetricColumn> GetVisibleColumns(BenchmarkSummary summary, TableScope scope)
         {
             if (!summary.Steps.Any())
                 return new List<MetricColumn>();
 
-            return AllColumns
+            return GetColumns(summary)
                 .Where(c => (c.Scope & scope) != 0)
                 .Where(c => c.IsVisible(summary))
                 .ToList();

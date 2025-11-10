@@ -10,7 +10,7 @@ public class RunSettingsSnmpTests
     [Fact]
     public void ToRunOptions_MapsSnmpEnabled()
     {
-        var settings = new RunSettings
+        var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "test",
@@ -26,7 +26,7 @@ public class RunSettingsSnmpTests
     [Fact]
     public void ToRunOptions_MapsSnmpEnabledByDefault()
     {
-        var settings = new RunSettings
+        var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "test",
@@ -41,7 +41,7 @@ public class RunSettingsSnmpTests
     [Fact]
     public void ToRunOptions_MapsSnmpPort()
     {
-        var settings = new RunSettings
+        var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "test",
@@ -58,7 +58,7 @@ public class RunSettingsSnmpTests
     [Fact]
     public void ToRunOptions_DefaultsSnmpPortTo161()
     {
-        var settings = new RunSettings
+        var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "test",
@@ -74,7 +74,7 @@ public class RunSettingsSnmpTests
     [Fact]
     public void ToRunOptions_MapsSnmpInterval()
     {
-        var settings = new RunSettings
+        var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "test",
@@ -91,7 +91,7 @@ public class RunSettingsSnmpTests
     [Fact]
     public void ToRunOptions_DefaultsSnmpIntervalTo250Milliseconds()
     {
-        var settings = new RunSettings
+        var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "test",

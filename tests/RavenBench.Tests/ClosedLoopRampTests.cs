@@ -29,9 +29,7 @@ public class ClosedLoopRampTests
             Compression = "identity",
             Warmup = TimeSpan.FromMilliseconds(50),
             Duration = TimeSpan.FromMilliseconds(100),
-            ConcurrencyStart = 2,
-            ConcurrencyEnd = 8,
-            ConcurrencyFactor = 2,
+            Step = new StepPlan(2, 8, 2),
             OutJson = null,
             OutCsv = null,
             Profile = WorkloadProfile.Mixed

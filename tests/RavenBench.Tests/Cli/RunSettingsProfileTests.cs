@@ -10,8 +10,8 @@ public class RunSettingsProfileTests
     [Fact]
     public void ToRunOptions_AllowsQueryUsersByNameProfile()
     {
-        // Arrange: configure the new equality workload profile that should be supported per PRD.
-        var settings = new RunSettings
+        // Arrange: configure new equality workload profile that should be supported per PRD.
+        var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "bench",

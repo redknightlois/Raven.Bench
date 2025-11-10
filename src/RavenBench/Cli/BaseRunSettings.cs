@@ -1,9 +1,10 @@
 using System.ComponentModel;
 using Spectre.Console.Cli;
+using RavenBench.Core;
 
 namespace RavenBench.Cli;
 
-public sealed class RunSettings : CommandSettings
+public abstract class BaseRunSettings : CommandSettings
 {
     [CommandOption("--url")]
     [Description("RavenDB server URL (e.g., http://localhost:8080)")]
@@ -78,13 +79,9 @@ public sealed class RunSettings : CommandSettings
     [Description("Compression mode: identity, gzip, brotli, zstd (default: identity)")]
     public string Compression { get; init; } = "identity";
 
-    [CommandOption("--mode")]
-    [Description("Load mode: closed (default: closed)")]
-    public string Mode { get; init; } = "closed";
-
-    [CommandOption("--concurrency")]
-    [Description("Concurrency ramp: start..end or start..endxfactor (e.g., 8..512x2) (default: 8..512x2)")]
-    public string Concurrency { get; init; } = "8..512x2";
+    [CommandOption("--step")]
+    [Description("Step plan: start..end or start..endxfactor (e.g., 8..512x2)")]
+    public string? Step { get; init; }
 
     [CommandOption("--warmup")]
     [Description("Warmup duration (e.g., 20s, 1m) (default: 20s)")]
@@ -190,4 +187,6 @@ public sealed class RunSettings : CommandSettings
     [CommandOption("--histograms-format")]
     [Description("Histogram export format: hlog, csv, both (default: hlog, auto-enabled when CSV output specified)")]
     public string HistogramsFormat { get; init; } = "hlog";
+
+
 }

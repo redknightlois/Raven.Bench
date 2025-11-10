@@ -7,6 +7,11 @@ public sealed class StepResult
     public int Concurrency { get; init; }
     public double Throughput { get; init; }
     public double ErrorRate { get; init; }
+    
+    /// <summary>
+    /// Target throughput (RPS) for rate-based benchmarks, null for closed-loop benchmarks.
+    /// </summary>
+    public double? TargetThroughput { get; init; }
     public long BytesOut { get; init; }
     public long BytesIn { get; init; }
 
@@ -32,6 +37,10 @@ public sealed class StepResult
     // Total histogram count including synthetic samples from coordinated omission correction
     // This will be >= SampleCount when corrections are applied
     public long CorrectedCount { get; set; }
+
+    // Number of operations scheduled (may exceed completed if queueing occurs)
+    // For rate mode, this shows if the generator kept up with the target RPS
+    public long ScheduledOperations { get; init; }
 
     // Timestamp when maximum latency was observed (null if not tracked)
     public DateTimeOffset? MaxTimestamp { get; set; }
