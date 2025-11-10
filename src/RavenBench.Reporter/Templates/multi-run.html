@@ -19,7 +19,8 @@
     
     /* Run summary cards */
     .run-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 16px 0; }
-    .run-card { background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px; }
+    .run-card { background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px; cursor: pointer; transition: all 0.2s ease; }
+    .run-card:hover { background: #e0f2fe; border-color: #0ea5e9; transform: translateY(-2px); box-shadow: 0 4px 6px rgba(14, 165, 233, 0.1); }
     .run-card.baseline { border-color: #2563eb; background: #eff6ff; }
     .run-card-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #1e293b; }
     .run-card-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -38,7 +39,9 @@
     
     /* Contrast cards */
     .contrast-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin: 16px 0; }
-    .contrast-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
+    .contrast-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; cursor: pointer; transition: all 0.2s ease; }
+    .contrast-card:hover { background: #e0f2fe; border-color: #0ea5e9; transform: translateY(-2px); box-shadow: 0 4px 6px rgba(14, 165, 233, 0.1); }
+    .contrast-card.selected { background: #dbeafe; border-color: #2563eb; border-width: 2px; }
     .contrast-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #475569; }
     .contrast-value { font-size: 18px; font-weight: 700; color: #0f172a; }
     .contrast-delta { font-size: 14px; margin-top: 4px; }
@@ -99,8 +102,27 @@
 
   <section id="latency-spotlight-section">
     <h2>Latency Spotlight</h2>
-    <div class="contrast-grid" id="latency-contrasts"></div>
+    <div id="latency-summary-table" style="margin: 16px 0; padding: 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;"></div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h3 style="font-size: 16px; margin: 0;" id="comparison-title">All at baseline's optimal C=<span id="baseline-c-label"></span></h3>
+      <button id="toggle-comparison" style="padding: 6px 12px; font-size: 12px; cursor: pointer; border: 1px solid #2563eb; background: #ffffff; color: #2563eb; border-radius: 4px; font-weight: 500;">
+        Switch to Own Optimal C
+      </button>
+    </div>
+    <div style="padding: 12px; background: #eff6ff; border-radius: 8px; border: 2px solid #2563eb;">
+      <div style="display: flex; gap: 16px;" id="comparison-row"></div>
+    </div>
+
     <div class="chart-box-full" style="margin-top: 20px;">
+      <div style="text-align: right; margin-bottom: 8px; display: flex; gap: 8px; justify-content: flex-end;">
+        <button id="toggle-tail-zoom" style="padding: 6px 12px; font-size: 12px; cursor: pointer; border: 1px solid #2563eb; background: #ffffff; color: #2563eb; border-radius: 4px; font-weight: 500;">
+          Zoom to Tail (90-100)
+        </button>
+        <button id="toggle-y-axis" style="padding: 6px 12px; font-size: 12px; cursor: pointer; border: 1px solid #2563eb; background: #ffffff; color: #2563eb; border-radius: 4px; font-weight: 500;">
+          Switch to Linear Y-Axis
+        </button>
+      </div>
       <canvas id="percentileComparisonChart" class="chart-canvas"></canvas>
     </div>
   </section>
@@ -167,23 +189,59 @@
           metaSummary.textContent = `Profile: ${profile} • Transport: ${baseline.summary.options?.transport || 'n/a'} • HTTP: ${baseline.summary.effectiveHttpVersion || 'n/a'} • Generated: ${context.generatedAt || 'n/a'}`;
         }
 
-        // Render run summary cards
-        const runCardsContainer = document.getElementById('run-cards');
-        const allRuns = [model.baseline].concat(model.contenders || []);
-        
-        allRuns.forEach((run, index) => {
-          const card = document.createElement('div');
-          card.className = index === 0 ? 'run-card baseline' : 'run-card';
-          
+        // Color palette for runs (needed by multiple functions)
+        const runColors = ['#2563eb', '#dc2626', '#16a34a'];
+
+        // All runs (baseline + contenders) - needed by multiple functions
+        let allRuns = [model.baseline].concat(model.contenders || []);
+        let currentBaselineIndex = 0;
+
+        // Aligned steps - needed by multiple functions
+        const alignedSteps = model.alignedSteps || [];
+        const concurrencies = alignedSteps.map(s => s.concurrency);
+
+        // Chart references
+        let throughputChart = null;
+        let p99Chart = null;
+        let cpuChart = null;
+        let memoryChart = null;
+
+        // Latency contrast references
+        const latencyContrastsContainer = document.getElementById('latency-contrasts');
+        let contrastCards = [];
+
+        // Helper function to calculate quality score at a specific concurrency
+        function calculateQualityScoreAtConcurrency(run, targetConcurrency) {
+          // Find the step at the target concurrency
+          const runIndex = allRuns.indexOf(run);
+          const alignedStep = alignedSteps.find(s => s.concurrency === targetConcurrency);
+          if (!alignedStep) return null;
+
+          const metrics = alignedStep.runMetrics[runIndex];
+          if (!metrics) return null;
+
+          // Quality score formula: throughput / (1 + p99)
+          const qualityScore = metrics.throughput / (1 + metrics.p99);
+          return qualityScore;
+        }
+
+        // Helper function to render card metrics - always shows each run's own best
+        function renderCardMetrics(card, run, runIndex, baselineRun) {
+          const isBaseline = runIndex === currentBaselineIndex;
+
+          // Always show each run's own best step (knee)
           const bestStep = run.bestStep;
           const throughput = bestStep ? bestStep.throughput.toFixed(0) : 'N/A';
           const p99 = bestStep && bestStep.raw ? bestStep.raw.p99.toFixed(2) : 'N/A';
           const p999 = bestStep && bestStep.raw ? bestStep.raw.p999.toFixed(2) : 'N/A';
           const errorRate = bestStep ? (bestStep.errorRate * 100).toFixed(3) : 'N/A';
           const concurrency = bestStep ? bestStep.concurrency : 'N/A';
-          
+          const qualityScore = run.bestQualityScore ? run.bestQualityScore.toFixed(1) : 'N/A';
+
+          const titleSuffix = isBaseline ? '(Baseline)' : '';
+
           card.innerHTML = `
-            <div class="run-card-title">${run.label} ${index === 0 ? '(Baseline)' : ''}</div>
+            <div class="run-card-title">${run.label} ${titleSuffix}</div>
             <div class="run-card-metrics">
               <div class="metric">
                 <span class="metric-label">Best Throughput</span>
@@ -207,10 +265,45 @@
               </div>
               <div class="metric">
                 <span class="metric-label">Quality Score</span>
-                <span class="metric-value">${run.bestQualityScore ? run.bestQualityScore.toFixed(1) : 'N/A'}</span>
+                <span class="metric-value">${qualityScore}</span>
               </div>
             </div>
           `;
+        }
+
+        // Render run summary cards
+        const runCardsContainer = document.getElementById('run-cards');
+        const runCards = [];
+
+        allRuns.forEach((run, index) => {
+          const card = document.createElement('div');
+          card.className = index === 0 ? 'run-card baseline' : 'run-card';
+
+          // Initial render with first run as baseline
+          renderCardMetrics(card, run, index, allRuns[0]);
+
+          card.addEventListener('click', () => {
+            if (currentBaselineIndex === index) return; // Already baseline
+
+            // Swap baseline
+            currentBaselineIndex = index;
+
+            // Update all cards with new baseline
+            const newBaseline = allRuns[currentBaselineIndex];
+            runCards.forEach((c, i) => {
+              if (i === currentBaselineIndex) {
+                c.classList.add('baseline');
+              } else {
+                c.classList.remove('baseline');
+              }
+              renderCardMetrics(c, allRuns[i], i, newBaseline);
+            });
+
+            // Update all charts
+            updateAllCharts();
+          });
+
+          runCards.push(card);
           runCardsContainer.appendChild(card);
         });
 
@@ -222,13 +315,214 @@
           takeawaysList.appendChild(li);
         });
 
-        // Color palette for runs
-        const runColors = ['#2563eb', '#dc2626', '#16a34a'];
+        // Function to get reordered runs based on current baseline
+        function getReorderedRuns() {
+          const reordered = [...allRuns];
+          if (currentBaselineIndex !== 0) {
+            // Move currentBaselineIndex to position 0
+            const [baseline] = reordered.splice(currentBaselineIndex, 1);
+            reordered.unshift(baseline);
+          }
+          return reordered;
+        }
+
+        // Function to regenerate latency contrast cards based on current baseline
+        function updateLatencyContrasts() {
+          const orderedRuns = getReorderedRuns();
+          const baseline = orderedRuns[0];
+          const baselineKneeConcurrency = baseline.bestStep?.concurrency;
+
+          // Update baseline C label
+          const baselineCLabel = document.getElementById('baseline-c-label');
+          if (baselineCLabel) {
+            baselineCLabel.textContent = baselineKneeConcurrency || '?';
+          }
+
+          // Clear existing cards
+          const comparisonRow = document.getElementById('comparison-row');
+          if (comparisonRow) comparisonRow.innerHTML = '';
+          contrastCards.length = 0;
+
+          if (!baselineKneeConcurrency) return;
+
+          // Render the cards based on current mode
+          renderComparisonCards();
+
+          // Update percentile chart
+          updatePercentileChart();
+        }
+
+        // Function to render comparison cards based on current mode
+        function renderComparisonCards() {
+          const orderedRuns = getReorderedRuns();
+          const baseline = orderedRuns[0];
+          const baselineKneeConcurrency = baseline.bestStep?.concurrency;
+          const comparisonRow = document.getElementById('comparison-row');
+          const comparisonTitle = document.getElementById('comparison-title');
+          const toggleButton = document.getElementById('toggle-comparison');
+
+          if (!comparisonRow) return;
+          comparisonRow.innerHTML = '';
+
+          if (currentChartMode === 'same-c') {
+            // All runs at baseline's concurrency
+            if (comparisonTitle) {
+              comparisonTitle.innerHTML = `All at baseline's optimal C=<span id="baseline-c-label">${baselineKneeConcurrency}</span>`;
+            }
+            if (toggleButton) {
+              toggleButton.textContent = 'Switch to Own Optimal C';
+            }
+
+            orderedRuns.forEach((run, index) => {
+              const alignedStep = alignedSteps.find(s => s.concurrency === baselineKneeConcurrency);
+              if (!alignedStep) return;
+
+              const metrics = alignedStep.runMetrics[allRuns.indexOf(run)];
+              if (!metrics) return;
+
+              const card = document.createElement('div');
+              card.style.cssText = 'flex: 1; background: #ffffff; border: 2px solid #e2e8f0; border-radius: 8px; padding: 12px;';
+
+              const borderColor = runColors[index % runColors.length];
+              card.style.borderColor = borderColor;
+
+              const qualityScore = metrics.throughput / (1 + metrics.p99);
+
+              card.innerHTML = `
+                <div style="font-weight: 600; color: ${borderColor}; margin-bottom: 8px;">${run.label}</div>
+                <div style="font-size: 13px; color: #64748b;">
+                  <div><strong>${metrics.p99.toFixed(2)}</strong> ms P99</div>
+                  <div><strong>${metrics.throughput.toFixed(0)}</strong> ops/s</div>
+                  <div>QS: <strong>${qualityScore.toFixed(1)}</strong></div>
+                </div>
+              `;
+
+              comparisonRow.appendChild(card);
+            });
+          } else {
+            // Each run at its own optimal
+            if (comparisonTitle) {
+              comparisonTitle.textContent = 'Each at their own optimal C';
+            }
+            if (toggleButton) {
+              toggleButton.textContent = `Switch to Baseline's C=${baselineKneeConcurrency}`;
+            }
+
+            orderedRuns.forEach((run, index) => {
+              const bestStep = run.bestStep;
+              if (!bestStep) return;
+
+              const card = document.createElement('div');
+              card.style.cssText = 'flex: 1; background: #ffffff; border: 2px solid #e2e8f0; border-radius: 8px; padding: 12px;';
+
+              const borderColor = runColors[index % runColors.length];
+              card.style.borderColor = borderColor;
+
+              const p99 = bestStep.raw?.p99 || bestStep.p99;
+              const qualityScore = run.bestQualityScore;
+
+              card.innerHTML = `
+                <div style="font-weight: 600; color: ${borderColor}; margin-bottom: 8px;">${run.label} @ C=${bestStep.concurrency}</div>
+                <div style="font-size: 13px; color: #64748b;">
+                  <div><strong>${p99.toFixed(2)}</strong> ms P99</div>
+                  <div><strong>${bestStep.throughput.toFixed(0)}</strong> ops/s</div>
+                  <div>QS: <strong>${qualityScore.toFixed(1)}</strong></div>
+                </div>
+              `;
+
+              comparisonRow.appendChild(card);
+            });
+          }
+        }
+
+        // Function to update all charts when baseline changes
+        function updateAllCharts() {
+          const orderedRuns = getReorderedRuns();
+
+          // Get the mapping from old index to new index
+          const indexMap = orderedRuns.map(r => allRuns.indexOf(r));
+
+          // Update latency contrasts
+          updateLatencyContrasts();
+
+          // Update throughput chart
+          if (throughputChart) {
+            throughputChart.data.datasets = orderedRuns.map((run, newIndex) => {
+              const oldIndex = allRuns.indexOf(run);
+              return {
+                label: run.label,
+                data: alignedSteps.map(step => {
+                  const metrics = step.runMetrics[oldIndex];
+                  return metrics ? metrics.throughput : null;
+                }),
+                borderColor: runColors[newIndex % runColors.length],
+                backgroundColor: runColors[newIndex % runColors.length],
+                tension: 0.2,
+                pointRadius: 4
+              };
+            });
+            throughputChart.update();
+          }
+
+          // Update p99 chart
+          if (p99Chart) {
+            p99Chart.data.datasets = orderedRuns.map((run, newIndex) => {
+              const oldIndex = allRuns.indexOf(run);
+              return {
+                label: run.label,
+                data: alignedSteps.map(step => {
+                  const metrics = step.runMetrics[oldIndex];
+                  return metrics ? metrics.p99 : null;
+                }),
+                borderColor: runColors[newIndex % runColors.length],
+                backgroundColor: runColors[newIndex % runColors.length],
+                tension: 0.2,
+                pointRadius: 4
+              };
+            });
+            p99Chart.update();
+          }
+
+          // Update CPU chart
+          if (cpuChart) {
+            cpuChart.data.datasets = orderedRuns.map((run, newIndex) => {
+              const oldIndex = allRuns.indexOf(run);
+              return {
+                label: run.label,
+                data: alignedSteps.map(step => {
+                  const metrics = step.runMetrics[oldIndex];
+                  return metrics ? metrics.serverCpu : null;
+                }),
+                borderColor: runColors[newIndex % runColors.length],
+                backgroundColor: runColors[newIndex % runColors.length],
+                tension: 0.2,
+                pointRadius: 4
+              };
+            });
+            cpuChart.update();
+          }
+
+          // Update memory chart
+          if (memoryChart) {
+            memoryChart.data.datasets = orderedRuns.map((run, newIndex) => {
+              const oldIndex = allRuns.indexOf(run);
+              return {
+                label: run.label,
+                data: alignedSteps.map(step => {
+                  const metrics = step.runMetrics[oldIndex];
+                  return metrics ? metrics.serverMemoryMB : null;
+                }),
+                borderColor: runColors[newIndex % runColors.length],
+                backgroundColor: runColors[newIndex % runColors.length],
+                tension: 0.2,
+                pointRadius: 4
+              };
+            });
+            memoryChart.update();
+          }
+        }
 
         // Throughput comparison chart
-        const alignedSteps = model.alignedSteps || [];
-        const concurrencies = alignedSteps.map(s => s.concurrency);
-        
         const throughputDatasets = allRuns.map((run, index) => ({
           label: run.label,
           data: alignedSteps.map(step => {
@@ -241,7 +535,7 @@
           pointRadius: 4
         }));
 
-        new Chart(document.getElementById('throughputComparisonChart'), {
+        throughputChart = new Chart(document.getElementById('throughputComparisonChart'), {
           type: 'line',
           data: { labels: concurrencies, datasets: throughputDatasets },
           options: {
@@ -268,7 +562,7 @@
           pointRadius: 4
         }));
 
-        new Chart(document.getElementById('p99ComparisonChart'), {
+        p99Chart = new Chart(document.getElementById('p99ComparisonChart'), {
           type: 'line',
           data: { labels: concurrencies, datasets: p99Datasets },
           options: {
@@ -282,123 +576,205 @@
           }
         });
 
-        // Latency contrasts
-        const latencyContrastsContainer = document.getElementById('latency-contrasts');
-        (model.latencyContrasts || []).forEach(contrast => {
-          const card = document.createElement('div');
-          card.className = 'contrast-card';
-          
-          const deltaClass = contrast.percentageDelta > 0 ? 'negative' : (contrast.percentageDelta < 0 ? 'positive' : '');
-          const deltaSign = contrast.percentageDelta > 0 ? '+' : '';
-          
-          card.innerHTML = `
-            <div class="contrast-title">${contrast.context || 'Comparison'}</div>
-            <div class="contrast-value">${contrast.baselineValue.toFixed(2)} ms → ${contrast.contenderValue.toFixed(2)} ms</div>
-            <div class="contrast-delta ${deltaClass}">${deltaSign}${contrast.percentageDelta.toFixed(1)}% (${deltaSign}${contrast.absoluteDelta.toFixed(2)} ms)</div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 4px;">
-              ${contrast.baselineLabel} @ C=${contrast.baselineConcurrency || '?'} vs ${contrast.contenderLabel} @ C=${contrast.contenderConcurrency || '?'}
-            </div>
-          `;
-          latencyContrastsContainer.appendChild(card);
-        });
+        // Percentile comparison chart - define before using
+        let percentileChart = null;
+        let isLogarithmic = true;
+        let currentChartMode = 'same-c'; // 'same-c' or 'optimal-c'
+        let isTailZoom = false; // false = 0-100, true = 90-100
 
-        // Percentile comparison (using histogram artifacts if available)
-        const percentileDatasets = [];
-        allRuns.forEach((run, index) => {
-          const histograms = run.summary.histogramArtifacts || [];
-          if (histograms.length > 0 && run.bestStep) {
-            // Find histogram for best step
-            const bestHistogram = histograms.find(h => h.concurrency === run.bestStep.concurrency);
-            if (bestHistogram) {
-              const data = bestHistogram.percentiles.map((p, i) => ({
-                x: p,
-                y: bestHistogram.latencyInMilliseconds[i]
-              }));
-              
-              percentileDatasets.push({
-                label: `${run.label} (C=${run.bestStep.concurrency})`,
-                data: data,
-                borderColor: runColors[index % runColors.length],
-                backgroundColor: 'transparent',
-                borderWidth: 2,
-                pointRadius: 0,
-                tension: 0.3
+        function updatePercentileChart() {
+          // Get reordered runs to determine correct color indices
+          const orderedRuns = getReorderedRuns();
+          const baseline = orderedRuns[0];
+
+          const percentileDatasets = [];
+
+          if (currentChartMode === 'same-c') {
+            // All runs at baseline's knee concurrency
+            const baselineKneeConcurrency = baseline.bestStep?.concurrency;
+            if (!baselineKneeConcurrency) return;
+
+            orderedRuns.forEach((run, index) => {
+              const histograms = run.summary.histogramArtifacts || [];
+              const histogram = histograms.find(h => h.concurrency === baselineKneeConcurrency);
+
+              if (histogram) {
+                // Filter data based on zoom setting
+                const data = histogram.percentiles
+                  .map((p, i) => ({
+                    x: p,
+                    y: histogram.latencyInMilliseconds[i]
+                  }))
+                  .filter(point => !isTailZoom || point.x >= 90);
+
+                percentileDatasets.push({
+                  label: `${run.label} @ C=${baselineKneeConcurrency}`,
+                  data: data,
+                  borderColor: runColors[index % runColors.length],
+                  backgroundColor: 'transparent',
+                  borderWidth: 2,
+                  pointRadius: 0,
+                  tension: 0.3
+                });
+              }
+            });
+          } else {
+            // Each run at its own optimal concurrency
+            orderedRuns.forEach((run, index) => {
+              const histograms = run.summary.histogramArtifacts || [];
+              const optimalC = run.bestStep?.concurrency;
+              if (!optimalC) return;
+
+              const histogram = histograms.find(h => h.concurrency === optimalC);
+
+              if (histogram) {
+                // Filter data based on zoom setting
+                const data = histogram.percentiles
+                  .map((p, i) => ({
+                    x: p,
+                    y: histogram.latencyInMilliseconds[i]
+                  }))
+                  .filter(point => !isTailZoom || point.x >= 90);
+
+                percentileDatasets.push({
+                  label: `${run.label} @ C=${optimalC}`,
+                  data: data,
+                  borderColor: runColors[index % runColors.length],
+                  backgroundColor: 'transparent',
+                  borderWidth: 2,
+                  pointRadius: 0,
+                  tension: 0.3
+                });
+              }
+            });
+          }
+
+          if (percentileDatasets.length > 0) {
+            if (percentileChart) {
+              percentileChart.data.datasets = percentileDatasets;
+              percentileChart.options.scales.x.min = isTailZoom ? 90 : 0;
+              percentileChart.options.scales.x.max = 100;
+              percentileChart.update();
+            } else {
+              percentileChart = new Chart(document.getElementById('percentileComparisonChart'), {
+                type: 'line',
+                data: { datasets: percentileDatasets },
+                options: {
+                  parsing: false,
+                  animation: false,
+                  maintainAspectRatio: false,
+                  scales: {
+                    x: {
+                      type: 'linear',
+                      title: { display: true, text: 'Percentile' },
+                      min: isTailZoom ? 90 : 0,
+                      max: 100
+                    },
+                    y: {
+                      type: isLogarithmic ? 'logarithmic' : 'linear',
+                      title: { display: true, text: 'Latency (ms)' },
+                      beginAtZero: !isLogarithmic
+                    }
+                  },
+                  plugins: { legend: { position: 'top' } }
+                }
               });
             }
           }
-        });
+        }
 
-        if (percentileDatasets.length > 0) {
-          new Chart(document.getElementById('percentileComparisonChart'), {
-            type: 'line',
-            data: { datasets: percentileDatasets },
-            options: {
-              parsing: false,
-              animation: false,
-              maintainAspectRatio: false,
-              scales: {
-                x: {
-                  type: 'linear',
-                  title: { display: true, text: 'Percentile' },
-                  min: 0,
-                  max: 100
-                },
-                y: {
-                  type: 'logarithmic',
-                  title: { display: true, text: 'Latency (ms)' }
-                }
-              },
-              plugins: { legend: { position: 'top' } }
+        // Tail zoom toggle button
+        const tailZoomButton = document.getElementById('toggle-tail-zoom');
+        if (tailZoomButton) {
+          tailZoomButton.addEventListener('click', () => {
+            isTailZoom = !isTailZoom;
+            tailZoomButton.textContent = isTailZoom ? 'Show Full Range (0-100)' : 'Zoom to Tail (90-100)';
+            updatePercentileChart();
+          });
+        }
+
+        // Y-axis toggle button
+        const toggleButton = document.getElementById('toggle-y-axis');
+        if (toggleButton) {
+          toggleButton.addEventListener('click', () => {
+            isLogarithmic = !isLogarithmic;
+            toggleButton.textContent = isLogarithmic ? 'Switch to Linear Y-Axis' : 'Switch to Logarithmic Y-Axis';
+
+            if (percentileChart) {
+              percentileChart.options.scales.y.type = isLogarithmic ? 'logarithmic' : 'linear';
+              percentileChart.options.scales.y.beginAtZero = !isLogarithmic;
+              percentileChart.update();
             }
           });
         }
 
-        // CPU comparison
-        const cpuDatasets = allRuns.map((run, index) => {
-          const bestStep = run.bestStep;
-          return {
-            label: run.label,
-            data: [bestStep?.serverCpu || 0],
-            backgroundColor: runColors[index % runColors.length]
-          };
-        });
+        // Toggle button handler
+        const toggleComparisonButton = document.getElementById('toggle-comparison');
+        if (toggleComparisonButton) {
+          toggleComparisonButton.addEventListener('click', () => {
+            currentChartMode = currentChartMode === 'same-c' ? 'optimal-c' : 'same-c';
+            renderComparisonCards();
+            updatePercentileChart();
+          });
+        }
 
-        new Chart(document.getElementById('cpuComparisonChart'), {
-          type: 'bar',
+        // Initialize latency contrasts
+        updateLatencyContrasts();
+
+        // CPU comparison (per concurrency level)
+        const cpuDatasets = allRuns.map((run, index) => ({
+          label: run.label,
+          data: alignedSteps.map(step => {
+            const metrics = step.runMetrics[index];
+            return metrics ? metrics.serverCpu : null;
+          }),
+          borderColor: runColors[index % runColors.length],
+          backgroundColor: runColors[index % runColors.length],
+          tension: 0.2,
+          pointRadius: 4
+        }));
+
+        cpuChart = new Chart(document.getElementById('cpuComparisonChart'), {
+          type: 'line',
           data: {
-            labels: ['Server CPU %'],
+            labels: concurrencies,
             datasets: cpuDatasets
           },
           options: {
             animation: false,
             maintainAspectRatio: false,
             scales: {
+              x: { title: { display: true, text: 'Concurrency' } },
               y: { title: { display: true, text: 'CPU %' }, beginAtZero: true, suggestedMax: 100 }
             },
             plugins: { legend: { position: 'top' } }
           }
         });
 
-        // Memory comparison
-        const memoryDatasets = allRuns.map((run, index) => {
-          const bestStep = run.bestStep;
-          return {
-            label: run.label,
-            data: [bestStep?.serverMemoryMB || 0],
-            backgroundColor: runColors[index % runColors.length]
-          };
-        });
+        // Memory comparison (per concurrency level)
+        const memoryDatasets = allRuns.map((run, index) => ({
+          label: run.label,
+          data: alignedSteps.map(step => {
+            const metrics = step.runMetrics[index];
+            return metrics ? metrics.serverMemoryMB : null;
+          }),
+          borderColor: runColors[index % runColors.length],
+          backgroundColor: runColors[index % runColors.length],
+          tension: 0.2,
+          pointRadius: 4
+        }));
 
-        new Chart(document.getElementById('memoryComparisonChart'), {
-          type: 'bar',
+        memoryChart = new Chart(document.getElementById('memoryComparisonChart'), {
+          type: 'line',
           data: {
-            labels: ['Server Memory (MB)'],
+            labels: concurrencies,
             datasets: memoryDatasets
           },
           options: {
             animation: false,
             maintainAspectRatio: false,
             scales: {
+              x: { title: { display: true, text: 'Concurrency' } },
               y: { title: { display: true, text: 'Memory (MB)' }, beginAtZero: true }
             },
             plugins: { legend: { position: 'top' } }
