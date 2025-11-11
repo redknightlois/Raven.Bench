@@ -338,4 +338,62 @@ public class CliParsingTests
         modifiedOpts.Step.End.Should().Be(1000);
         modifiedOpts.Step.Factor.Should().Be(2.0);
     }
+
+    [Fact]
+    public void ParseDuration_Handles_Seconds_Suffix()
+    {
+        var duration = CliParsing.ParseDuration("10s");
+        duration.Should().Be(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public void ParseDuration_Handles_Minutes_Suffix()
+    {
+        var duration = CliParsing.ParseDuration("5m");
+        duration.Should().Be(TimeSpan.FromMinutes(5));
+    }
+
+    [Fact]
+    public void ParseDuration_Handles_Milliseconds_Suffix()
+    {
+        var duration = CliParsing.ParseDuration("250ms");
+        duration.Should().Be(TimeSpan.FromMilliseconds(250));
+    }
+
+    [Fact]
+    public void ParseDuration_Handles_Plain_Number_As_Seconds()
+    {
+        var duration = CliParsing.ParseDuration("30");
+        duration.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void ParseDuration_Handles_Full_TimeSpan_String()
+    {
+        var duration = CliParsing.ParseDuration("00:16:21.7371071");
+        duration.Should().Be(new TimeSpan(0, 0, 16, 21, 737).Add(TimeSpan.FromTicks(1071)));
+    }
+
+    [Fact]
+    public void ParseDuration_Handles_Simple_TimeSpan_String()
+    {
+        var duration = CliParsing.ParseDuration("01:30:00");
+        duration.Should().Be(TimeSpan.FromHours(1).Add(TimeSpan.FromMinutes(30)));
+    }
+
+    [Fact]
+    public void ParseDuration_Handles_TimeSpan_With_Days()
+    {
+        var duration = CliParsing.ParseDuration("1.02:30:00");
+        duration.Should().Be(TimeSpan.FromDays(1).Add(TimeSpan.FromHours(2)).Add(TimeSpan.FromMinutes(30)));
+    }
+
+    [Fact]
+    public void ParseDuration_Is_Case_Insensitive_For_Custom_Formats()
+    {
+        var duration1 = CliParsing.ParseDuration("100MS");
+        var duration2 = CliParsing.ParseDuration("100ms");
+        duration1.Should().Be(duration2);
+        duration1.Should().Be(TimeSpan.FromMilliseconds(100));
+    }
 }

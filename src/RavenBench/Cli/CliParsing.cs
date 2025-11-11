@@ -197,7 +197,16 @@ internal static class CliParsing
 
     public static TimeSpan ParseDuration(string s)
     {
-        s = s.Trim().ToLowerInvariant();
+        s = s.Trim();
+
+        // Try to parse as a full TimeSpan string (e.g., "00:16:21.7371071" or "1.02:30:00")
+        // Only attempt if the string contains a colon to avoid ambiguity with plain numbers
+        // (which TimeSpan.TryParse would interpret as days)
+        if (s.Contains(':') && TimeSpan.TryParse(s, CultureInfo.InvariantCulture, out var timeSpan))
+            return timeSpan;
+
+        // Fall back to custom format parsing
+        s = s.ToLowerInvariant();
         if (s.EndsWith("ms")) return TimeSpan.FromMilliseconds(double.Parse(s[..^2], CultureInfo.InvariantCulture));
         if (s.EndsWith("s")) return TimeSpan.FromSeconds(double.Parse(s[..^1], CultureInfo.InvariantCulture));
         if (s.EndsWith("m")) return TimeSpan.FromMinutes(double.Parse(s[..^1], CultureInfo.InvariantCulture));
