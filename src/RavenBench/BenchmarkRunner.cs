@@ -595,9 +595,9 @@ public class BenchmarkRunner(RunOptions opts)
             ? Math.Max(baselineLatencyMicros / 1_000_000.0, 1e-6)
             : fallbackBaselineSeconds;
 
-        // Little's Law: concurrency ~= throughput * latency. Add 4x headroom to absorb jitter.
+        // Little's Law: concurrency ~= throughput * latency. Add 1.5x headroom to absorb jitter.
         var estimatedConcurrency = targetRps * baselineSeconds;
-        var plannedWorkers = (int)Math.Ceiling(Math.Max(estimatedConcurrency * 4, 1));
+        var plannedWorkers = (int)Math.Ceiling(Math.Max(estimatedConcurrency * 1.5, 1));
 
         const int minWorkers = 32;
         const int maxWorkers = 16384;

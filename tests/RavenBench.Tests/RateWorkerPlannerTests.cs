@@ -27,9 +27,9 @@ public sealed class RateWorkerPlannerTests
     public void EstimatesWorkers_FromBaselineLatency()
     {
         var opts = CreateOptions();
-        // 5000 RPS * 2ms baseline = 10 concurrency → 4x headroom = 40 workers
+        // 5000 RPS * 2ms baseline = 10 concurrency → 1.5x headroom = 15 workers → clamped to min 32
         var workers = BenchmarkRunner.ResolveRateWorkerCount(opts, targetRps: 5000, baselineLatencyMicros: 2000);
-        workers.Should().Be(40);
+        workers.Should().Be(32);
     }
 
     [Fact]
@@ -45,7 +45,8 @@ public sealed class RateWorkerPlannerTests
     public void Clamps_WhenEstimationExplodes()
     {
         var opts = CreateOptions();
+        // 200000 RPS * 50ms = 10000 concurrency → 1.5x headroom = 15000 workers → clamped to max 16384
         var workers = BenchmarkRunner.ResolveRateWorkerCount(opts, targetRps: 200000, baselineLatencyMicros: 50000);
-        workers.Should().Be(16384);
+        workers.Should().Be(15000);
     }
 }
