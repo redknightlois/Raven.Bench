@@ -59,7 +59,8 @@ internal static class LoadGeneratorExecution
         LoadGeneratorCounters counters,
         TimeSpan duration,
         long scheduledCount,
-        bool isWarmup)
+        bool isWarmup,
+        RollingRateStats? rollingRate = null)
     {
         var completed = counters.OperationsCompleted;
         var throughput = duration.TotalSeconds > 0
@@ -79,7 +80,8 @@ internal static class LoadGeneratorExecution
             NetworkUtilization = CalculateNetworkUtilization(bytesOut, bytesIn, duration),
             Reason = isWarmup ? "warmup" : null,
             ScheduledOperations = scheduledCount,
-            OperationsCompleted = completed
+            OperationsCompleted = completed,
+            RollingRate = rollingRate
         };
     }
 

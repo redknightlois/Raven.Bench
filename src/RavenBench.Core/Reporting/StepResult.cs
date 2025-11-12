@@ -1,4 +1,5 @@
 using RavenBench.Core;
+using RavenBench.Core.Metrics;
 
 namespace RavenBench.Core.Reporting;
 
@@ -47,6 +48,7 @@ public sealed class StepResult
 
     public double ClientCpu { get; init; }
     public double NetworkUtilization { get; init; }
+    public RollingRateStats? RollingRate { get; init; }
 
     // Server-side metrics from RavenDB
     public double? ServerCpu { get; init; }

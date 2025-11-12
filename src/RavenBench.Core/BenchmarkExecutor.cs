@@ -144,7 +144,8 @@ namespace RavenBench.Core
                 ServerSnmpRequestsPerSec = serverMetrics.ServerSnmpRequestsPerSec,
                 SnmpErrorsPerSec = serverMetrics.SnmpErrorsPerSec,
                 NetworkUtilization = metrics.NetworkUtilization,
-                Reason = metrics.Reason
+                Reason = metrics.Reason,
+                RollingRate = metrics.RollingRate
             };
 
             // Collect SNMP metrics if configured
@@ -201,6 +202,7 @@ namespace RavenBench.Core
         public long BytesIn { get; init; }
         public double NetworkUtilization { get; init; }
         public string? Reason { get; init; }
+        public RollingRateStats? RollingRate { get; init; }
         /// <summary>
         /// Number of operations scheduled (may exceed completed if queueing occurs).
         /// </summary>

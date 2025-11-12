@@ -367,6 +367,7 @@ public class BenchmarkRunner(RunOptions opts)
             }
 
             steps.Add(stepResult);
+            LogStepResult(steps.Count, stepResult);
             maxNetUtil = Math.Max(maxNetUtil, stepResult.NetworkUtilization);
 
             // knee stop if error rate exceeds bound significantly
@@ -552,6 +553,30 @@ public class BenchmarkRunner(RunOptions opts)
             return $"{duration.TotalSeconds:F1}s";
 
         return $"{duration.TotalMilliseconds:F0}ms";
+    }
+
+    private static void LogStepResult(int stepNumber, StepResult step)
+    {
+        if (step.TargetThroughput.HasValue && step.TargetThroughput > 0)
+        {
+            var target = step.TargetThroughput.Value;
+            var actual = step.Throughput;
+            var deltaPct = (actual - target) / target * 100.0;
+            var deltaFormatted = double.IsFinite(deltaPct) ? $"{deltaPct:+0.0;-0.0;0}%" : "n/a";
+            var rollingInfo = step.RollingRate is { HasSamples: true } rate
+                ? $" | rolling median {rate.Median:F0} (min {rate.Min:F0}, max {rate.Max:F0}, samples={rate.SampleCount})"
+                : string.Empty;
+            Console.WriteLine($"[Raven.Bench] Step {stepNumber} result: {actual:F0} ops/s (target {target:F0}, delta {deltaFormatted}){rollingInfo}");
+
+            if (Math.Abs(deltaPct) > 10.0)
+            {
+                Console.WriteLine("[Raven.Bench]   note: measured rate deviates >10% from target; check server-side meters (they may count extra system requests) or adjust --rate-workers.");
+            }
+        }
+        else
+        {
+            Console.WriteLine($"[Raven.Bench] Step {stepNumber} result: concurrency {step.Concurrency}, throughput {step.Throughput:F0}/s");
+        }
     }
 
     internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros)
