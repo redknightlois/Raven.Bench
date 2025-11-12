@@ -276,18 +276,25 @@ public class BenchmarkRunner(RunOptions opts)
 
         while (currentValue <= endValue)
         {
-            // Create appropriate load generator based on load shape
-            ILoadGenerator loadGenerator = opts.Shape switch
-            {
-                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, opts.RateWorkers ?? Math.Max((int)currentValue * 2, 100), _rng),
-                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng),
-                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng)
-            };
-
             // Calculate baseline latency for coordinated omission correction
             var baselineLatencyMicros = startupCalibration?.Endpoints.Count > 0
                 ? (long)(startupCalibration.Endpoints.Min(e => e.ObservedMs) * 1000) // Convert ms to µs
                 : 0L;
+
+            // Calculate worker fan-out for rate mode using either the override or baseline-derived heuristic
+            var rateWorkerCount = opts.Shape == LoadShape.Rate
+                ? ResolveRateWorkerCount(opts, (int)currentValue, baselineLatencyMicros)
+                : 0;
+
+            // Create appropriate load generator based on load shape
+            ILoadGenerator loadGenerator = opts.Shape switch
+            {
+                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, _rng),
+                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng),
+                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng)
+            };
+
+            LogStepStart(opts.Shape, steps.Count + 1, (int)currentValue, rateWorkerCount, opts);
 
             // Execute step using the executor
             var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
@@ -515,6 +522,68 @@ public class BenchmarkRunner(RunOptions opts)
             HlogPath = hlogPath,
             CsvPath = csvPath
         };
+    }
+
+    private static void LogStepStart(LoadShape shape, int stepNumber, int currentValue, int rateWorkerCount, RunOptions opts)
+    {
+        var warmup = FormatDuration(opts.Warmup);
+        var duration = FormatDuration(opts.Duration);
+
+        if (shape == LoadShape.Rate)
+        {
+            var workerSuffix = opts.RateWorkers.HasValue ? string.Empty : " (auto)";
+            Console.WriteLine($"[Raven.Bench] Step {stepNumber}: target {currentValue} RPS (workers={rateWorkerCount}{workerSuffix}, warmup={warmup}, duration={duration})");
+        }
+        else
+        {
+            Console.WriteLine($"[Raven.Bench] Step {stepNumber}: concurrency {currentValue} (warmup={warmup}, duration={duration})");
+        }
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration <= TimeSpan.Zero)
+            return "0s";
+
+        if (duration.TotalSeconds >= 10)
+            return $"{duration.TotalSeconds:F0}s";
+
+        if (duration.TotalSeconds >= 1)
+            return $"{duration.TotalSeconds:F1}s";
+
+        return $"{duration.TotalMilliseconds:F0}ms";
+    }
+
+    internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros)
+    {
+        if (opts == null)
+            throw new ArgumentNullException(nameof(opts));
+
+        if (targetRps <= 0)
+            return Math.Max(1, opts.RateWorkers ?? 32);
+
+        if (opts.RateWorkers.HasValue)
+            return Math.Max(1, opts.RateWorkers.Value);
+
+        const double fallbackBaselineSeconds = 0.002; // Assume 2 ms RTT when calibration is unavailable
+        var baselineSeconds = baselineLatencyMicros > 0
+            ? Math.Max(baselineLatencyMicros / 1_000_000.0, 1e-6)
+            : fallbackBaselineSeconds;
+
+        // Little's Law: concurrency ~= throughput * latency. Add 4x headroom to absorb jitter.
+        var estimatedConcurrency = targetRps * baselineSeconds;
+        var plannedWorkers = (int)Math.Ceiling(Math.Max(estimatedConcurrency * 4, 1));
+
+        const int minWorkers = 32;
+        const int maxWorkers = 16384;
+
+        if (plannedWorkers < minWorkers)
+            return minWorkers;
+
+        if (plannedWorkers > maxWorkers)
+            return maxWorkers;
+
+        return plannedWorkers;
     }
 
 
