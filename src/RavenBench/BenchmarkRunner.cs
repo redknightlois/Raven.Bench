@@ -377,6 +377,43 @@ public class BenchmarkRunner(RunOptions opts)
                 break;
             }
 
+            // Early stop for rate-based benchmarks when server cannot keep up
+            if (opts.Shape == LoadShape.Rate && stepResult.TargetThroughput.HasValue)
+            {
+                var target = stepResult.TargetThroughput.Value;
+                var actual = stepResult.Throughput;
+                var deltaPct = (actual - target) / target * 100.0;
+
+                // Stop if throughput is significantly below target (server saturated)
+                if (deltaPct < -30.0)
+                {
+                    Console.WriteLine($"[Raven.Bench] Throughput is {Math.Abs(deltaPct):F1}% below target ({actual:F0} vs {target:F0}). Server appears saturated; stopping ramp.");
+                    break;
+                }
+
+                // Stop if throughput is degrading compared to previous step (performance regression)
+                if (steps.Count >= 2)
+                {
+                    var prevStep = steps[steps.Count - 2];
+                    var throughputDrop = (stepResult.Throughput - prevStep.Throughput) / prevStep.Throughput * 100.0;
+
+                    // If throughput drops by >30% between steps, server is overloaded
+                    if (throughputDrop < -30.0)
+                    {
+                        Console.WriteLine($"[Raven.Bench] Throughput degraded by {Math.Abs(throughputDrop):F1}% from previous step ({stepResult.Throughput:F0} vs {prevStep.Throughput:F0}). Server appears overloaded; stopping ramp.");
+                        break;
+                    }
+                }
+            }
+
+            // Stop if latencies indicate extreme server degradation (applies to all load shapes)
+            // p99.9 > 30 seconds suggests the server is severely overloaded and continuing is pointless
+            if (stepResult.P9999 > 30_000.0) // 30 seconds in milliseconds
+            {
+                Console.WriteLine($"[Raven.Bench] Extreme latencies detected (p99.9={stepResult.P9999:F0}ms). Server severely degraded; stopping ramp.");
+                break;
+            }
+
             currentValue = stepPlan.Next(currentValue);
         }
 

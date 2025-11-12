@@ -39,10 +39,19 @@ internal static class LoadGeneratorExecution
             latencyMicros = Math.Max(1, (long)Math.Round((end - start) * 1_000_000.0 / Stopwatch.Frequency));
             if (isError == false)
             {
-                if (baselineLatencyMicros > 0)
-                    latencyRecorder.RecordWithExpectedInterval(latencyMicros, baselineLatencyMicros);
-                else
-                    latencyRecorder.Record(latencyMicros);
+                try
+                {
+                    if (baselineLatencyMicros > 0)
+                        latencyRecorder.RecordWithExpectedInterval(latencyMicros, baselineLatencyMicros);
+                    else
+                        latencyRecorder.Record(latencyMicros);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Histogram overflow - latency exceeded 60s. This indicates extreme server degradation.
+                    // Treat as error to trigger early termination of the benchmark step.
+                    isError = true;
+                }
             }
         }
 
