@@ -73,6 +73,7 @@ namespace RavenBench.Core
 
             await using var scheduler = new TokenBucketScheduler(
                 targetRps,
+                // Give each worker a few in-flight permits; this keeps pacing predictable while still allowing short spikes.
                 burstCapacity: Math.Max(_maxConcurrency * 4, 32),
                 cancellationToken);
 
@@ -252,36 +253,42 @@ namespace RavenBench.Core
                     return;
                 }
 
+                // Use a bounded interval so replenishment frequency scales with both rate and burst capacity.
+                var targetIntervalMs = CalculateReplenishmentDelay(_ratePerSecond, _burstCapacity);
+                var targetIntervalTicks = (long)(targetIntervalMs * TimeSpan.TicksPerMillisecond);
                 var stopwatch = Stopwatch.StartNew();
-                var lastTick = stopwatch.Elapsed;
+                var lastTick = stopwatch.ElapsedTicks;
 
                 try
                 {
                     while (_producerCts.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false)
                     {
-                        await Task.Delay(TimeSpan.FromMilliseconds(1), _producerCts.Token).ConfigureAwait(false);
+                        var nowTicks = stopwatch.Elapsed.Ticks;
+                        var deltaTicks = nowTicks - lastTick;
 
-                        var now = stopwatch.Elapsed;
-                        var deltaSeconds = (now - lastTick).TotalSeconds;
-                        if (deltaSeconds <= 0)
-                            continue;
-
-                        lastTick = now;
-                        var tokensToAdd = deltaSeconds * _ratePerSecond;
-                        if (tokensToAdd <= 0)
-                            continue;
-
-                        _carry = Math.Min(_carry + tokensToAdd, _burstCapacity);
-                        var wholeTokens = (int)Math.Floor(_carry);
-                        if (wholeTokens == 0)
-                            continue;
-
-                        _carry -= wholeTokens;
-
-                        for (int i = 0; i < wholeTokens; i++)
+                        if (deltaTicks > 0)
                         {
-                            await _tokens.Writer.WriteAsync(true, _producerCts.Token).ConfigureAwait(false);
+                            var deltaSeconds = deltaTicks / (double)TimeSpan.TicksPerSecond;
+                            var tokensToAdd = deltaSeconds * _ratePerSecond;
+
+                            if (tokensToAdd > 0)
+                            {
+                                _carry = Math.Min(_carry + tokensToAdd, _burstCapacity);
+                                var wholeTokens = (int)Math.Floor(_carry);
+
+                                if (wholeTokens > 0)
+                                {
+                                    _carry -= wholeTokens;
+                                    await WriteTokensAsync(_tokens.Writer, wholeTokens, _producerCts.Token).ConfigureAwait(false);
+                                }
+                            }
+
+                            lastTick = nowTicks;
                         }
+
+                        // Schedule the next wake-up relative to this cycle and wait just long enough to stay on pace.
+                        var nextTick = nowTicks + targetIntervalTicks;
+                        await WaitForNextTickAsync(nextTick, stopwatch, _producerCts.Token).ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException)
@@ -291,6 +298,60 @@ namespace RavenBench.Core
                 finally
                 {
                     _tokens.Writer.TryComplete();
+                }
+            }
+
+            private static double CalculateReplenishmentDelay(double ratePerSecond, int burstCapacity)
+            {
+                if (ratePerSecond <= 0)
+                    return 1.0;
+
+                var tokensPerMs = ratePerSecond / 1000.0;
+                if (tokensPerMs <= 0)
+                    return 1.0;
+
+                var effectiveBurst = Math.Max(1, Math.Min(burstCapacity, 500));
+                var intervalMs = effectiveBurst / tokensPerMs;
+                return Math.Clamp(intervalMs, 0.1, 1.0);
+            }
+
+            private static async Task WriteTokensAsync(ChannelWriter<bool> writer, int count, CancellationToken cancellationToken)
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    // Fast-path: try to write synchronously; only await when the channel is momentarily full.
+                    if (writer.TryWrite(true))
+                        continue;
+
+                    await writer.WriteAsync(true, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            private async Task WaitForNextTickAsync(long targetTick, Stopwatch stopwatch, CancellationToken producerToken)
+            {
+                while (producerToken.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false)
+                {
+                    var remainingTicks = targetTick - stopwatch.ElapsedTicks;
+                    if (remainingTicks <= 0)
+                        return;
+
+                    var remainingMs = remainingTicks / (double)TimeSpan.TicksPerMillisecond;
+                    if (remainingMs >= 1.0)
+                    {
+                        // Millisecond waits use Task.Delay to keep the producer CPU-friendly.
+                        await Task.Delay(TimeSpan.FromMilliseconds(remainingMs), producerToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Sub-millisecond waits spin to avoid overshooting; SpinUntil handles progressive back-off for us.
+                        SpinWait.SpinUntil(
+                            () => stopwatch.Elapsed.Ticks >= targetTick ||
+                                  producerToken.IsCancellationRequested ||
+                                  _cancellationToken.IsCancellationRequested);
+
+                        if (producerToken.IsCancellationRequested || _cancellationToken.IsCancellationRequested)
+                            return;
+                    }
                 }
             }
         }
