@@ -690,6 +690,23 @@ public sealed class RawHttpTransport : ITransport
     }
 
     /// <summary>
+    /// Creates a DocumentStore configured with the same HTTP version settings as the transport.
+    /// Used for administrative operations (database creation, document counting, etc.).
+    /// </summary>
+    private Raven.Client.Documents.DocumentStore CreateAdminStore(string databaseName)
+    {
+        var store = new Raven.Client.Documents.DocumentStore
+        {
+            Urls = [_baseUrl],
+            Database = databaseName
+        };
+
+        HttpHelper.ConfigureHttpVersion(store, _httpVersion, HttpVersionPolicy.RequestVersionExact);
+
+        return store;
+    }
+
+    /// <summary>
     /// Creates an HttpRequestMessage with proper HTTP version and policy settings.
     /// </summary>
     private HttpRequestMessage CreateRequest(HttpMethod method, string url)
@@ -702,12 +719,7 @@ public sealed class RawHttpTransport : ITransport
 
     public async Task EnsureDatabaseExistsAsync(string databaseName)
     {
-        // Use RavenDB client for administrative tasks
-        using var adminStore = new Raven.Client.Documents.DocumentStore
-        {
-            Urls = [_baseUrl],
-            Database = databaseName
-        };
+        using var adminStore = CreateAdminStore(databaseName);
         adminStore.Initialize();
 
         try
@@ -723,12 +735,7 @@ public sealed class RawHttpTransport : ITransport
 
     public async Task<long> GetDocumentCountAsync(string idPrefix)
     {
-        // Use RavenDB client for querying document count
-        using var adminStore = new Raven.Client.Documents.DocumentStore
-        {
-            Urls = [_baseUrl],
-            Database = _db
-        };
+        using var adminStore = CreateAdminStore(_db);
         adminStore.Initialize();
 
         using var session = adminStore.OpenAsyncSession();

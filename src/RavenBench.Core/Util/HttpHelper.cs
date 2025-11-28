@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using Raven.Client.Documents;
 
 namespace RavenBench.Core;
 
@@ -119,5 +120,47 @@ public static class HttpHelper
             request.VersionPolicy = _versionInfo.policy;
             return base.SendAsync(request, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Configures a DocumentStore with the specified HTTP version settings.
+    /// Ensures administrative operations use the same HTTP protocol as the benchmarking transport.
+    /// </summary>
+    /// <param name="store">The DocumentStore to configure.</param>
+    /// <param name="httpVersion">The HTTP version to use (e.g., "2" for HTTP/2, "1.1" for HTTP/1.1).</param>
+    /// <param name="policy">The HTTP version policy (defaults to RequestVersionExact for strict protocol enforcement).</param>
+    public static void ConfigureHttpVersion(DocumentStore store, Version httpVersion, HttpVersionPolicy policy = HttpVersionPolicy.RequestVersionExact)
+    {
+        // HTTP/1.x doesn't need special configuration
+        if (httpVersion.Equals(HttpVersion.Version11) || httpVersion.Equals(HttpVersion.Version10))
+            return;
+
+        // Configure HTTP/2 or HTTP/3 through DocumentConventions
+        store.Conventions.CreateHttpClient = (handler) =>
+        {
+            var configuredHandler = HttpVersionHandler.CreateConfiguredHandler();
+            var versionInfo = (httpVersion, policy);
+            var client = new HttpClient(new HttpVersionHandler(configuredHandler, versionInfo))
+            {
+                Timeout = Timeout.InfiniteTimeSpan
+            };
+            return client;
+        };
+    }
+
+    /// <summary>
+    /// Configures a DocumentStore with the specified HTTP version string.
+    /// Ensures administrative operations use the same HTTP protocol as the benchmarking transport.
+    /// </summary>
+    /// <param name="store">The DocumentStore to configure.</param>
+    /// <param name="httpVersionString">The HTTP version string (e.g., "2", "1.1", "auto").</param>
+    public static void ConfigureHttpVersion(DocumentStore store, string httpVersionString)
+    {
+        if (string.IsNullOrEmpty(httpVersionString))
+            return;
+
+        var normalized = NormalizeHttpVersion(httpVersionString);
+        var (version, policy) = GetRequestVersionInfo(normalized);
+        ConfigureHttpVersion(store, version, policy);
     }
 }

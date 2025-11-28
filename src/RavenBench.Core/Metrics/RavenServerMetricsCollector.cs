@@ -30,17 +30,7 @@ public static class RavenServerMetricsCollector
             // Configure HTTP version if specified
             if (string.IsNullOrEmpty(httpVersion) == false)
             {
-                var normalizedVersion = HttpHelper.NormalizeHttpVersion(httpVersion);
-                var httpVersionInfo = HttpHelper.GetRequestVersionInfo(normalizedVersion);
-
-                tempStore.Conventions.CreateHttpClient = (handler) =>
-                {
-                    var client = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
-                    {
-                        Timeout = Timeout.InfiniteTimeSpan
-                    };
-                    return client;
-                };
+                HttpHelper.ConfigureHttpVersion(tempStore, httpVersion);
             }
 
             tempStore.Initialize();

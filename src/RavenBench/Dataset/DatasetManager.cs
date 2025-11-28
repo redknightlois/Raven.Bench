@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.IO;
+using RavenBench.Core;
 using Raven.Client.Documents.Smuggler;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations;
@@ -90,12 +91,16 @@ public sealed class DatasetManager
     /// <summary>
     /// Ensures a database exists on the server.
     /// </summary>
-    private async Task EnsureDatabaseExistsAsync(string serverUrl, string databaseName, CancellationToken ct = default)
+    private async Task EnsureDatabaseExistsAsync(string serverUrl, string databaseName, string? httpVersion = null, CancellationToken ct = default)
     {
         using var store = new DocumentStore
         {
             Urls = new[] { serverUrl }
         };
+        
+        if (!string.IsNullOrEmpty(httpVersion))
+            HttpHelper.ConfigureHttpVersion(store, httpVersion);
+        
         store.Initialize();
 
         var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName), ct);
@@ -109,18 +114,22 @@ public sealed class DatasetManager
     /// <summary>
     /// Imports a RavenDB dump file into the specified database using Smuggler API.
     /// </summary>
-    public async Task ImportDumpAsync(string dumpFilePath, string serverUrl, string databaseName, CancellationToken ct = default)
+    public async Task ImportDumpAsync(string dumpFilePath, string serverUrl, string databaseName, string? httpVersion = null, CancellationToken ct = default)
     {
         Console.WriteLine($"[Dataset] Importing {Path.GetFileName(dumpFilePath)} into database '{databaseName}'");
 
         // Ensure database exists before importing
-        await EnsureDatabaseExistsAsync(serverUrl, databaseName, ct);
+        await EnsureDatabaseExistsAsync(serverUrl, databaseName, httpVersion, ct);
 
         using var store = new DocumentStore
         {
             Urls = new[] { serverUrl },
             Database = databaseName
         };
+        
+        if (!string.IsNullOrEmpty(httpVersion))
+            HttpHelper.ConfigureHttpVersion(store, httpVersion);
+        
         store.Initialize();
 
         var operation = await store.Smuggler.ImportAsync(new DatabaseSmugglerImportOptions(), dumpFilePath, ct);
@@ -142,7 +151,7 @@ public sealed class DatasetManager
     /// <summary>
     /// Downloads and imports a complete dataset.
     /// </summary>
-    public async Task ImportDatasetAsync(DatasetInfo dataset, string serverUrl, string databaseName, CancellationToken ct = default)
+    public async Task ImportDatasetAsync(DatasetInfo dataset, string serverUrl, string databaseName, string? httpVersion = null, CancellationToken ct = default)
     {
         Console.WriteLine($"[Dataset] Importing dataset '{dataset.Name}' into database '{databaseName}'");
         Console.WriteLine($"[Dataset] {dataset.Description}");
@@ -154,7 +163,7 @@ public sealed class DatasetManager
             var localPath = await DownloadAsync(file, progress: null, ct);
 
             // Import
-            await ImportDumpAsync(localPath, serverUrl, databaseName, ct);
+            await ImportDumpAsync(localPath, serverUrl, databaseName, httpVersion, ct);
         }
 
         Console.WriteLine($"[Dataset] Dataset '{dataset.Name}' import complete");
@@ -164,7 +173,7 @@ public sealed class DatasetManager
     /// Checks if the StackOverflow dataset appears to be already imported by checking
     /// for questions and users collections with minimum document counts.
     /// </summary>
-    public async Task<bool> IsStackOverflowDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000)
+    public async Task<bool> IsStackOverflowDatasetImportedAsync(string serverUrl, string databaseName, string? httpVersion = null, int expectedMinDocuments = 1000)
     {
         try
         {
@@ -172,6 +181,10 @@ public sealed class DatasetManager
             {
                 Urls = new[] { serverUrl }
             };
+            
+            if (!string.IsNullOrEmpty(httpVersion))
+                HttpHelper.ConfigureHttpVersion(store, httpVersion);
+            
             store.Initialize();
 
             // First check if database exists

@@ -78,24 +78,7 @@ public sealed class RavenClientTransport : ITransport
 
     private void ConfigureHttpVersion()
     {
-        if (_httpVersion.Equals(HttpVersion.Version11) || _httpVersion.Equals(HttpVersion.Version10))
-        {
-            // Default HTTP/1.x configuration - no special handling needed
-            return;
-        }
-
-        // Configure HTTP/2 and HTTP/3 through DocumentConventions.CreateHttpClient
-        var conventions = _store.Conventions;
-        conventions.CreateHttpClient = (handler) =>
-        {
-            var configuredHandler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
-            var client = new HttpClient(new HttpHelper.HttpVersionHandler(configuredHandler, httpVersionInfo))
-            {
-                Timeout = Timeout.InfiniteTimeSpan
-            };
-            return client;
-        };
+        HttpHelper.ConfigureHttpVersion((DocumentStore)_store, _httpVersion, HttpVersionPolicy.RequestVersionExact);
     }
 
 

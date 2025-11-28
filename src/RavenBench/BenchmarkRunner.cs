@@ -107,7 +107,7 @@ public class BenchmarkRunner(RunOptions opts)
         // Wait for indexes to be non-stale after dataset import
         if (string.IsNullOrEmpty(opts.Dataset) == false)
         {
-            await WaitForNonStaleIndexesAsync(opts.Url, effectiveDatabase);
+            await WaitForNonStaleIndexesAsync(opts.Url, effectiveDatabase, negotiatedHttpVersion);
         }
 
         // Discover workload metadata for StackOverflow profiles (after dataset import and index wait)
@@ -796,7 +796,7 @@ public class BenchmarkRunner(RunOptions opts)
         Console.WriteLine("[Raven.Bench] Preload complete.");
     }
 
-    private static async Task WaitForNonStaleIndexesAsync(string serverUrl, string databaseName)
+    private static async Task WaitForNonStaleIndexesAsync(string serverUrl, string databaseName, Version httpVersion)
     {
         Console.WriteLine("[Raven.Bench] Waiting for indexes to become non-stale...");
 
@@ -805,6 +805,7 @@ public class BenchmarkRunner(RunOptions opts)
             Urls = new[] { serverUrl },
             Database = databaseName
         };
+        HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
 
         var maxWait = TimeSpan.FromMinutes(10);
@@ -863,7 +864,7 @@ public class BenchmarkRunner(RunOptions opts)
         // Check if dataset already exists
         if (opts.DatasetSkipIfExists)
         {
-            var exists = await datasetManager.IsStackOverflowDatasetImportedAsync(opts.Url, targetDatabase, expectedMinDocuments: 10000);
+            var exists = await datasetManager.IsStackOverflowDatasetImportedAsync(opts.Url, targetDatabase, opts.HttpVersion, expectedMinDocuments: 10000);
             if (exists)
             {
                 Console.WriteLine($"[Raven.Bench] Dataset appears to already exist in database '{targetDatabase}'. Skipping import.");
@@ -893,7 +894,7 @@ public class BenchmarkRunner(RunOptions opts)
         }
 
         // Download and import to the target database
-        await datasetManager.ImportDatasetAsync(dataset, opts.Url, targetDatabase);
+        await datasetManager.ImportDatasetAsync(dataset, opts.Url, targetDatabase, opts.HttpVersion);
 
         // Return the target database name so the runner can use it
         return targetDatabase;
