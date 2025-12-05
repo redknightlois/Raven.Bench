@@ -1,5 +1,6 @@
 using System.Globalization;
 using RavenBench.Core;
+using RavenBench.Core.Workload;
 using System;
 using System.IO;
 
@@ -43,6 +44,11 @@ internal static class CliParsing
             Reads = ParseNullableWeight(settings.Reads),
             Writes = ParseNullableWeight(settings.Writes),
             Updates = ParseNullableWeight(settings.Updates),
+            VectorTopK = settings.VectorTopK,
+            VectorQuantization = ParseVectorQuantization(settings.VectorQuantization),
+            VectorExactSearch = settings.VectorExactSearch,
+            VectorMinSimilarity = settings.VectorMinSimilarity,
+            VectorDimension = settings.VectorDimension,
             Profile = ParseProfile(settings.Profile),
             QueryProfile = ParseQueryProfile(settings.QueryProfile),
             DocumentSizeBytes = ParseSize(settings.DocSize),
@@ -118,6 +124,10 @@ internal static class CliParsing
             "stackoverflow-reads" or "so-reads" => WorkloadProfile.StackOverflowReads,
             "stackoverflow-queries" or "so-queries" => WorkloadProfile.StackOverflowQueries,
             "query-users-by-name" or "queryusersbyname" => WorkloadProfile.QueryUsersByName,
+            "vector-clinical-100d" or "vectorclinical100d" or "vector-clinical" => WorkloadProfile.VectorSearchClinical100D,
+            "vector-clinical-100d-exact" or "vectorclinical100dexact" => WorkloadProfile.VectorSearchClinical100DExact,
+            "vector-clinical-quantized" or "vectorclinicalquantized" => WorkloadProfile.VectorSearchClinical100DQuantized,
+            "vector-clinical-600d" or "vectorclinical600d" => WorkloadProfile.VectorSearchClinical600D,
             _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")
         };
     }
@@ -248,6 +258,17 @@ internal static class CliParsing
             "csv" => HistogramExportFormat.Csv,
             "both" => HistogramExportFormat.Both,
             _ => throw new ArgumentException($"Invalid histogram export format: {format}. Valid options: hlog, csv, both")
+        };
+    }
+
+    private static VectorQuantization ParseVectorQuantization(string quantization)
+    {
+        return quantization.Trim().ToLowerInvariant() switch
+        {
+            "none" => VectorQuantization.None,
+            "int8" => VectorQuantization.Int8,
+            "binary" => VectorQuantization.Binary,
+            _ => throw new ArgumentException($"Invalid vector quantization: {quantization}. Valid options: none, int8, binary")
         };
     }
 

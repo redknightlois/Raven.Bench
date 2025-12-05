@@ -9,6 +9,7 @@ using RavenBench.Core.Reporting;
 using Spectre.Console;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations;
+using RavenBench.Dataset;
 
 
 namespace RavenBench;
@@ -140,8 +141,18 @@ public class BenchmarkRunner(RunOptions opts)
             }
         }
 
-        // Build workload with discovered metadata
-        var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata);
+        // Discover workload metadata for vector search profiles
+        VectorWorkloadMetadata? vectorMetadata = null;
+        if (IsVectorSearchProfile(opts.Profile))
+        {
+            vectorMetadata = await LoadVectorMetadataAsync(opts, effectiveDatabase);
+            if (vectorMetadata == null)
+            {
+                throw new InvalidOperationException("Vector metadata not available. Ensure vector dataset is imported or specify --dataset-cache-dir with query vectors.");
+            }
+        }
+
+        var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
 
         if (opts.Preload > 0)
             await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
@@ -650,7 +661,7 @@ public class BenchmarkRunner(RunOptions opts)
 
 
 
-    internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, UsersWorkloadMetadata? usersMetadata)
+    internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, UsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)
     {
         if (opts.Profile == WorkloadProfile.Unspecified)
             throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id|query-users-by-name.");
@@ -684,6 +695,10 @@ public class BenchmarkRunner(RunOptions opts)
             WorkloadProfile.StackOverflowReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
             WorkloadProfile.StackOverflowQueries => BuildStackOverflowQueryWorkload(opts, stackOverflowMetadata!),
             WorkloadProfile.QueryUsersByName => BuildUsersQueryWorkload(opts, usersMetadata!),
+            WorkloadProfile.VectorSearchClinical100D => BuildVectorSearchWorkload(opts, vectorMetadata!),
+            WorkloadProfile.VectorSearchClinical100DExact => BuildVectorSearchWorkload(opts, vectorMetadata!, exactSearch: true),
+            WorkloadProfile.VectorSearchClinical100DQuantized => BuildVectorSearchWorkload(opts, vectorMetadata!, quantization: VectorQuantization.Int8),
+            WorkloadProfile.VectorSearchClinical600D => BuildVectorSearchWorkload(opts, vectorMetadata!),
             _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
         };
     }
@@ -737,6 +752,89 @@ public class BenchmarkRunner(RunOptions opts)
             QueryProfile.Range => new UsersRangeQueryWorkload(metadata),
             _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for Users queries. Supported profiles: equality, range")
         };
+    }
+
+    private static bool IsVectorSearchProfile(WorkloadProfile profile)
+    {
+        return profile == WorkloadProfile.VectorSearchClinical100D ||
+               profile == WorkloadProfile.VectorSearchClinical100DExact ||
+               profile == WorkloadProfile.VectorSearchClinical100DQuantized ||
+               profile == WorkloadProfile.VectorSearchClinical600D;
+    }
+
+    private static async Task<VectorWorkloadMetadata?> LoadVectorMetadataAsync(RunOptions opts, string database)
+    {
+        // For vector workloads, we need to load query vectors from the dataset
+        var datasetCacheDir = opts.DatasetCacheDir ?? Path.Combine(Path.GetTempPath(), "raven-bench-datasets");
+        
+        // Determine dataset name from profile or explicit --dataset option
+        var datasetName = opts.Dataset ?? GetDefaultDatasetForProfile(opts.Profile);
+        
+        if (string.IsNullOrEmpty(datasetName))
+        {
+            throw new InvalidOperationException("Vector search profiles require --dataset option. Supported: clinicalwords100d, clinicalwords300d, clinicalwords600d");
+        }
+
+        // For clinicalwords datasets, generate query vectors directly from the provider
+        if (datasetName.StartsWith("clinicalwords", StringComparison.OrdinalIgnoreCase))
+        {
+            int dimensions = 100;
+            if (datasetName.Contains("300d")) dimensions = 300;
+            else if (datasetName.Contains("600d")) dimensions = 600;
+            
+            var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
+            return await provider.GenerateQueryVectorsAsync(count: 1000);
+        }
+
+        // Construct path to query vectors file for other datasets
+        var queryFilePath = Path.Combine(datasetCacheDir, GetQueryFileName(datasetName));
+        
+        if (!File.Exists(queryFilePath))
+        {
+            Console.WriteLine($"[Raven.Bench] Query vectors file not found: {queryFilePath}");
+            Console.WriteLine($"[Raven.Bench] Please download dataset using --dataset {datasetName} or manually place query vectors in cache directory.");
+            return null;
+        }
+
+        // Fallback or error for unknown datasets
+        throw new NotSupportedException($"Dataset '{datasetName}' is not supported for vector search queries.");
+    }
+
+    private static string? GetDefaultDatasetForProfile(WorkloadProfile profile)
+    {
+        return profile switch
+        {
+            WorkloadProfile.VectorSearchClinical100D => "clinicalwords100d",
+            WorkloadProfile.VectorSearchClinical100DExact => "clinicalwords100d",
+            WorkloadProfile.VectorSearchClinical100DQuantized => "clinicalwords100d",
+            WorkloadProfile.VectorSearchClinical600D => "clinicalwords600d",
+            _ => null
+        };
+    }
+
+    private static string GetQueryFileName(string datasetName)
+    {
+        var name = datasetName.ToLowerInvariant();
+        if (name.StartsWith("clinicalwords"))
+            return $"{name}_queries.json";
+        throw new NotSupportedException($"Unknown dataset: {datasetName}");
+    }
+
+    private static IWorkload BuildVectorSearchWorkload(
+        RunOptions opts, 
+        VectorWorkloadMetadata metadata, 
+        bool exactSearch = false,
+        VectorQuantization? quantization = null)
+    {
+        var effectiveQuantization = quantization ?? opts.VectorQuantization;
+        var effectiveExactSearch = exactSearch || opts.VectorExactSearch;
+        
+        return new VectorSearchWorkload(
+            metadata,
+            topK: opts.VectorTopK,
+            minimumSimilarity: opts.VectorMinSimilarity,
+            useExactSearch: effectiveExactSearch,
+            quantization: effectiveQuantization);
     }
 
     private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion, string? databaseOverride = null)
@@ -834,6 +932,12 @@ public class BenchmarkRunner(RunOptions opts)
         Console.WriteLine($"[Raven.Bench] Dataset import requested: {opts.Dataset}");
 
         var datasetManager = new Dataset.DatasetManager(opts.DatasetCacheDir);
+        
+        // Check if this is a clinical words dataset (clinicalwords100d, clinicalwords300d, clinicalwords600d)
+        if (opts.Dataset!.StartsWith("clinicalwords", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ImportClinicalWordsDatasetAsync(opts);
+        }
 
         // Determine database name and dataset size based on profile or custom size
         string targetDatabase;
@@ -890,13 +994,48 @@ public class BenchmarkRunner(RunOptions opts)
 
         if (dataset == null)
         {
-            throw new ArgumentException($"Unknown dataset: {opts.Dataset}. Supported datasets: stackoverflow");
+            throw new ArgumentException($"Unknown dataset: {opts.Dataset}. Supported: stackoverflow, clinicalwords100d, clinicalwords300d, clinicalwords600d");
         }
 
         // Download and import to the target database
         await datasetManager.ImportDatasetAsync(dataset, opts.Url, targetDatabase, opts.HttpVersion);
 
         // Return the target database name so the runner can use it
+        return targetDatabase;
+    }
+
+    private static async Task<string> ImportClinicalWordsDatasetAsync(RunOptions opts)
+    {
+        // Parse dimensions from dataset name (e.g., "clinicalwords100d" -> 100)
+        var datasetName = opts.Dataset!.ToLowerInvariant();
+        int dimensions = 100; // default
+        if (datasetName.Contains("300d")) dimensions = 300;
+        else if (datasetName.Contains("600d")) dimensions = 600;
+        
+        var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
+        var targetDatabase = provider.GetDatabaseName();
+        
+        Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D dataset -> '{targetDatabase}'");
+
+        // Check if data already imported to database
+        if (opts.DatasetSkipIfExists)
+        {
+            Console.WriteLine($"[Raven.Bench] Checking if data already imported...");
+            var exists = await provider.IsDatasetImportedAsync(opts.Url, targetDatabase, expectedMinDocuments: Dataset.ClinicalWordsDatasetProvider.MinExpectedDocuments);
+            if (exists)
+            {
+                Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D already imported. Ready to use.");
+                return targetDatabase;
+            }
+            Console.WriteLine($"[Raven.Bench] Data not found or index not ready, will import.");
+        }
+
+        // Import words as documents with embeddings
+        Console.WriteLine($"[Raven.Bench] Importing clinical word embeddings to RavenDB...");
+        await provider.ImportWordsAsync(opts.Url, targetDatabase);
+
+        Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D import complete.");
+        
         return targetDatabase;
     }
 

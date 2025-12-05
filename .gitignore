@@ -390,3 +390,4 @@ FodyWeavers.xsd
 .idea/
 
 /epics/
+*.parquet

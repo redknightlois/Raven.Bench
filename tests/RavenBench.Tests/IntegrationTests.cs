@@ -164,27 +164,27 @@ public class IntegrationTests
 
         // Test Users equality workload
         var usersEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.Equality };
-        var usersEqualityWorkload = BenchmarkRunner.BuildWorkload(usersEqualityOpts, stackOverflowMetadata, usersMetadata);
+        var usersEqualityWorkload = BenchmarkRunner.BuildWorkload(usersEqualityOpts, stackOverflowMetadata, usersMetadata, null);
         usersEqualityWorkload.Should().BeOfType<UsersByNameQueryWorkload>();
 
         // Test Users range workload
         var usersRangeOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.Range };
-        var usersRangeWorkload = BenchmarkRunner.BuildWorkload(usersRangeOpts, stackOverflowMetadata, usersMetadata);
+        var usersRangeWorkload = BenchmarkRunner.BuildWorkload(usersRangeOpts, stackOverflowMetadata, usersMetadata, null);
         usersRangeWorkload.Should().BeOfType<UsersRangeQueryWorkload>();
 
         // Test StackOverflow equality workload (query by id)
         var soEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.Equality };
-        var soEqualityWorkload = BenchmarkRunner.BuildWorkload(soEqualityOpts, stackOverflowMetadata, usersMetadata);
+        var soEqualityWorkload = BenchmarkRunner.BuildWorkload(soEqualityOpts, stackOverflowMetadata, usersMetadata, null);
         soEqualityWorkload.Should().BeOfType<StackOverflowQueryWorkload>();
 
         // Test StackOverflow text prefix workload
         var soPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.TextPrefix };
-        var soPrefixWorkload = BenchmarkRunner.BuildWorkload(soPrefixOpts, stackOverflowMetadata, usersMetadata);
+        var soPrefixWorkload = BenchmarkRunner.BuildWorkload(soPrefixOpts, stackOverflowMetadata, usersMetadata, null);
         soPrefixWorkload.Should().BeOfType<QuestionsByTitlePrefixWorkload>();
 
         // Test StackOverflow text search workload
         var soSearchOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.TextSearch };
-        var soSearchWorkload = BenchmarkRunner.BuildWorkload(soSearchOpts, stackOverflowMetadata, usersMetadata);
+        var soSearchWorkload = BenchmarkRunner.BuildWorkload(soSearchOpts, stackOverflowMetadata, usersMetadata, null);
         soSearchWorkload.Should().BeOfType<QuestionsByTitleSearchWorkload>();
     }
 
@@ -264,19 +264,19 @@ public class IntegrationTests
 
         // StackOverflow queries do not support range queries
         var soRangeOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowQueries, QueryProfile = QueryProfile.Range };
-        var act1 = () => BenchmarkRunner.BuildWorkload(soRangeOpts, null, null);
+        var act1 = () => BenchmarkRunner.BuildWorkload(soRangeOpts, null, null, null);
         act1.Should().Throw<NotSupportedException>()
             .WithMessage("Query profile 'Range' is not supported for StackOverflow queries. Supported profiles: equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
 
         // StackOverflow queries do not support text-prefix for users profile
         var usersPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextPrefix };
-        var act2 = () => BenchmarkRunner.BuildWorkload(usersPrefixOpts, null, null);
+        var act2 = () => BenchmarkRunner.BuildWorkload(usersPrefixOpts, null, null, null);
         act2.Should().Throw<NotSupportedException>()
             .WithMessage("Query profile 'TextPrefix' is not supported for Users queries. Supported profiles: equality, range");
 
         // StackOverflow queries do not support text-search for users profile
         var usersSearchOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextSearch };
-        var act3 = () => BenchmarkRunner.BuildWorkload(usersSearchOpts, null, null);
+        var act3 = () => BenchmarkRunner.BuildWorkload(usersSearchOpts, null, null, null);
         act3.Should().Throw<NotSupportedException>()
             .WithMessage("Query profile 'TextSearch' is not supported for Users queries. Supported profiles: equality, range");
 
@@ -293,7 +293,7 @@ public class IntegrationTests
             UserCount = 1,
             ComputedAt = DateTime.UtcNow
         };
-        var workload = BenchmarkRunner.BuildWorkload(soTextPrefixOpts, validMetadata, null);
+        var workload = BenchmarkRunner.BuildWorkload(soTextPrefixOpts, validMetadata, null, null);
         workload.Should().BeOfType<QuestionsByTitlePrefixWorkload>();
     }
     

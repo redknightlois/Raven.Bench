@@ -27,8 +27,29 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("Update operation weight (percentage or count)")]
     public string? Updates { get; init; }
 
+    // Vector search options
+    [CommandOption("--vector-topk")]
+    [Description("Number of nearest neighbors to return (default: 10)")]
+    public int VectorTopK { get; init; } = 10;
+
+    [CommandOption("--vector-quantization")]
+    [Description("Vector quantization: none, int8, binary (default: none)")]
+    public string VectorQuantization { get; init; } = "none";
+
+    [CommandOption("--vector-exact-search")]
+    [Description("Use exact vector search instead of approximate (HNSW)")]
+    public bool VectorExactSearch { get; init; } = false;
+
+    [CommandOption("--vector-min-similarity")]
+    [Description("Minimum similarity threshold (0.0-1.0)")]
+    public float VectorMinSimilarity { get; init; } = 0.0f;
+
+    [CommandOption("--vector-dimension")]
+    [Description("Vector dimension (128, 384, 768, 1536)")]
+    public int VectorDimension { get; init; } = 128;
+
     [CommandOption("--profile")]
-    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")]
+    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name, vector-clinical-100d, vector-clinical-100d-exact, vector-clinical-quantized, vector-clinical-600d")]
     public string? Profile { get; init; }
 
     [CommandOption("--query-profile")]
