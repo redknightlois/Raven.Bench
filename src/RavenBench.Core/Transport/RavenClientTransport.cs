@@ -18,6 +18,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Raven.Client.Documents.Linq;
 
 namespace RavenBench.Core.Transport;
 
@@ -27,6 +28,12 @@ namespace RavenBench.Core.Transport;
 /// </summary>
 public sealed class RavenClientTransport : ITransport
 {
+    /// <summary>
+    /// Estimated JSON serialization size per float32 value in characters.
+    /// Example: "-0.123456789" = 12 characters including sign and decimal point.
+    /// </summary>
+    private const int EstimatedJsonFloatSize = 12;
+
     private readonly IDocumentStore _store;
     private readonly string _db;
     private readonly string _compressionMode;
@@ -173,6 +180,43 @@ public sealed class RavenClientTransport : ITransport
                     var bulkOutBytes = bulkOp.Documents.Sum(d => (d.Document?.Length ?? 0) + 50);
                     long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/bulk_docs", bulkOutBytes);
                     return new TransportResult(headerBytes + bulkOutBytes, 256 * bulkOp.Documents.Count);
+                }
+                case VectorSearchOperation vectorOp:
+                {
+                    using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                    {
+                        // Build the RQL query based on quantization type
+                        string queryText = BuildVectorSearchQuery(vectorOp);
+
+                        var query = s.Advanced.AsyncRawQuery<object>(queryText)
+                            .AddParameter("vector", vectorOp.QueryVector)
+                            .Take(vectorOp.TopK);
+
+                        if (vectorOp.MinimumSimilarity > 0)
+                        {
+                            query = query.AddParameter("minSimilarity", vectorOp.MinimumSimilarity);
+                        }
+
+                        // Execute query and capture statistics
+                        var results = await query.Statistics(out var stats).ToListAsync(ct).ConfigureAwait(false);
+
+                        // Estimate bytes out: vector payload + query text + headers
+                        long vectorPayloadBytes = EstimateVectorPayloadSize(vectorOp);
+                        long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/queries", vectorPayloadBytes);
+                        long bytesOut = vectorPayloadBytes + headerBytes;
+
+                        // Estimate bytes in: results + metadata
+                        long bytesIn = EstimateQueryResponseSize(results, stats);
+
+                        return new TransportResult(
+                            bytesOut: bytesOut,
+                            bytesIn: bytesIn,
+                            indexName: stats.IndexName,
+                            resultCount: results.Count,
+                            isStale: stats.IsStale,
+                            queryDurationMs: stats.DurationInMs
+                        );
+                    }
                 }
                 default:
                     return new TransportResult(0, 0);
@@ -589,6 +633,43 @@ public sealed class RavenClientTransport : ITransport
             // Fallback: rough estimate
             return 512;
         }
+    }
+
+    /// <summary>
+    /// Builds the RQL query for vector search based on quantization type and exact search flag.
+    /// </summary>
+    private string BuildVectorSearchQuery(VectorSearchOperation op)
+    {
+        return op.ToRqlQuery();
+    }
+
+    /// <summary>
+    /// Estimates the size of the vector search payload sent to RavenDB server.
+    /// </summary>
+    private static long EstimateVectorPayloadSize(VectorSearchOperation op)
+    {
+        // Base query text
+        string queryText = $"from @all_docs where vector.search('{op.FieldName}', $vector)";
+        long size = Encoding.UTF8.GetByteCount("{\"Query\":\"") +
+                    Encoding.UTF8.GetByteCount(queryText) +
+                    Encoding.UTF8.GetByteCount("\",\"QueryParameters\":{");
+
+        // Vector parameter: array of floats
+        // Plus commas and brackets
+        size += Encoding.UTF8.GetByteCount("\"$vector\":[");
+        size += op.QueryVector.Length * EstimatedJsonFloatSize;
+        size += op.QueryVector.Length - 1;  // Commas between elements
+        size += Encoding.UTF8.GetByteCount("]");
+
+        // Minimum similarity parameter if present
+        if (op.MinimumSimilarity > 0)
+        {
+            size += Encoding.UTF8.GetByteCount(",\"$minSimilarity\":");
+            size += Encoding.UTF8.GetByteCount(op.MinimumSimilarity.ToString());
+        }
+
+        size += Encoding.UTF8.GetByteCount("}}");
+        return size;
     }
 
 }

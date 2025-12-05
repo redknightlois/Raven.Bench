@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using RavenBench.Core.Workload;
 
 namespace RavenBench.Core;
 
@@ -78,6 +79,14 @@ public sealed record RunOptions
     public double? Reads { get; init; }
     public double? Writes { get; init; }
     public double? Updates { get; init; }
+
+    // Vector search options
+    public int VectorTopK { get; init; } = 10;
+    public VectorQuantization VectorQuantization { get; init; } = VectorQuantization.None;
+    public bool VectorExactSearch { get; init; } = false;
+    public float VectorMinSimilarity { get; init; } = 0.0f;
+    public int VectorDimension { get; init; } = 128; // Default to SIFT1M
+
     public string Distribution { get; init; } = "uniform";
     public int DocumentSizeBytes { get; init; } = 1024;
     public string Transport { get; init; } = "raw";
@@ -145,7 +154,9 @@ public enum WorkloadProfile
     BulkWrites,
     StackOverflowReads,
     StackOverflowQueries,
-    QueryUsersByName
+    QueryUsersByName,
+    VectorSearch,
+    VectorSearchExact
 }
 
 /// <summary>

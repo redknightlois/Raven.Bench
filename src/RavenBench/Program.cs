@@ -9,6 +9,8 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
         var app = new CommandApp();
         app.Configure(cfg =>
         {
@@ -22,6 +24,8 @@ internal static class Program
             cfg.AddCommand<RateCommand>("rate")
                 .WithDescription("Run a rate-based benchmark with constant RPS steps.")
                 .WithExample("rate", "--url", "http://localhost:10101", "--database", "ycsb", "--reads", "75", "--writes", "25", "--compression", "raw:identity", "--step", "200..20000x1.5");
+
+
         });
 
         try

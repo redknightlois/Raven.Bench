@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "RavenBench": {
+      "commandName": "Project",
+      "commandLineArgs": "closed --url http://localhost:8080 --profile vector-search-sift --dataset sift1m --concurrency 10..200 --warmup 15s --duration 60s"
+    }
+  }
+}

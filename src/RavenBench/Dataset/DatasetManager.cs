@@ -27,7 +27,10 @@ public sealed class DatasetManager
         // Register known dataset providers
         _providers = new Dictionary<string, IDatasetProvider>(StringComparer.OrdinalIgnoreCase)
         {
-            { "stackoverflow", new StackOverflowDatasetProvider() }
+            { "stackoverflow", new StackOverflowDatasetProvider() },
+            { "clinicalwords100d", new ClinicalWordsDatasetProvider(100) },
+            { "clinicalwords300d", new ClinicalWordsDatasetProvider(300) },
+            { "clinicalwords600d", new ClinicalWordsDatasetProvider(600) },
         };
     }
 

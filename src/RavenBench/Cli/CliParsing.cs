@@ -1,5 +1,6 @@
 using System.Globalization;
 using RavenBench.Core;
+using RavenBench.Core.Workload;
 using System;
 using System.IO;
 
@@ -26,7 +27,7 @@ internal static class CliParsing
         LoadShape shape,
         StepPlan stepPlan,
         int? rateWorkers = null,
-        string? modeOverride = null)
+        string modeOverride = null)
     {
         var (kneeThroughputDelta, kneeP95Delta) = ParseKneeRule(settings.KneeRule);
 
@@ -43,6 +44,11 @@ internal static class CliParsing
             Reads = ParseNullableWeight(settings.Reads),
             Writes = ParseNullableWeight(settings.Writes),
             Updates = ParseNullableWeight(settings.Updates),
+            VectorTopK = settings.VectorTopK,
+            VectorQuantization = ParseVectorQuantization(settings.VectorQuantization),
+            VectorExactSearch = settings.VectorExactSearch,
+            VectorMinSimilarity = settings.VectorMinSimilarity,
+            VectorDimension = settings.VectorDimension,
             Profile = ParseProfile(settings.Profile),
             QueryProfile = ParseQueryProfile(settings.QueryProfile),
             DocumentSizeBytes = ParseSize(settings.DocSize),
@@ -79,7 +85,7 @@ internal static class CliParsing
             Dataset = settings.Dataset,
             DatasetProfile = settings.DatasetProfile,
             DatasetSize = settings.DatasetSize,
-            DatasetSkipIfExists = settings.DatasetSkipIfExists,
+            DatasetSkipIfExists = (settings.DatasetSkipIfExists ?? true) && !settings.ForceDatasetImport,
             DatasetCacheDir = settings.DatasetCacheDir,
             OutputDir = settings.OutputDir,
             LatencyHistogramsDir = null,
@@ -106,7 +112,7 @@ internal static class CliParsing
     private static WorkloadProfile ParseProfile(string profile)
     {
         if (string.IsNullOrWhiteSpace(profile))
-            throw new ArgumentException("--profile is required. Valid options: mixed, writes, reads, query-by-id, query-users-by-name");
+            throw new ArgumentException("--profile is required. Valid options: mixed, writes, reads, query-by-id, query-users-by-name, vector-search, vector-search-exact");
 
         return profile.Trim().ToLowerInvariant() switch
         {
@@ -118,11 +124,13 @@ internal static class CliParsing
             "stackoverflow-reads" or "so-reads" => WorkloadProfile.StackOverflowReads,
             "stackoverflow-queries" or "so-queries" => WorkloadProfile.StackOverflowQueries,
             "query-users-by-name" or "queryusersbyname" => WorkloadProfile.QueryUsersByName,
-            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")
+            "vector-search" or "vectorsearch" => WorkloadProfile.VectorSearch,
+            "vector-search-exact" or "vectorsearchexact" => WorkloadProfile.VectorSearchExact,
+            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name, vector-search, vector-search-exact")
         };
     }
 
-    private static QueryProfile ParseQueryProfile(string? queryProfile)
+    private static QueryProfile ParseQueryProfile(string queryProfile)
     {
         // Default to Equality for backward compatibility
         if (string.IsNullOrWhiteSpace(queryProfile))
@@ -248,6 +256,17 @@ internal static class CliParsing
             "csv" => HistogramExportFormat.Csv,
             "both" => HistogramExportFormat.Both,
             _ => throw new ArgumentException($"Invalid histogram export format: {format}. Valid options: hlog, csv, both")
+        };
+    }
+
+    private static VectorQuantization ParseVectorQuantization(string quantization)
+    {
+        return quantization.Trim().ToLowerInvariant() switch
+        {
+            "none" => VectorQuantization.None,
+            "int8" => VectorQuantization.Int8,
+            "binary" => VectorQuantization.Binary,
+            _ => throw new ArgumentException($"Invalid vector quantization: {quantization}. Valid options: none, int8, binary")
         };
     }
 

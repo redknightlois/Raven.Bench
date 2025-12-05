@@ -1,3 +1,5 @@
+using System;
+
 namespace RavenBench.Dataset;
 
 /// <summary>
@@ -26,5 +28,5 @@ public interface IDatasetProvider
     /// Checks if this dataset is already imported in the specified database.
     /// Should verify expected collections and document counts exist.
     /// </summary>
-    Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000);
+    Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000, Version? httpVersion = null);
 }

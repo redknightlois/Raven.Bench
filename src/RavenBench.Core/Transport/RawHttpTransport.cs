@@ -81,6 +81,8 @@ public sealed class RawHttpTransport : ITransport
                     return await PostQueryAsync(queryOp, ct).ConfigureAwait(false);
                 case BulkInsertOperation<string> bulkOp:
                     return await PostBulkDocsAsync(bulkOp.Documents, ct).ConfigureAwait(false);
+                case VectorSearchOperation vectorOp:
+                    return await PostVectorSearchAsync(vectorOp, ct).ConfigureAwait(false);
                 default:
                     return new TransportResult(0, 0);
             }
@@ -715,6 +717,116 @@ public sealed class RawHttpTransport : ITransport
         req.Version = _httpVersion;
         req.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
         return req;
+    }
+
+    /// <summary>
+    /// Executes a vector search operation by posting a query to RavenDB.
+    /// </summary>
+    private async Task<TransportResult> PostVectorSearchAsync(VectorSearchOperation vectorOp, CancellationToken ct)
+    {
+        try
+        {
+            var url = $"{_baseUrl}/databases/{_db}/queries";
+
+            using var req = CreateRequest(HttpMethod.Post, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+
+            // Build the RQL query using the shared helper method
+            string queryText = vectorOp.ToRqlQuery();
+
+            // Build query parameters
+            var parameters = new Dictionary<string, object> { ["$vector"] = vectorOp.QueryVector };
+            if (vectorOp.MinimumSimilarity > 0)
+            {
+                parameters["$minSimilarity"] = vectorOp.MinimumSimilarity;
+            }
+
+            // Build query payload
+            var payload = new
+            {
+                Query = queryText,
+                QueryParameters = parameters,
+                MetadataOnly = false,
+                PageSize = vectorOp.TopK
+            };
+
+            var queryPayload = JsonSerializer.Serialize(payload);
+            req.Content = new StringContent(queryPayload, Encoding.UTF8, "application/json");
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+            {
+                if (resp.IsSuccessStatusCode == false)
+                {
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                    return new TransportResult(0, 0, errorDetails);
+                }
+
+                // Read and buffer the response
+                await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+
+                if (_bufferPool.TryDequeue(out var buffer) == false)
+                    buffer = new byte[32768];
+
+                using var ms = new MemoryStream();
+                int bytesRead;
+                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                {
+                    ms.Write(buffer, 0, bytesRead);
+                }
+                _bufferPool.TryEnqueue(buffer);
+
+                long bytesIn = ms.Length;
+                ms.Position = 0;
+
+                // Parse JSON from buffered response
+                using var doc = await JsonDocument.ParseAsync(ms, cancellationToken: ct).ConfigureAwait(false);
+
+                var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
+                    ? indexProp.GetString()
+                    : null;
+
+                var resultCount = doc.RootElement.TryGetProperty("Results", out var resultsProp) && resultsProp.ValueKind == JsonValueKind.Array
+                    ? resultsProp.GetArrayLength()
+                    : (int?)null;
+
+                var isStale = doc.RootElement.TryGetProperty("IsStale", out var staleProp)
+                    ? staleProp.GetBoolean()
+                    : (bool?)null;
+
+                double? queryDurationMs = null;
+                if (doc.RootElement.TryGetProperty("DurationInMs", out var durationProp))
+                {
+                    if (durationProp.ValueKind == JsonValueKind.Number)
+                    {
+                        queryDurationMs = durationProp.GetDouble();
+                    }
+                }
+
+                // Calculate byte counts
+                long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+                long headerBytes = CalculateHeaderSize(req);
+                long bytesOut = headerBytes + bodyBytes;
+
+                return new TransportResult(bytesOut, bytesIn, indexName: indexName, resultCount: resultCount, isStale: isStale, queryDurationMs: queryDurationMs);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            if (ct.IsCancellationRequested)
+                return new TransportResult(0, 0);
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
+        catch (Exception ex)
+        {
+            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
+            return new TransportResult(0, 0, errorDetails);
+        }
     }
 
     public async Task EnsureDatabaseExistsAsync(string databaseName)

@@ -1,6 +1,8 @@
+using System.Net;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations;
 using Raven.Client.ServerWide.Operations;
+using RavenBench.Core;
 
 namespace RavenBench.Dataset;
 
@@ -46,7 +48,7 @@ public class StackOverflowDatasetProvider : IDatasetProvider
         }
     }
 
-    public async Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000)
+    public async Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000, Version? httpVersion = null)
     {
         try
         {
@@ -54,6 +56,8 @@ public class StackOverflowDatasetProvider : IDatasetProvider
             {
                 Urls = new[] { serverUrl }
             };
+            if (httpVersion != null)
+                HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
             store.Initialize();
 
             // First check if database exists

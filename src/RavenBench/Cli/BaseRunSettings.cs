@@ -27,8 +27,29 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("Update operation weight (percentage or count)")]
     public string? Updates { get; init; }
 
+    // Vector search options
+    [CommandOption("--vector-topk")]
+    [Description("Number of nearest neighbors to return (default: 10)")]
+    public int VectorTopK { get; init; } = 10;
+
+    [CommandOption("--vector-quantization")]
+    [Description("Vector quantization: none, int8, binary (default: none)")]
+    public string VectorQuantization { get; init; } = "none";
+
+    [CommandOption("--vector-exact-search")]
+    [Description("Use exact vector search instead of approximate (HNSW)")]
+    public bool VectorExactSearch { get; init; } = false;
+
+    [CommandOption("--vector-min-similarity")]
+    [Description("Minimum similarity threshold (0.0-1.0)")]
+    public float VectorMinSimilarity { get; init; } = 0.0f;
+
+    [CommandOption("--vector-dimension")]
+    [Description("Vector dimension (128, 384, 768, 1536)")]
+    public int VectorDimension { get; init; } = 128;
+
     [CommandOption("--profile")]
-    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name")]
+    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name, vector-search, vector-search-exact")]
     public string? Profile { get; init; }
 
     [CommandOption("--query-profile")]
@@ -44,7 +65,7 @@ public abstract class BaseRunSettings : CommandSettings
     public int BulkDepth { get; init; } = 1;
 
     [CommandOption("--dataset")]
-    [Description("Dataset to import: stackoverflow (auto-downloads and imports)")]
+    [Description("Dataset to import: stackoverflow, clinicalwords100d, clinicalwords300d, clinicalwords600d (auto-downloads and imports)")]
     public string? Dataset { get; init; }
 
     [CommandOption("--dataset-profile")]
@@ -57,7 +78,11 @@ public abstract class BaseRunSettings : CommandSettings
 
     [CommandOption("--dataset-skip-if-exists")]
     [Description("Skip dataset import if data already exists (default: true)")]
-    public bool DatasetSkipIfExists { get; init; } = true;
+    public bool? DatasetSkipIfExists { get; init; }
+
+    [CommandOption("--force-dataset-import")]
+    [Description("Force dataset import even if data exists (overrides --dataset-skip-if-exists)")]
+    public bool ForceDatasetImport { get; init; }
 
     [CommandOption("--dataset-cache-dir")]
     [Description("Directory for caching downloaded dataset files")]
