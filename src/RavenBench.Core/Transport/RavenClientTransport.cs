@@ -35,6 +35,7 @@ public sealed class RavenClientTransport : ITransport
     private const int EstimatedJsonFloatSize = 12;
 
     private readonly IDocumentStore _store;
+    private readonly HttpClient _calibrationHttp;
     private readonly string _db;
     private readonly string _compressionMode;
     private readonly Version _httpVersion;
@@ -59,6 +60,19 @@ public sealed class RavenClientTransport : ITransport
         ConfigureHttpVersion();
 
         _store.Initialize();
+
+        _calibrationHttp = CreateCalibrationHttpClient(url);
+    }
+
+    private HttpClient CreateCalibrationHttpClient(string url)
+    {
+        var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
+        var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
+        return new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
+        {
+            BaseAddress = new Uri(url),
+            Timeout = Timeout.InfiniteTimeSpan
+        };
     }
 
     private void ConfigureCompression()
@@ -277,10 +291,7 @@ public sealed class RavenClientTransport : ITransport
     {
         try
         {
-            var baseUrl = _store.Urls[0].TrimEnd('/');
-            var url = $"{baseUrl}/monitoring/snmp/oids";
-            using var httpClient = new HttpClient();
-            using var resp = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            using var resp = await _calibrationHttp.GetAsync("/monitoring/snmp/oids", HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
@@ -341,13 +352,7 @@ public sealed class RavenClientTransport : ITransport
     {
         try
         {
-            // Create HTTP client with same configuration as the store
-            var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
-            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo));
-
-            var url = _store.Urls[0].TrimEnd('/') + "/license/status";
-            using var resp = await http.GetAsync(url).ConfigureAwait(false);
+            using var resp = await _calibrationHttp.GetAsync("/license/status", HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
@@ -419,6 +424,7 @@ public sealed class RavenClientTransport : ITransport
 
     public void Dispose()
     {
+        _calibrationHttp.Dispose();
         _store.Dispose();
     }
 
@@ -428,13 +434,7 @@ public sealed class RavenClientTransport : ITransport
         {
             // Use maintenance operation if exposed; fallback to HTTP endpoint via server URL.
             // We don't depend on server admin permissions here; non-fatal if denied.
-            // Create HTTP client with same configuration as the store
-            var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
-            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo));
-
-            var url = _store.Urls[0].TrimEnd('/') + "/license/status";
-            using var resp = await http.GetAsync(url).ConfigureAwait(false);
+            using var resp = await _calibrationHttp.GetAsync("/license/status", HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
@@ -454,46 +454,38 @@ public sealed class RavenClientTransport : ITransport
     {
         return await CalibrationHelper.ExecuteCalibrationAsync(async cancellationToken =>
         {
-            // Prepare endpoint path (ensure it starts with /)
-            if (endpoint.StartsWith('/') == false)
-                endpoint = "/" + endpoint;
-
-            // Create HTTP client with same configuration as the store
-            var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-            var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
-            using var http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
-            {
-                BaseAddress = new Uri(_store.Urls[0])
-            };
-
-            using var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            var requestUri = CreateCalibrationRequestUri(endpoint);
+            using var req = new HttpRequestMessage(HttpMethod.Get, requestUri);
             req.Version = _httpVersion;
             req.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
             req.Headers.ExpectContinue = false;
             req.Headers.ConnectionClose = false;
 
-            var acceptEncoding = ExtractAcceptEncoding(_compressionMode);
+            var acceptEncoding = GetAcceptEncodingHeaderValue(_compressionMode);
             if (string.IsNullOrWhiteSpace(acceptEncoding) == false)
             {
                 req.Headers.AcceptEncoding.Clear();
                 req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(acceptEncoding));
             }
 
-            return await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            return await _calibrationHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         }, ct, fallbackHttpVersion: _httpVersion).ConfigureAwait(false);
     }
 
-    private string BuildCalibrationUrl(string endpoint)
+    private static Uri CreateCalibrationRequestUri(string endpoint)
     {
-        // Check if endpoint is truly absolute (has a scheme like http:// or https://)
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
-            uri.Scheme != null && (uri.Scheme == "http" || uri.Scheme == "https"))
-            return endpoint;
+        // Absolute URLs bypass BaseAddress, relative URLs use it.
+        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var absoluteUri) &&
+            string.IsNullOrWhiteSpace(absoluteUri.Scheme) == false &&
+            (absoluteUri.Scheme == "http" || absoluteUri.Scheme == "https"))
+        {
+            return absoluteUri;
+        }
 
         if (endpoint.StartsWith('/') == false)
             endpoint = "/" + endpoint;
 
-        return _store.Urls[0].TrimEnd('/') + endpoint;
+        return new Uri(endpoint, UriKind.Relative);
     }
 
     public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints()
@@ -505,16 +497,13 @@ public sealed class RavenClientTransport : ITransport
         };
     }
 
-    private static string? ExtractAcceptEncoding(string compression)
+    private static string? GetAcceptEncodingHeaderValue(string compression)
     {
         if (string.IsNullOrWhiteSpace(compression))
             return null;
 
-        var parts = compression.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2)
-            return null;
-
-        return parts[1].ToLowerInvariant();
+        var normalized = compression.Trim().ToLowerInvariant();
+        return normalized == "brotli" ? "br" : normalized;
     }
 
     /// <summary>

@@ -138,9 +138,8 @@ public static class HttpHelper
         // Configure HTTP/2 or HTTP/3 through DocumentConventions
         store.Conventions.CreateHttpClient = (handler) =>
         {
-            var configuredHandler = HttpVersionHandler.CreateConfiguredHandler();
             var versionInfo = (httpVersion, policy);
-            var client = new HttpClient(new HttpVersionHandler(configuredHandler, versionInfo))
+            var client = new HttpClient(new HttpVersionHandler(handler, versionInfo))
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
