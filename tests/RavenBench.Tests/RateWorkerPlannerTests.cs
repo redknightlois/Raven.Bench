@@ -49,4 +49,15 @@ public sealed class RateWorkerPlannerTests
         var workers = BenchmarkRunner.ResolveRateWorkerCount(opts, targetRps: 200000, baselineLatencyMicros: 50000);
         workers.Should().Be(15000);
     }
+
+    [Fact]
+    public void UsesObservedServiceTime_WhenHigherThanBaseline()
+    {
+        var opts = CreateOptions();
+
+        // Baseline RTT is tiny (0.2ms), but observed end-to-end service time is 5ms.
+        // 16000 RPS * 5ms = 80 concurrency → 1.5x headroom = 120 workers
+        var workers = BenchmarkRunner.ResolveRateWorkerCount(opts, targetRps: 16000, baselineLatencyMicros: 200, observedServiceTimeSeconds: 0.005);
+        workers.Should().Be(120);
+    }
 }

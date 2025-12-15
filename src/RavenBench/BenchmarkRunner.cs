@@ -286,7 +286,7 @@ public class BenchmarkRunner(RunOptions opts)
             Console.WriteLine($"[Raven.Bench] ERROR: Startup calibration failed: {ex.Message}");
             startupCalibration = null;
         }
-        
+
         // Create core context for executor
         // Create benchmark executor with all dependencies
         var executor = new BenchmarkExecutor(
@@ -297,6 +297,9 @@ public class BenchmarkRunner(RunOptions opts)
             serverTracker,
             opts.Snmp.Enabled ? opts.Snmp : null);
 
+	        double? observedServiceTimeSeconds = null;
+	        int? previousAutoRateWorkers = null;
+
         while (currentValue <= endValue)
         {
             // Calculate baseline latency for coordinated omission correction
@@ -304,10 +307,17 @@ public class BenchmarkRunner(RunOptions opts)
                 ? (long)(startupCalibration.Endpoints.Min(e => e.ObservedMs) * 1000) // Convert ms to µs
                 : 0L;
 
-            // Calculate worker fan-out for rate mode using either the override or baseline-derived heuristic
-            var rateWorkerCount = opts.Shape == LoadShape.Rate
-                ? ResolveRateWorkerCount(opts, (int)currentValue, baselineLatencyMicros)
-                : 0;
+	            // Calculate worker fan-out for rate mode using either the override or baseline-derived heuristic
+	            var rateWorkerCount = opts.Shape == LoadShape.Rate
+	                ? ResolveRateWorkerCount(opts, (int)currentValue, baselineLatencyMicros, observedServiceTimeSeconds)
+	                : 0;
+
+	            if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false && previousAutoRateWorkers.HasValue)
+	            {
+	                // Avoid sudden worker explosions from transient tail-latency spikes.
+	                // Doubling the target RPS should not require >2x workers in one step under normal conditions.
+	                rateWorkerCount = Math.Min(rateWorkerCount, previousAutoRateWorkers.Value * 2);
+	            }
 
             // Create appropriate load generator based on load shape
             ILoadGenerator loadGenerator = opts.Shape switch
@@ -320,10 +330,27 @@ public class BenchmarkRunner(RunOptions opts)
             LogStepStart(opts.Shape, steps.Count + 1, (int)currentValue, rateWorkerCount, opts);
 
             // Execute step using the executor
-            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
+	            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
 
             // Take histogram snapshot for this step
-            var snapshot = latencyRecorder.Snapshot();
+	            var snapshot = latencyRecorder.Snapshot();
+
+	            if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false)
+	            {
+	                // In rate mode, baseline RTT can be much lower than the end-to-end request service time.
+	                // Use a high percentile from the *measured* latency distribution to size workers for the next step.
+	                // This avoids under-driving the client when per-op CPU/serialization dominates the RTT.
+	                var p99ServiceTimeSeconds = Math.Max(1e-6, snapshot.GetPercentile(99) / 1_000_000.0);
+	                var throughputImpliedServiceTimeSeconds = stepResult.Throughput > 0
+	                    ? stepResult.Concurrency / stepResult.Throughput
+	                    : 0;
+	                var estimatedServiceTimeSeconds = Math.Max(p99ServiceTimeSeconds, throughputImpliedServiceTimeSeconds);
+	                observedServiceTimeSeconds = observedServiceTimeSeconds.HasValue
+	                    ? Math.Max(observedServiceTimeSeconds.Value, estimatedServiceTimeSeconds)
+	                    : estimatedServiceTimeSeconds;
+
+	                previousAutoRateWorkers = stepResult.Concurrency;
+	            }
 
             // Calculate percentiles from snapshot
             int[] percentiles = { 50, 75, 90, 95, 99, 999 };
@@ -641,6 +668,11 @@ public class BenchmarkRunner(RunOptions opts)
 
     internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros)
     {
+        return ResolveRateWorkerCount(opts, targetRps, baselineLatencyMicros, observedServiceTimeSeconds: null);
+    }
+
+    internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros, double? observedServiceTimeSeconds)
+    {
         if (opts == null)
             throw new ArgumentNullException(nameof(opts));
 
@@ -656,7 +688,11 @@ public class BenchmarkRunner(RunOptions opts)
             : fallbackBaselineSeconds;
 
         // Little's Law: concurrency ~= throughput * latency. Add 1.5x headroom to absorb jitter.
-        var estimatedConcurrency = targetRps * baselineSeconds;
+        var effectiveSeconds = observedServiceTimeSeconds.HasValue && observedServiceTimeSeconds.Value > 0
+            ? Math.Max(observedServiceTimeSeconds.Value, baselineSeconds)
+            : baselineSeconds;
+
+        var estimatedConcurrency = targetRps * effectiveSeconds;
         var plannedWorkers = (int)Math.Ceiling(Math.Max(estimatedConcurrency * 1.5, 1));
 
         const int minWorkers = 32;

@@ -104,7 +104,7 @@ namespace RavenBench.Core
 
             var result = new StepResult
             {
-                Concurrency = currentStepValue,
+                Concurrency = loadGenerator.Concurrency,
                 Throughput = metrics.Throughput,
                 TargetThroughput = loadGenerator.TargetThroughput,
                 ErrorRate = metrics.ErrorRate,

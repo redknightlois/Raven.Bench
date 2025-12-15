@@ -145,7 +145,7 @@ namespace RavenBench.Core
                                 _transport,
                                 operation,
                                 latencyRecorder,
-                                _expectedIntervalMicros,
+                                baselineLatencyMicros: 0,
                                 cancellationToken);
                             counters.Record(result);
                         }
