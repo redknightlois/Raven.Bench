@@ -113,8 +113,8 @@ public sealed class RavenClientTransport : ITransport
                 {
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
-                        var doc = await s.LoadAsync<object>(readOp.Id, ct).ConfigureAwait(false);
-                        long bytesIn = EstimateDocumentSize(doc);
+                        var doc = await s.LoadAsync<BlittableJsonReaderObject>(readOp.Id, ct).ConfigureAwait(false);
+                        long bytesIn = doc?.Size ?? 0;
                         long headerBytes = EstimateHeaderSize("GET", $"/databases/{_db}/docs?id={Uri.EscapeDataString(readOp.Id)}");
                         return new TransportResult(headerBytes, bytesIn);
                     }
@@ -152,7 +152,7 @@ public sealed class RavenClientTransport : ITransport
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
                         // Build parameterized query from QueryOperation
-                        var query = s.Advanced.AsyncRawQuery<object>(queryOp.QueryText);
+                        var query = s.Advanced.AsyncRawQuery<BlittableJsonReaderObject>(queryOp.QueryText);
 
                         // Add all parameters
                         foreach (var param in queryOp.Parameters)
@@ -202,7 +202,7 @@ public sealed class RavenClientTransport : ITransport
                         // Build the RQL query based on quantization type
                         string queryText = BuildVectorSearchQuery(vectorOp);
 
-                        var query = s.Advanced.AsyncRawQuery<object>(queryText)
+                        var query = s.Advanced.AsyncRawQuery<BlittableJsonReaderObject>(queryText)
                             .AddParameter("vector", vectorOp.QueryVector)
                             .Take(vectorOp.TopK);
 
@@ -575,19 +575,13 @@ public sealed class RavenClientTransport : ITransport
     /// Estimates the size of the query response JSON payload received from RavenDB server.
     /// This includes the results array, metadata fields (IndexName, IsStale, DurationInMs), and JSON overhead.
     /// </summary>
-    private static long EstimateQueryResponseSize(List<object> results, QueryStatistics stats)
+    private static long EstimateQueryResponseSize(List<BlittableJsonReaderObject> results, QueryStatistics stats)
     {
-        // Serialize results to estimate their JSON size
+        // Use blittable sizes (avoids re-serializing results just for byte estimation)
         long resultsSize = 0;
-        try
+        foreach (var doc in results)
         {
-            var resultsJson = JsonSerializer.Serialize(results);
-            resultsSize = Encoding.UTF8.GetByteCount(resultsJson);
-        }
-        catch
-        {
-            // Fallback: estimate based on count * average document size
-            resultsSize = results.Count * 512; // Rough estimate for average document
+            resultsSize += doc?.Size ?? 0;
         }
 
         // Add metadata fields size
@@ -602,26 +596,6 @@ public sealed class RavenClientTransport : ITransport
         long overhead = Encoding.UTF8.GetByteCount("{\"Results\":[],\"IndexName\":\"\",\"IsStale\":false,\"DurationInMs\":0}");
 
         return resultsSize + metadataSize + overhead;
-    }
-
-    /// <summary>
-    /// Estimates the size of a single document in JSON format.
-    /// </summary>
-    private static long EstimateDocumentSize(object? doc)
-    {
-        if (doc == null)
-            return 0;
-
-        try
-        {
-            var docJson = JsonSerializer.Serialize(doc);
-            return Encoding.UTF8.GetByteCount(docJson);
-        }
-        catch
-        {
-            // Fallback: rough estimate
-            return 512;
-        }
     }
 
     /// <summary>

@@ -131,20 +131,47 @@ public static class HttpHelper
     /// <param name="policy">The HTTP version policy (defaults to RequestVersionExact for strict protocol enforcement).</param>
     public static void ConfigureHttpVersion(DocumentStore store, Version httpVersion, HttpVersionPolicy policy = HttpVersionPolicy.RequestVersionExact)
     {
-        // HTTP/1.x doesn't need special configuration
-        if (httpVersion.Equals(HttpVersion.Version11) || httpVersion.Equals(HttpVersion.Version10))
-            return;
-
-        // Configure HTTP/2 or HTTP/3 through DocumentConventions
+        // Configure HTTP client with proper connection pooling for all versions
         store.Conventions.CreateHttpClient = (handler) =>
         {
-            var versionInfo = (httpVersion, policy);
-            var client = new HttpClient(new HttpVersionHandler(handler, versionInfo))
-            {
-                Timeout = Timeout.InfiniteTimeSpan
-            };
+            ConfigureHandlerForHighConcurrency(handler);
+
+            var client = httpVersion.Equals(HttpVersion.Version11) || httpVersion.Equals(HttpVersion.Version10)
+                ? new HttpClient(handler)
+                : new HttpClient(new HttpVersionHandler(handler, (httpVersion, policy)));
+
+            client.Timeout = Timeout.InfiniteTimeSpan;
             return client;
         };
+    }
+
+    private static void ConfigureHandlerForHighConcurrency(HttpMessageHandler handler)
+    {
+        // RavenDB client typically passes an HttpClientHandler here.
+        // For HTTP/1.1, low MaxConnectionsPerServer can cap throughput even on fast servers.
+        var current = handler;
+        while (true)
+        {
+            if (current is HttpClientHandler httpClientHandler)
+            {
+                httpClientHandler.MaxConnectionsPerServer = int.MaxValue;
+                return;
+            }
+
+            if (current is SocketsHttpHandler socketsHttpHandler)
+            {
+                socketsHttpHandler.MaxConnectionsPerServer = int.MaxValue;
+                return;
+            }
+
+            if (current is DelegatingHandler delegatingHandler && delegatingHandler.InnerHandler != null)
+            {
+                current = delegatingHandler.InnerHandler;
+                continue;
+            }
+
+            return;
+        }
     }
 
     /// <summary>
