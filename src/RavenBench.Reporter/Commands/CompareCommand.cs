@@ -11,7 +11,7 @@ public static class CompareCommand
     /// <summary>
     /// Executes the multi-run comparison report generation.
     /// </summary>
-    /// <param name="summaryPaths">Paths to 2-3 benchmark summary JSON files.</param>
+    /// <param name="summaryPaths">Paths to 2+ benchmark summary JSON files.</param>
     /// <param name="labels">Labels for each run (must match summary count, or empty for auto-generation).</param>
     /// <param name="outputPath">Output PDF file path.</param>
     /// <param name="title">Report title override.</param>
@@ -26,9 +26,9 @@ public static class CompareCommand
         int baselineIndex = 0)
     {
         // Validate inputs
-        if (summaryPaths.Count < 2 || summaryPaths.Count > 3)
+        if (summaryPaths.Count < 2)
         {
-            throw new ArgumentException("Need at least two summaries (and at most three) for comparison.");
+            throw new ArgumentException("Need at least two summaries for comparison.");
         }
 
         // Generate default labels if not provided or empty

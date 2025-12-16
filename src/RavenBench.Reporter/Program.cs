@@ -28,7 +28,7 @@ public static class Program
         rootCommand.AddCommand(singleCommand);
 
         var compareCommand = new Command("compare", "Generate a multi-run comparison PDF report");
-        var compareSummaryOption = new Option<FileInfo[]>("--summary", "Path to benchmark summary JSON files (2-3 required)") { IsRequired = true, AllowMultipleArgumentsPerToken = true };
+        var compareSummaryOption = new Option<FileInfo[]>("--summary", "Path to benchmark summary JSON files (2+ required)") { IsRequired = true, AllowMultipleArgumentsPerToken = true };
         var compareOutputOption = new Option<FileInfo>("--output", () => new FileInfo("comparison.pdf"), "Output PDF file path");
         var compareTitleOption = new Option<string>("--title", "Report title");
         var compareNotesOption = new Option<string>("--notes", "Additional notes for the report");

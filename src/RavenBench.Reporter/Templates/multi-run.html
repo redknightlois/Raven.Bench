@@ -190,7 +190,8 @@
         }
 
         // Color palette for runs (needed by multiple functions)
-        const runColors = ['#2563eb', '#dc2626', '#16a34a'];
+        // Expanded palette to support 6+ versions with distinguishable colors
+        const runColors = ['#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#8b5cf6', '#ec4899'];
 
         // All runs (baseline + contenders) - needed by multiple functions
         let allRuns = [model.baseline].concat(model.contenders || []);

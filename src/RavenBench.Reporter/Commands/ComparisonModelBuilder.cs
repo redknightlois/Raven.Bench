@@ -11,14 +11,14 @@ public static class ComparisonModelBuilder
     /// <summary>
     /// Builds a comparison model from multiple benchmark summaries.
     /// </summary>
-    /// <param name="summaries">The benchmark summaries to compare (2-3).</param>
+    /// <param name="summaries">The benchmark summaries to compare (2+).</param>
     /// <param name="labels">Labels for each summary (must match count).</param>
     /// <param name="baselineIndex">Index of the baseline summary (default 0).</param>
     /// <returns>The comparison model.</returns>
     public static ComparisonModel Build(IReadOnlyList<BenchmarkSummary> summaries, IReadOnlyList<string> labels, int baselineIndex = 0)
     {
-        if (summaries.Count < 2 || summaries.Count > 3)
-            throw new ArgumentException("Must provide 2-3 summaries for comparison.", nameof(summaries));
+        if (summaries.Count < 2)
+            throw new ArgumentException("Must provide at least 2 summaries for comparison.", nameof(summaries));
 
         if (labels.Count != summaries.Count)
             throw new ArgumentException("Labels count must match summaries count.", nameof(labels));
@@ -261,24 +261,76 @@ public static class ComparisonModelBuilder
 
     /// <summary>
     /// Builds aligned concurrency snapshots across all runs.
-    /// Each snapshot contains metrics from all runs at a specific concurrency level.
+    /// Each snapshot contains metrics from all runs at a specific load level.
+    /// For rate-based benchmarks, aligns by target throughput; for closed-loop, aligns by concurrency.
     /// </summary>
     private static List<ConcurrencySnapshot> BuildAlignedSteps(List<RunComparison> runs)
     {
-        // Collect all unique concurrency levels across all runs
-        var allConcurrencies = runs
-            .SelectMany(r => r.Summary.Steps.Select(s => s.Concurrency))
-            .Distinct()
-            .OrderBy(c => c)
-            .ToList();
+        // Determine if this is rate-based (target throughput) or closed-loop (concurrency) benchmarking
+        bool isRateBased = runs.Any(r => r.Summary.Steps.Any(s => s.TargetThroughput.HasValue));
 
-        var snapshots = new List<ConcurrencySnapshot>();
-        foreach (int concurrency in allConcurrencies)
+        if (isRateBased)
         {
-            var runMetrics = new List<StepMetrics?>();
-            foreach (var run in runs)
+            // For rate-based benchmarks, align by target throughput
+            var allTargets = runs
+                .SelectMany(r => r.Summary.Steps.Where(s => s.TargetThroughput.HasValue).Select(s => s.TargetThroughput!.Value))
+                .Distinct()
+                .OrderBy(t => t)
+                .ToList();
+
+            var snapshots = new List<ConcurrencySnapshot>();
+            foreach (double targetThroughput in allTargets)
             {
-                var step = run.Summary.Steps.FirstOrDefault(s => s.Concurrency == concurrency);
+                var runMetrics = new List<StepMetrics?>();
+                foreach (var run in runs)
+                {
+                    var step = run.Summary.Steps.FirstOrDefault(s =>
+                        s.TargetThroughput.HasValue && Math.Abs(s.TargetThroughput.Value - targetThroughput) < 0.01);
+                if (step == null)
+                {
+                    runMetrics.Add(null);
+                }
+                else
+                {
+                    runMetrics.Add(new StepMetrics
+                    {
+                        Throughput = step.Throughput,
+                        P95 = step.Raw.P95,
+                        P99 = step.Raw.P99,
+                        P999 = step.Raw.P999,
+                        ErrorRate = step.ErrorRate,
+                        ClientCpu = step.ClientCpu,
+                        ServerCpu = step.ServerCpu,
+                        ServerMemoryMB = step.ServerMemoryMB
+                    });
+                }
+            }
+
+            snapshots.Add(new ConcurrencySnapshot
+            {
+                Concurrency = (int)targetThroughput, // Use target throughput as the alignment key
+                RunMetrics = runMetrics
+            });
+        }
+
+        return snapshots;
+        }
+        else
+        {
+            // For closed-loop benchmarks, align by concurrency (worker count)
+            var allConcurrencies = runs
+                .SelectMany(r => r.Summary.Steps.Select(s => s.Concurrency))
+                .Distinct()
+                .OrderBy(c => c)
+                .ToList();
+
+            var snapshots = new List<ConcurrencySnapshot>();
+            foreach (int concurrency in allConcurrencies)
+            {
+                var runMetrics = new List<StepMetrics?>();
+                foreach (var run in runs)
+                {
+                    var step = run.Summary.Steps.FirstOrDefault(s => s.Concurrency == concurrency);
                 if (step == null)
                 {
                     runMetrics.Add(null);
@@ -307,6 +359,7 @@ public static class ComparisonModelBuilder
         }
 
         return snapshots;
+        }
     }
 
     /// <summary>
