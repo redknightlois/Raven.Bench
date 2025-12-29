@@ -55,7 +55,10 @@ internal static class CliParsing
             Step = stepPlan.Normalize(),
             Shape = shape,
             RateWorkers = rateWorkers,
-            Warmup = ParseDuration(settings.Warmup),
+            Warmup = ParseWarmupDuration(settings.Warmup, out var warmupEnabled),
+            WarmupEnabled = warmupEnabled,
+            WarmupConverge = settings.WarmupConverge ?? true,
+            WarmupMaxIterations = settings.WarmupMaxIterations ?? RunOptions.DefaultWarmupMaxIterations,
             Duration = ParseDuration(settings.Duration),
             MaxErrorRate = ParsePercent(settings.MaxErrors),
             KneeThroughputDelta = kneeThroughputDelta,
@@ -203,6 +206,25 @@ internal static class CliParsing
         if (s.EndsWith("MB")) return int.Parse(s.AsSpan(0, s.Length - 2)) * 1024 * 1024;
         if (s.EndsWith("B")) return int.Parse(s.AsSpan(0, s.Length - 1));
         return int.Parse(s);
+    }
+
+    private static TimeSpan ParseWarmupDuration(string warmup, out bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(warmup))
+        {
+            enabled = true;
+            return RunOptions.DefaultWarmupDuration;
+        }
+
+        var trimmed = warmup.Trim();
+        if (bool.TryParse(trimmed, out var boolValue))
+        {
+            enabled = boolValue;
+            return boolValue ? RunOptions.DefaultWarmupDuration : TimeSpan.Zero;
+        }
+
+        enabled = true;
+        return ParseDuration(trimmed);
     }
 
     public static TimeSpan ParseDuration(string s)

@@ -313,10 +313,10 @@ public class CliParsingTests
         public bool WarmupCalled { get; private set; }
         public bool MeasurementCalled { get; private set; }
 
-        public Task ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken)
+        public Task<WarmupDiagnostics> ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken)
         {
             WarmupCalled = true;
-            return Task.CompletedTask;
+            return Task.FromResult(WarmupDiagnostics.Empty);
         }
 
         public Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteMeasurementAsync(

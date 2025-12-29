@@ -45,7 +45,7 @@ namespace RavenBench.Core
         /// <summary>
         /// Executes a single benchmark step using the provided load generator.
         /// </summary>
-        public async Task<(LatencyRecorder latencyRecorder, StepResult result)> ExecuteStepAsync(
+        public async Task<(LatencyRecorder latencyRecorder, StepResult result, WarmupSummary? warmupSummary)> ExecuteStepAsync(
             ILoadGenerator loadGenerator,
             int stepIndex,
             int currentStepValue,
@@ -58,10 +58,21 @@ namespace RavenBench.Core
             // Set baseline latency for coordinated omission correction
             loadGenerator.SetBaselineLatency(baselineLatencyMicros);
 
-            // Warmup phase
+            WarmupSummary? warmupSummary = null;
+
+            // Warmup phase - run until convergence or max iterations
             if (warmupTime > TimeSpan.Zero)
             {
-                await loadGenerator.ExecuteWarmupAsync(warmupTime, cancellationToken);
+                if (_options.WarmupConverge)
+                {
+                    warmupSummary = await ExecuteWarmupPhaseAsync(loadGenerator, warmupTime, cancellationToken);
+                }
+                else
+                {
+                    // Single warmup iteration, no convergence check
+                    var warmupDiag = await loadGenerator.ExecuteWarmupAsync(warmupTime, cancellationToken);
+                    warmupSummary = new WarmupSummary(new[] { warmupDiag }, converged: false, WarmupFailureReason.Disabled);
+                }
             }
 
             // Start tracking before measurement
@@ -79,7 +90,7 @@ namespace RavenBench.Core
                 var result = BuildStepResultAsync(
                     loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics, cancellationToken);
 
-                return (latencyRecorder, result);
+                return (latencyRecorder, result, warmupSummary);
             }
             finally
             {
@@ -87,6 +98,30 @@ namespace RavenBench.Core
                 _cpuTracker.Stop();
                 _serverTracker?.Stop();
             }
+        }
+
+        private async Task<WarmupSummary> ExecuteWarmupPhaseAsync(
+            ILoadGenerator loadGenerator,
+            TimeSpan warmupDuration,
+            CancellationToken cancellationToken)
+        {
+            var iterations = new List<WarmupDiagnostics>();
+            var maxIterations = _options.WarmupMaxIterations;
+
+            for (int i = 0; i < maxIterations; i++)
+            {
+                var diagnostics = await loadGenerator.ExecuteWarmupAsync(warmupDuration, cancellationToken);
+                iterations.Add(diagnostics);
+
+                // Check convergence after second iteration
+                if (i >= 1 && WarmupStabilityHeuristics.HasConverged(iterations))
+                {
+                    return WarmupStabilityHeuristics.BuildSummary(iterations, requireConvergence: true, maxIterations);
+                }
+            }
+
+            // Reached max iterations without converging
+            return WarmupStabilityHeuristics.BuildSummary(iterations, requireConvergence: true, maxIterations);
         }
 
         private StepResult BuildStepResultAsync(
@@ -177,7 +212,7 @@ namespace RavenBench.Core
         /// <summary>
         /// Executes warmup operations to stabilize the system.
         /// </summary>
-        Task ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken);
+        Task<WarmupDiagnostics> ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken);
 
         /// <summary>
         /// Executes the measurement phase and returns collected metrics.

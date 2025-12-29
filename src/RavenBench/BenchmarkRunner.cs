@@ -205,6 +205,9 @@ public class BenchmarkRunner(RunOptions opts)
 
         var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
 
+        // Build warmup workload: read-only wrapper for write workloads when preload exists
+        var warmupWorkload = BuildWarmupWorkload(opts, workload);
+
         // Only preload for profiles that actually use bench/ prefix documents
         if (opts.Preload > 0 && ProfileRequiresPreload(opts.Profile))
             await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
@@ -364,15 +367,21 @@ public class BenchmarkRunner(RunOptions opts)
             // Create appropriate load generator based on load shape
             ILoadGenerator loadGenerator = opts.Shape switch
             {
-                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, _rng),
-                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng),
-                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng)
+                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, _rng, warmupWorkload),
+                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng, warmupWorkload),
+                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng, warmupWorkload)
             };
 
             LogStepStart(opts.Shape, steps.Count + 1, (int)currentValue, rateWorkerCount, opts);
 
             // Execute step using the executor
-	            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
+	            var (latencyRecorder, stepResult, warmupSummary) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
+
+            // Report warmup stability if warmup was performed
+            if (warmupSummary != null)
+            {
+                WarmupStabilityReporter.Report(warmupSummary, steps.Count + 1);
+            }
 
             // Take histogram snapshot for this step
 	            var snapshot = latencyRecorder.Snapshot();
@@ -750,6 +759,44 @@ public class BenchmarkRunner(RunOptions opts)
     }
 
 
+    /// <summary>
+    /// Builds a warmup workload that reads from preloaded data without writing.
+    /// Read-only workloads are used as-is; write workloads are wrapped to read from preloaded keys.
+    /// </summary>
+    private static IWorkload? BuildWarmupWorkload(RunOptions opts, IWorkload measurementWorkload)
+    {
+        // If warmup is disabled or no preload exists, don't create a warmup workload
+        if (opts.WarmupEnabled == false || opts.Preload <= 0)
+            return null;
+
+        // Determine if the measurement workload is already read-only
+        var isReadOnly = measurementWorkload is ReadWorkload
+            or QueryWorkload
+            or VectorSearchWorkload
+            or StackOverflowReadWorkload
+            or StackOverflowQueryWorkload
+            or UsersByNameQueryWorkload
+            or UsersRangeQueryWorkload
+            or QuestionsByTitlePrefixWorkload
+            or QuestionsByTitleSearchWorkload;
+
+        if (isReadOnly)
+        {
+            // Read-only workloads already sample real data, use them directly for warmup
+            return measurementWorkload;
+        }
+
+        // For write/mixed workloads, create a read-only wrapper that samples from preloaded keyspace
+        IKeyDistribution distribution = opts.Distribution.ToLowerInvariant() switch
+        {
+            "uniform" => new UniformDistribution(),
+            "zipfian" => new ZipfianDistribution(),
+            "latest" => new LatestDistribution(),
+            _ => new UniformDistribution() // Fallback to uniform for warmup
+        };
+
+        return new WarmupWorkload(distribution, opts.Preload);
+    }
 
     internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, StackOverflowUsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)
     {

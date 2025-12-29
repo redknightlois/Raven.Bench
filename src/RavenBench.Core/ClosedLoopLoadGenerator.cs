@@ -18,6 +18,7 @@ namespace RavenBench.Core
     {
         private readonly ITransport _transport;
         private readonly IWorkload _workload;
+        private readonly IWorkload? _warmupWorkload;
         private readonly int _concurrency;
         private readonly Random _rng;
         private long _baselineLatencyMicros;
@@ -29,23 +30,28 @@ namespace RavenBench.Core
             ITransport transport,
             IWorkload workload,
             int concurrency,
-            Random rng)
+            Random rng,
+            IWorkload? warmupWorkload = null)
         {
             _transport = transport ?? throw new ArgumentNullException(nameof(transport));
             _workload = workload ?? throw new ArgumentNullException(nameof(workload));
+            _warmupWorkload = warmupWorkload;
             _concurrency = concurrency;
             _rng = rng ?? throw new ArgumentNullException(nameof(rng));
         }
 
-        public async Task ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken)
+        public async Task<WarmupDiagnostics> ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken)
         {
-            await ExecuteAsync(duration, isWarmup: true, cancellationToken);
+            // Use warmup workload if provided, otherwise fall back to measurement workload
+            var workload = _warmupWorkload ?? _workload;
+            var (latencyRecorder, metrics) = await ExecuteAsync(duration, workload, isWarmup: true, cancellationToken);
+            return WarmupDiagnostics.FromRecorder(latencyRecorder, metrics, duration);
         }
 
         public async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteMeasurementAsync(
             TimeSpan duration, CancellationToken cancellationToken)
         {
-            var (latencyRecorder, metrics) = await ExecuteAsync(duration, isWarmup: false, cancellationToken);
+            var (latencyRecorder, metrics) = await ExecuteAsync(duration, _workload, isWarmup: false, cancellationToken);
             return (latencyRecorder, metrics);
         }
 
@@ -55,9 +61,9 @@ namespace RavenBench.Core
         }
 
         private async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteAsync(
-            TimeSpan duration, bool isWarmup, CancellationToken cancellationToken)
+            TimeSpan duration, IWorkload workload, bool isWarmup, CancellationToken cancellationToken)
         {
-            var latencyRecorder = new LatencyRecorder(!isWarmup);
+            var latencyRecorder = new LatencyRecorder(recordLatencies: true);
             var bufferSize = Math.Max(_concurrency, 1);
             var channel = Channel.CreateBounded<OperationBase>(bufferSize);
             var counters = new LoadGeneratorCounters();
@@ -92,7 +98,7 @@ namespace RavenBench.Core
             long scheduledCount = 0;
             while (stopwatch.Elapsed < endTime && cancellationToken.IsCancellationRequested == false)
             {
-                var operation = _workload.NextOperation(_rng);
+                var operation = workload.NextOperation(_rng);
                 Interlocked.Increment(ref scheduledCount);
                 await channel.Writer.WriteAsync(operation, cancellationToken);
             }

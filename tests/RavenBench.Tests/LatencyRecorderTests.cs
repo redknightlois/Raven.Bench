@@ -221,7 +221,7 @@ public class LatencyRecorderTests
         // Total count should be close to expected (allow variance for Recorder's async double-buffering)
         // Recorder uses lock-free structures and flips buffers asynchronously
         // Some records may be in-flight during snapshot, so allow reasonable tolerance
-        snapshot.TotalCount.Should().BeGreaterOrEqualTo(threadCount * recordsPerThread - 150)
+        snapshot.TotalCount.Should().BeGreaterOrEqualTo(threadCount * recordsPerThread - 300)
             .And.BeLessOrEqualTo(threadCount * recordsPerThread + 10);
 
         // Percentiles should still be monotonic

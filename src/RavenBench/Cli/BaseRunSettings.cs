@@ -109,8 +109,16 @@ public abstract class BaseRunSettings : CommandSettings
     public string? Step { get; init; }
 
     [CommandOption("--warmup")]
-    [Description("Warmup duration (e.g., 20s, 1m) (default: 20s)")]
+    [Description("Warmup duration (e.g., 20s, 1m). Use 'false' to disable warmup (default: 20s)")]
     public string Warmup { get; init; } = "20s";
+
+    [CommandOption("--warmup-converge")]
+    [Description("Enable iterative warmup until latency stabilizes (default: true)")]
+    public bool? WarmupConverge { get; init; }
+
+    [CommandOption("--warmup-max-iterations")]
+    [Description("Maximum warmup iterations when convergence is enabled (default: 3)")]
+    public int? WarmupMaxIterations { get; init; }
 
     [CommandOption("--duration")]
     [Description("Step duration (e.g., 60s, 2m) (default: 60s)")]

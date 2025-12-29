@@ -20,6 +20,9 @@ public static class ComparisonModelBuilder
         if (summaries.Count < 2)
             throw new ArgumentException("Must provide at least 2 summaries for comparison.", nameof(summaries));
 
+        if (summaries.Count > 3)
+            throw new ArgumentException("Comparison supports at most 3 summaries.", nameof(summaries));
+
         if (labels.Count != summaries.Count)
             throw new ArgumentException("Labels count must match summaries count.", nameof(labels));
 

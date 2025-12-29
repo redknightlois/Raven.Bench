@@ -16,9 +16,10 @@ namespace RavenBench.Core
     /// </summary>
     public sealed class RateLoadGenerator : ILoadGenerator
     {
-        private readonly ITransport _transport;
-        private readonly IWorkload _workload;
-        private readonly double _targetRps;
+    private readonly ITransport _transport;
+    private readonly IWorkload _workload;
+    private readonly IWorkload? _warmupWorkload;
+    private readonly double _targetRps;
         private readonly int _maxConcurrency;
         private readonly Random _rng;
         private readonly object _workloadLock = new();
@@ -28,30 +29,35 @@ namespace RavenBench.Core
         public double? TargetThroughput => _targetRps;
 
         public RateLoadGenerator(
-            ITransport transport,
-            IWorkload workload,
-            double targetRps,
-            int maxConcurrency,
-            Random rng)
-        {
-            _transport = transport ?? throw new ArgumentNullException(nameof(transport));
-            _workload = workload ?? throw new ArgumentNullException(nameof(workload));
-            _targetRps = targetRps;
+        ITransport transport,
+        IWorkload workload,
+        double targetRps,
+        int maxConcurrency,
+        Random rng,
+        IWorkload? warmupWorkload = null)
+    {
+        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _workload = workload ?? throw new ArgumentNullException(nameof(workload));
+        _warmupWorkload = warmupWorkload;
+        _targetRps = targetRps;
             _maxConcurrency = maxConcurrency;
             _rng = rng ?? throw new ArgumentNullException(nameof(rng));
         }
 
-        public async Task ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken)
-        {
-            var warmupRps = _targetRps * 0.5; // Use 50% of target rate for warmup
-            await ExecuteAsync(duration, warmupRps, isWarmup: true, cancellationToken);
-        }
+        public async Task<WarmupDiagnostics> ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken)
+    {
+        // Use warmup workload if provided, otherwise fall back to measurement workload
+        var workload = _warmupWorkload ?? _workload;
+        var warmupRps = _targetRps * 0.5; // Use 50% of target rate for warmup
+        var (latencyRecorder, metrics) = await ExecuteAsync(duration, workload, warmupRps, isWarmup: true, cancellationToken);
+        return WarmupDiagnostics.FromRecorder(latencyRecorder, metrics, duration);
+    }
 
         public async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteMeasurementAsync(
             TimeSpan duration, CancellationToken cancellationToken)
-        {
-            return await ExecuteAsync(duration, _targetRps, isWarmup: false, cancellationToken);
-        }
+    {
+        return await ExecuteAsync(duration, _workload, _targetRps, isWarmup: false, cancellationToken);
+    }
 
         public void SetBaselineLatency(long baselineLatencyMicros)
         {
@@ -59,9 +65,9 @@ namespace RavenBench.Core
         }
 
         private async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteAsync(
-            TimeSpan duration, double targetRps, bool isWarmup, CancellationToken cancellationToken)
-        {
-            var latencyRecorder = new LatencyRecorder(!isWarmup);
+        TimeSpan duration, IWorkload workload, double targetRps, bool isWarmup, CancellationToken cancellationToken)
+    {
+            var latencyRecorder = new LatencyRecorder(recordLatencies: true);
             var counters = new LoadGeneratorCounters();
             var scheduledCount = 0L;
             var measurementStopwatch = Stopwatch.StartNew();
@@ -78,6 +84,7 @@ namespace RavenBench.Core
                 cancellationToken);
 
             var workers = StartWorkers(
+                workload,
                 scheduler,
                 latencyRecorder,
                 counters,
@@ -123,7 +130,8 @@ namespace RavenBench.Core
         }
 
         private Task[] StartWorkers(
-            TokenBucketScheduler scheduler,
+        IWorkload workload,
+        TokenBucketScheduler scheduler,
             LatencyRecorder latencyRecorder,
             LoadGeneratorCounters counters,
             Action onOperationScheduled,
@@ -138,14 +146,14 @@ namespace RavenBench.Core
                     {
                         await foreach (var _ in scheduler.ConsumeAsync(cancellationToken))
                         {
-                            var operation = CreateOperation();
+                            var operation = CreateOperation(workload);
                             onOperationScheduled();
 
                             var result = await LoadGeneratorExecution.ExecuteOperationAsync(
                                 _transport,
                                 operation,
                                 latencyRecorder,
-                                baselineLatencyMicros: 0,
+                                 baselineLatencyMicros: _expectedIntervalMicros,
                                 cancellationToken);
                             counters.Record(result);
                         }
@@ -162,14 +170,14 @@ namespace RavenBench.Core
             }
 
             return workers;
-        }
+    }
 
-        private OperationBase CreateOperation()
+    private OperationBase CreateOperation(IWorkload workload)
+    {
+        lock (_workloadLock)
         {
-            lock (_workloadLock)
-            {
-                return _workload.NextOperation(_rng);
-            }
+            return workload.NextOperation(_rng);
+        }
         }
 
         private long ResolveIntervalMicros(double targetRps)

@@ -111,7 +111,13 @@ public sealed record RunOptions
     public string Compression { get; init; } = "identity";
     public string Mode { get; init; } = "closed";
     public int? RateWorkers { get; init; } // Max concurrent operations for rate mode (null = auto)
-    public TimeSpan Warmup { get; init; } = TimeSpan.FromSeconds(20);
+    public static readonly TimeSpan DefaultWarmupDuration = TimeSpan.FromSeconds(20);
+    public const int DefaultWarmupMaxIterations = 3;
+
+    public TimeSpan Warmup { get; init; } = DefaultWarmupDuration;
+    public bool WarmupEnabled { get; init; } = true;
+    public bool WarmupConverge { get; init; } = true;
+    public int WarmupMaxIterations { get; init; } = DefaultWarmupMaxIterations;
     public TimeSpan Duration { get; init; } = TimeSpan.FromSeconds(60);
     public double MaxErrorRate { get; init; } = 0.005; // 0.5%
     public double KneeThroughputDelta { get; init; } = 0.05; // 5%
