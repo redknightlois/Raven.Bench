@@ -53,10 +53,10 @@ public interface ITransport : IDisposable
 {
     Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct);
     Task PutAsync<T>(string id, T document);
-    Task EnsureDatabaseExistsAsync(string databaseName);
-    Task<long> GetDocumentCountAsync(string idPrefix);
+   Task EnsureDatabaseExistsAsync(string databaseName);
+   Task<long> GetDocumentCountAsync(string idPrefix);
 
-    Task<int?> GetServerMaxCoresAsync();
+   Task<int?> GetServerMaxCoresAsync();
     Task<ServerMetrics> GetServerMetricsAsync();
 
     /// <summary>
@@ -71,8 +71,16 @@ public interface ITransport : IDisposable
     Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default);
 
     /// <summary>
+    /// Samples actual document IDs from the database for warmup.
+    /// Returns a list of document IDs that exist in the database with the given prefix.
+    /// </summary>
+    /// <param name="idPrefix">ID prefix to sample from (e.g., 'bench/').</param>
+    /// <param name="count">Number of IDs to sample.</param>
+    /// <param name="seed">Random seed for reproducible sampling.</param>
+    Task<List<string>> SampleDocumentIdsAsync(string idPrefix, int count, int seed);
+
+    /// <summary>
     /// Returns the endpoints this transport wants to calibrate during startup.
     /// </summary>
     IReadOnlyList<(string name, string path)> GetCalibrationEndpoints();
 }
-

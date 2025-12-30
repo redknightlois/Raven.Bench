@@ -103,6 +103,16 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
         public Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default) =>
             Task.FromResult(new CalibrationResult(0, 0, 0, new Version(1, 0)));
 
+        public Task<List<string>> SampleDocumentIdsAsync(string idPrefix, int count, int seed)
+        {
+            var ids = new List<string>();
+            for (int i = 0; i < count; i++)
+            {
+                ids.Add($"{idPrefix}{i:D8}");
+            }
+            return Task.FromResult(ids);
+        }
+
         public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints() => Array.Empty<(string, string)>();
 
         public void Dispose()

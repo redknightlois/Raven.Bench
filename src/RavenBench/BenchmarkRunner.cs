@@ -206,7 +206,7 @@ public class BenchmarkRunner(RunOptions opts)
         var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
 
         // Build warmup workload: read-only wrapper for write workloads when preload exists
-        var warmupWorkload = BuildWarmupWorkload(opts, workload);
+        var warmupWorkload = await BuildWarmupWorkload(opts, workload, transport);
 
         // Only preload for profiles that actually use bench/ prefix documents
         if (opts.Preload > 0 && ProfileRequiresPreload(opts.Profile))
@@ -763,28 +763,47 @@ public class BenchmarkRunner(RunOptions opts)
     /// Builds a warmup workload that reads from preloaded data without writing.
     /// Delegates to each workload's CreateWarmupWorkload method to determine the appropriate warmup behavior.
     /// </summary>
-    private static IWorkload? BuildWarmupWorkload(RunOptions opts, IWorkload measurementWorkload)
+    private static async Task<IWorkload?> BuildWarmupWorkload(RunOptions opts, IWorkload measurementWorkload, ITransport transport)
     {
         // If warmup is disabled or no preload exists, don't create a warmup workload
         if (opts.WarmupEnabled == false || opts.Preload <= 0)
             return null;
 
-        // Get the appropriate key distribution for warmup reads
-        IKeyDistribution distribution = opts.Distribution.ToLowerInvariant() switch
-        {
-            "uniform" => new UniformDistribution(),
-            "zipfian" => new ZipfianDistribution(),
-            "latest" => new LatestDistribution(),
-            _ => new UniformDistribution() // Fallback to uniform for warmup
-        };
-
-        // Ask the workload to create a warmup variant
-        // Returns null if the workload is already read-only and can be used as-is
-        // Returns a read-only variant (typically ReadWorkload) for write/mixed workloads
+        // First, check if workload needs a warmup variant (e.g., write workloads need read-only warmup)
+        // We still use distributions here temporarily for CreateWarmupWorkload signature compatibility
+        var distribution = new UniformDistribution(); // Unused, kept for interface compatibility
         var warmupWorkload = measurementWorkload.CreateWarmupWorkload(opts.Preload, distribution);
 
-        // If CreateWarmupWorkload returns null, use the measurement workload directly for warmup
-        return warmupWorkload ?? measurementWorkload;
+        // If workload returns a write-based warmup (shouldn't happen but defensive), sample real keys
+        if (warmupWorkload != null)
+        {
+            // Sample actual document IDs from the database for warmup
+            // This ensures we're reading pages that actually exist, not synthetic keys
+            var sampledIds = await transport.SampleDocumentIdsAsync("bench/", count: 10000, seed: opts.Seed);
+            
+            if (sampledIds.Count > 0)
+            {
+                return new SampledKeysWorkload(sampledIds);
+            }
+            
+            // If no documents found, fall back to original warmup workload
+            return warmupWorkload;
+        }
+
+        // If CreateWarmupWorkload returns null, the measurement workload is already read-only
+        // For read-only workloads, we still want to use sampled keys during warmup if possible
+        if (opts.Preload > 0)
+        {
+            var sampledIds = await transport.SampleDocumentIdsAsync("bench/", count: 10000, seed: opts.Seed);
+            
+            if (sampledIds.Count > 0)
+            {
+                return new SampledKeysWorkload(sampledIds);
+            }
+        }
+
+        // Fallback: use the measurement workload directly
+        return measurementWorkload;
     }
 
     internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, StackOverflowUsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)

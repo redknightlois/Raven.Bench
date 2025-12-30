@@ -64,6 +64,17 @@ public sealed class TestTransport : ITransport
 
     public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(_serverMetrics);
 
+    public Task<List<string>> SampleDocumentIdsAsync(string idPrefix, int count, int seed)
+    {
+        // Test implementation: return synthetic keys
+        var ids = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+            ids.Add($"{idPrefix}{i:D8}");
+        }
+        return Task.FromResult(ids);
+    }
+
     public Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
     {
         var sample = new SnmpSample

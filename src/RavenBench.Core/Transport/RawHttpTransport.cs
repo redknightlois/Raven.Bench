@@ -27,8 +27,8 @@ public sealed class RawHttpTransport : ITransport
 
 
     public RawHttpTransport(string url, string database, string compressionMode, Version httpVersion, string? endpoint = null)
-    {
-        _db = database;
+   {
+       _db = database;
         _baseUrl = url.TrimEnd('/');
         _acceptEncoding = compressionMode.Equals("identity", StringComparison.OrdinalIgnoreCase) ? "identity" : compressionMode;
         EffectiveCompressionMode = _acceptEncoding;
@@ -66,8 +66,8 @@ public sealed class RawHttpTransport : ITransport
     }
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
-    {
-        try
+   {
+       try
         {
             switch (op)
             {
@@ -861,6 +861,39 @@ public sealed class RawHttpTransport : ITransport
             }
         }
         return count;
+    }
+
+    public async Task<List<string>> SampleDocumentIdsAsync(string idPrefix, int count, int seed)
+    {
+        using var adminStore = CreateAdminStore(_db);
+        adminStore.Initialize();
+
+        using var session = adminStore.OpenAsyncSession();
+
+        // Query with random() ordering to get a random sample
+        // This ensures we sample actual database keys, not synthetic distribution keys
+        var query = session.Advanced.AsyncRawQuery<object>($@"
+            from @all_docs 
+            where startsWith(id(), $prefix) 
+            order by random('{seed}') 
+            select id()
+        ")
+        .AddParameter("prefix", idPrefix);
+
+        var results = new List<string>();
+        await using (var stream = await session.Advanced.StreamAsync(query))
+        {
+            while (await stream.MoveNextAsync() && results.Count < count)
+            {
+                var docId = stream.Current.Id;
+                if (string.IsNullOrEmpty(docId) == false)
+                {
+                    results.Add(docId);
+                }
+            }
+        }
+
+        return results;
     }
 
     public void Dispose()

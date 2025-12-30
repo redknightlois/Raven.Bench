@@ -43,10 +43,39 @@ public sealed class RavenClientTransport : ITransport
     public string EffectiveCompressionMode => _compressionMode;
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
+    public async Task<List<string>> SampleDocumentIdsAsync(string idPrefix, int count, int seed)
+    {
+        using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true });
+
+        // Query with random() ordering to get a random sample
+        // This ensures we sample actual database keys, not synthetic distribution keys
+        var query = session.Advanced.AsyncRawQuery<object>($@"
+            from @all_docs 
+            where startsWith(id(), $prefix) 
+            order by random('{seed}') 
+            select id()
+        ")
+        .AddParameter("prefix", idPrefix);
+
+        var results = new List<string>();
+        await using (var stream = await session.Advanced.StreamAsync(query))
+        {
+            while (await stream.MoveNextAsync() && results.Count < count)
+            {
+                var docId = stream.Current.Id;
+                if (string.IsNullOrEmpty(docId) == false)
+                {
+                    results.Add(docId);
+                }
+            }
+        }
+
+        return results;
+    }
 
     public RavenClientTransport(string url, string database, string compressionMode, Version httpVersion)
-    {
-        _db = database;
+   {
+       _db = database;
         _compressionMode = compressionMode.ToLowerInvariant();
         _httpVersion = httpVersion;
 
@@ -104,8 +133,8 @@ public sealed class RavenClientTransport : ITransport
 
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
-    {
-        try
+   {
+       try
         {
             switch (op)
             {
