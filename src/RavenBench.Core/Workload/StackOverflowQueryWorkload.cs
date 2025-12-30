@@ -41,4 +41,10 @@ public sealed class StackOverflowQueryWorkload : IWorkload
             Parameters = new Dictionary<string, object?> { ["id"] = docId }
         };
     }
+
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // StackOverflowQueryWorkload samples real document IDs, use it directly for warmup
+        return null;
+    }
 }

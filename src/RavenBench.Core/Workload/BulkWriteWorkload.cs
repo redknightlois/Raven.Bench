@@ -30,5 +30,12 @@ public sealed class BulkWriteWorkload : IWorkload
         return new BulkInsertOperation<string> { Documents = documents };
     }
 
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // BulkWriteWorkload inserts batches; for warmup, read from preloaded keyspace
+        // Note: Warmup may not make sense for pure bulk write benchmarks with no preload
+        return preloadCount > 0 ? new ReadWorkload(distribution, preloadCount) : null;
+    }
+
     private static string IdFor(long i) => $"bench/{i:D8}";
 }

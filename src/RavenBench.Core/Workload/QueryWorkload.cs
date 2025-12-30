@@ -25,6 +25,11 @@ public sealed class QueryWorkload : IWorkload
         };
     }
 
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // QueryWorkload is already read-only, use it directly for warmup
+        return null;
+    }
+
     private static string IdFor(long i) => $"bench/{i:D8}";
 }
-

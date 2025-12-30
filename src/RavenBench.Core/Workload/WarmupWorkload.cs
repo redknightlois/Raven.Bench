@@ -44,5 +44,11 @@ public sealed class WarmupWorkload : IWorkload
         return new ReadOperation { Id = IdFor(k) };
     }
 
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // WarmupWorkload is already a read-only warmup workload
+        return null;
+    }
+
     private string IdFor(long i) => $"{_keyPrefix}{i:D8}";
 }

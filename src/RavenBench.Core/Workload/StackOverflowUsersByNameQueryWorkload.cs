@@ -337,6 +337,12 @@ public sealed class StackOverflowUsersByNameQueryWorkload : IWorkload
             ExpectedIndex = _expectedIndexName
         };
     }
+
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // UsersByNameQueryWorkload samples real user names, use it directly for warmup
+        return null;
+    }
 }
 
 /// <summary>
@@ -400,5 +406,11 @@ public sealed class StackOverflowUsersRangeQueryWorkload : IWorkload
             },
             ExpectedIndex = _expectedIndexName
         };
+    }
+
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // UsersRangeQueryWorkload samples from reputation histogram, use it directly for warmup
+        return null;
     }
 }

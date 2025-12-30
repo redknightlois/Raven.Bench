@@ -761,7 +761,7 @@ public class BenchmarkRunner(RunOptions opts)
 
     /// <summary>
     /// Builds a warmup workload that reads from preloaded data without writing.
-    /// Read-only workloads are used as-is; write workloads are wrapped to read from preloaded keys.
+    /// Delegates to each workload's CreateWarmupWorkload method to determine the appropriate warmup behavior.
     /// </summary>
     private static IWorkload? BuildWarmupWorkload(RunOptions opts, IWorkload measurementWorkload)
     {
@@ -769,24 +769,7 @@ public class BenchmarkRunner(RunOptions opts)
         if (opts.WarmupEnabled == false || opts.Preload <= 0)
             return null;
 
-        // Determine if the measurement workload is already read-only
-        var isReadOnly = measurementWorkload is ReadWorkload
-            or QueryWorkload
-            or VectorSearchWorkload
-            or StackOverflowReadWorkload
-            or StackOverflowQueryWorkload
-            or UsersByNameQueryWorkload
-            or UsersRangeQueryWorkload
-            or QuestionsByTitlePrefixWorkload
-            or QuestionsByTitleSearchWorkload;
-
-        if (isReadOnly)
-        {
-            // Read-only workloads already sample real data, use them directly for warmup
-            return measurementWorkload;
-        }
-
-        // For write/mixed workloads, create a read-only wrapper that samples from preloaded keyspace
+        // Get the appropriate key distribution for warmup reads
         IKeyDistribution distribution = opts.Distribution.ToLowerInvariant() switch
         {
             "uniform" => new UniformDistribution(),
@@ -795,7 +778,13 @@ public class BenchmarkRunner(RunOptions opts)
             _ => new UniformDistribution() // Fallback to uniform for warmup
         };
 
-        return new WarmupWorkload(distribution, opts.Preload);
+        // Ask the workload to create a warmup variant
+        // Returns null if the workload is already read-only and can be used as-is
+        // Returns a read-only variant (typically ReadWorkload) for write/mixed workloads
+        var warmupWorkload = measurementWorkload.CreateWarmupWorkload(opts.Preload, distribution);
+
+        // If CreateWarmupWorkload returns null, use the measurement workload directly for warmup
+        return warmupWorkload ?? measurementWorkload;
     }
 
     internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, StackOverflowUsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)

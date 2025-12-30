@@ -38,4 +38,10 @@ public sealed class StackOverflowReadWorkload : IWorkload
             return new ReadOperation { Id = $"users/{userId}" };
         }
     }
+
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // StackOverflowReadWorkload samples real document IDs, use it directly for warmup
+        return null;
+    }
 }

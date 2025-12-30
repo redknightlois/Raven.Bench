@@ -349,6 +349,8 @@ public class CliParsingTests
         {
             return new ReadOperation { Id = "test-doc" };
         }
+
+        public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution) => null;
     }
 
     [Fact]

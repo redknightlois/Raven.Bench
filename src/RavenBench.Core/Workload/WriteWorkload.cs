@@ -21,6 +21,11 @@ public sealed class WriteWorkload : IWorkload
         return new InsertOperation<string> { Id = id, Payload = payload };
     }
 
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // WriteWorkload inserts new documents; for warmup, read from preloaded keyspace
+        return preloadCount > 0 ? new ReadWorkload(distribution, preloadCount) : null;
+    }
+
     private static string IdFor(long i) => $"bench/{i:D8}";
 }
-

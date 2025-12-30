@@ -5,6 +5,15 @@ namespace RavenBench.Core.Workload;
 public interface IWorkload
 {
     OperationBase NextOperation(Random rng);
+
+    /// <summary>
+    /// Creates a warmup workload for this workload.
+    /// Returns null if this workload is already read-only and can be used for warmup as-is.
+    /// Returns a read-only variant if this workload performs writes/updates.
+    /// </summary>
+    /// <param name="preloadCount">Number of documents preloaded in the database.</param>
+    /// <param name="distribution">Key distribution to use for warmup reads.</param>
+    IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution);
 }
 
 public abstract class OperationBase

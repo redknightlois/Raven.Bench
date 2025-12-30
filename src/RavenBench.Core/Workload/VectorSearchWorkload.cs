@@ -63,4 +63,10 @@ public sealed class VectorSearchWorkload : IWorkload
             Quantization = _quantization
         };
     }
+
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // VectorSearchWorkload is already read-only, use it directly for warmup
+        return null;
+    }
 }

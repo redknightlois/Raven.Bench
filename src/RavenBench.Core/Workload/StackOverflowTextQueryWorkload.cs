@@ -38,6 +38,12 @@ public sealed class QuestionsByTitlePrefixWorkload : IWorkload
             ExpectedIndex = _expectedIndexName
         };
     }
+
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // QuestionsByTitlePrefixWorkload samples real title prefixes, use it directly for warmup
+        return null;
+    }
 }
 
 /// <summary>
@@ -90,5 +96,11 @@ public sealed class QuestionsByTitleSearchWorkload : IWorkload
             Parameters = new Dictionary<string, object?> { ["term"] = searchTerm },
             ExpectedIndex = _expectedIndexName
         };
+    }
+
+    public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution)
+    {
+        // QuestionsByTitleSearchWorkload samples real search terms, use it directly for warmup
+        return null;
     }
 }

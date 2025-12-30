@@ -50,5 +50,6 @@ public sealed class RateLoadGeneratorTests
     private sealed class ConstantWorkload : IWorkload
     {
         public OperationBase NextOperation(Random rng) => new ReadOperation { Id = "users/1" };
+        public IWorkload? CreateWarmupWorkload(long preloadCount, IKeyDistribution distribution) => null;
     }
 }
