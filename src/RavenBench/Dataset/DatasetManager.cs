@@ -198,9 +198,8 @@ public sealed class DatasetManager
                 return false;
             }
 
-            // Check document counts
-            store.Database = databaseName;
-            var stats = await store.Maintenance.SendAsync(new Raven.Client.Documents.Operations.GetStatisticsOperation());
+            // Check document counts using ForDatabase() since store is already initialized
+            var stats = await store.Maintenance.ForDatabase(databaseName).SendAsync(new Raven.Client.Documents.Operations.GetStatisticsOperation());
 
             if (stats.CountOfDocuments < expectedMinDocuments)
             {
@@ -209,7 +208,7 @@ public sealed class DatasetManager
             }
 
             // Verify it has the expected collections
-            using var session = store.OpenAsyncSession();
+            using var session = store.OpenAsyncSession(databaseName);
             var questionsExist = await session.Advanced.AsyncRawQuery<object>("from questions")
                 .Take(1)
                 .AnyAsync();

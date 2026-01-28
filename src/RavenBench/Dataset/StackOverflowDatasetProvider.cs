@@ -68,9 +68,8 @@ public class StackOverflowDatasetProvider : IDatasetProvider
                 return false;
             }
 
-            // Check document counts
-            store.Database = databaseName;
-            var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
+            // Check document counts using ForDatabase() since store is already initialized
+            var stats = await store.Maintenance.ForDatabase(databaseName).SendAsync(new GetStatisticsOperation());
 
             if (stats.CountOfDocuments < expectedMinDocuments)
             {
@@ -79,7 +78,7 @@ public class StackOverflowDatasetProvider : IDatasetProvider
             }
 
             // Verify StackOverflow-specific collections: questions and users
-            using var session = store.OpenAsyncSession();
+            using var session = store.OpenAsyncSession(databaseName);
             var questionsExist = await session.Advanced.AsyncRawQuery<object>("from questions")
                 .Take(1)
                 .AnyAsync();
