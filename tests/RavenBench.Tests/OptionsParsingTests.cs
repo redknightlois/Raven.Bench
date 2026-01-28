@@ -57,18 +57,50 @@ public class CliParsingTests
     }
 
     [Fact]
-    public void Parses_Query_Profile_Defaults_To_Equality()
+    public void Parses_Query_Profile_Defaults_To_VoronEquality()
     {
         var settings = new ClosedSettings
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "stackoverflow-queries"
+            Profile = "stackoverflow-text-search"
         };
 
         var opts = settings.ToRunOptions();
 
-        opts.QueryProfile.Should().Be(QueryProfile.Equality);
+        opts.QueryProfile.Should().Be(QueryProfile.VoronEquality);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_VoronEquality()
+    {
+        var settings = new ClosedSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-text-search",
+            QueryProfile = "voron-equality"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.VoronEquality);
+    }
+
+    [Fact]
+    public void Parses_Query_Profile_IndexEquality()
+    {
+        var settings = new ClosedSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "stackoverflow-text-search",
+            QueryProfile = "index-equality"
+        };
+
+        var opts = settings.ToRunOptions();
+
+        opts.QueryProfile.Should().Be(QueryProfile.IndexEquality);
     }
 
     [Fact]
@@ -78,7 +110,7 @@ public class CliParsingTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "stackoverflow-queries",
+            Profile = "stackoverflow-text-search",
             QueryProfile = "text-search"
         };
 
@@ -94,7 +126,7 @@ public class CliParsingTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "stackoverflow-queries",
+            Profile = "stackoverflow-text-search",
             QueryProfile = "text-search-rare"
         };
 
@@ -110,7 +142,7 @@ public class CliParsingTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "stackoverflow-queries",
+            Profile = "stackoverflow-text-search",
             QueryProfile = "text-search-common"
         };
 
@@ -126,7 +158,7 @@ public class CliParsingTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "stackoverflow-queries",
+            Profile = "stackoverflow-text-search",
             QueryProfile = "text-search-mixed"
         };
 
@@ -158,14 +190,14 @@ public class CliParsingTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "stackoverflow-queries",
+            Profile = "stackoverflow-text-search",
             QueryProfile = "invalid"
         };
 
         var act = () => settings.ToRunOptions();
 
         act.Should().Throw<ArgumentException>()
-            .WithMessage("Invalid query profile: invalid. Valid options: equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
+            .WithMessage("Invalid query profile: invalid. Valid options: voron-equality, index-equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
     }
 
     [Fact]

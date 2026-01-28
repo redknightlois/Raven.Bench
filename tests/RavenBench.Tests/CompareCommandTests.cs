@@ -369,7 +369,7 @@ public class CompareCommandTests
                 Profile = profile,
                 Dataset = "test",
                 Transport = "raw",
-                QueryProfile = QueryProfile.Equality
+                QueryProfile = QueryProfile.VoronEquality
             },
             EffectiveHttpVersion = "1.1",
             Steps = new List<StepResult>
@@ -392,7 +392,7 @@ public class CompareCommandTests
                 Profile = profile,
                 Dataset = "test",
                 Transport = transport,
-                QueryProfile = QueryProfile.Equality
+                QueryProfile = QueryProfile.VoronEquality
             },
             EffectiveHttpVersion = "1.1",
             Steps = new List<StepResult>
@@ -415,7 +415,7 @@ public class CompareCommandTests
                 Profile = profile,
                 Dataset = "test",
                 Transport = "client",
-                QueryProfile = QueryProfile.Equality
+                QueryProfile = QueryProfile.VoronEquality
             },
             EffectiveHttpVersion = httpVersion,
             Steps = new List<StepResult>
@@ -438,7 +438,7 @@ public class CompareCommandTests
                 Profile = WorkloadProfile.Reads,
                 Dataset = "test",
                 Transport = "raw",
-                QueryProfile = QueryProfile.Equality
+                QueryProfile = QueryProfile.VoronEquality
             },
             EffectiveHttpVersion = "1.1",
             Steps = steps.ToList(),

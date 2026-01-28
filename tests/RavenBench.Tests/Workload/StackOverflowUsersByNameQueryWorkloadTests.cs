@@ -7,12 +7,12 @@ using Xunit;
 
 namespace RavenBench.Tests.Workload;
 
-public class UsersByNameQueryWorkloadTests
+public class StackOverflowUsersByNameQueryWorkloadTests
 {
     [Fact]
     public void Rejects_Empty_Metadata()
     {
-        var emptyMetadata = new UsersWorkloadMetadata
+        var emptyMetadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = Array.Empty<string>(),
             SampleCount = 0,
@@ -20,7 +20,7 @@ public class UsersByNameQueryWorkloadTests
             ComputedAt = DateTime.UtcNow
         };
 
-        var act = () => new UsersByNameQueryWorkload(emptyMetadata);
+        var act = () => new StackOverflowUsersByNameQueryWorkload(emptyMetadata);
         act.Should().Throw<ArgumentException>()
             .WithMessage("Metadata must contain sampled user names");
     }
@@ -28,7 +28,7 @@ public class UsersByNameQueryWorkloadTests
     [Fact]
     public void Generates_Query_Operations_With_Parameters()
     {
-        var metadata = new UsersWorkloadMetadata
+        var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = new[] { "Alice", "Bob", "Charlie" },
             SampleCount = 3,
@@ -37,7 +37,7 @@ public class UsersByNameQueryWorkloadTests
             DisplayNameIndexName = "Users/ByDisplayName-corax"
         };
 
-        var workload = new UsersByNameQueryWorkload(metadata);
+        var workload = new StackOverflowUsersByNameQueryWorkload(metadata);
         var rng = new Random(42);
         var op = workload.NextOperation(rng);
 
@@ -53,7 +53,7 @@ public class UsersByNameQueryWorkloadTests
     [Fact]
     public void Samples_All_Names_Uniformly()
     {
-        var metadata = new UsersWorkloadMetadata
+        var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = new[] { "Alice", "Bob", "Charlie" },
             SampleCount = 3,
@@ -62,7 +62,7 @@ public class UsersByNameQueryWorkloadTests
             DisplayNameIndexName = "Users/ByDisplayName-corax"
         };
 
-        var workload = new UsersByNameQueryWorkload(metadata);
+        var workload = new StackOverflowUsersByNameQueryWorkload(metadata);
         var rng = new Random(42);
         var namesSeen = new HashSet<string>();
 
@@ -80,7 +80,7 @@ public class UsersByNameQueryWorkloadTests
     [Fact]
     public void Metadata_Tracks_Sample_And_Total_Counts()
     {
-        var metadata = new UsersWorkloadMetadata
+        var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = new[] { "Alice", "Bob", "Charlie", "David", "Eve" },
             SampleCount = 5,
@@ -94,12 +94,12 @@ public class UsersByNameQueryWorkloadTests
     }
 }
 
-public class UsersRangeQueryWorkloadTests
+public class StackOverflowUsersRangeQueryWorkloadTests
 {
     [Fact]
     public void Rejects_Empty_Reputation_Buckets()
     {
-        var emptyMetadata = new UsersWorkloadMetadata
+        var emptyMetadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = new[] { "Alice" },
             SampleCount = 1,
@@ -108,7 +108,7 @@ public class UsersRangeQueryWorkloadTests
             ComputedAt = DateTime.UtcNow
         };
 
-        var act = () => new UsersRangeQueryWorkload(emptyMetadata);
+        var act = () => new StackOverflowUsersRangeQueryWorkload(emptyMetadata);
         act.Should().Throw<ArgumentException>()
             .WithMessage("Metadata must contain reputation histogram buckets");
     }
@@ -122,7 +122,7 @@ public class UsersRangeQueryWorkloadTests
             new ReputationBucket { MinReputation = 100, MaxReputation = 1000, EstimatedDocCount = 30 }
         };
 
-        var metadata = new UsersWorkloadMetadata
+        var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = new[] { "Alice" },
             SampleCount = 1,
@@ -134,7 +134,7 @@ public class UsersRangeQueryWorkloadTests
             ReputationIndexName = "Users/ByReputation-corax"
         };
 
-        var workload = new UsersRangeQueryWorkload(metadata);
+        var workload = new StackOverflowUsersRangeQueryWorkload(metadata);
         var rng = new Random(42);
         var op = workload.NextOperation(rng);
 
@@ -158,7 +158,7 @@ public class UsersRangeQueryWorkloadTests
             new ReputationBucket { MinReputation = 50, MaxReputation = 200, EstimatedDocCount = 30 }
         };
 
-        var metadata = new UsersWorkloadMetadata
+        var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = new[] { "Alice" },
             SampleCount = 1,
@@ -170,7 +170,7 @@ public class UsersRangeQueryWorkloadTests
             ReputationIndexName = "Users/ByReputation-corax"
         };
 
-        var workload = new UsersRangeQueryWorkload(metadata);
+        var workload = new StackOverflowUsersRangeQueryWorkload(metadata);
         var rng = new Random(42);
 
         // Generate multiple operations to test range generation
@@ -199,7 +199,7 @@ public class UsersRangeQueryWorkloadTests
             new ReputationBucket { MinReputation = 100, MaxReputation = 1000, EstimatedDocCount = 20 }
         };
 
-        var metadata = new UsersWorkloadMetadata
+        var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = new[] { "Alice" },
             SampleCount = 1,
@@ -211,7 +211,7 @@ public class UsersRangeQueryWorkloadTests
             ReputationIndexName = "Users/ByReputation-corax"
         };
 
-        var workload = new UsersRangeQueryWorkload(metadata);
+        var workload = new StackOverflowUsersRangeQueryWorkload(metadata);
         var rng = new Random(42);
         var bucketUsage = new Dictionary<int, int>();
 

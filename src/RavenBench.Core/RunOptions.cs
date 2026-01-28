@@ -137,9 +137,9 @@ public sealed record RunOptions
     // Required workload profile selection
     public WorkloadProfile Profile { get; init; } = WorkloadProfile.Unspecified;
 
-    // Query profile selection (equality, range, text) for query workloads
-    // Defaults to Equality for backward compatibility
-    public QueryProfile QueryProfile { get; init; } = QueryProfile.Equality;
+    // Query profile selection (voron-equality, index-equality, range, text) for query workloads
+    // Defaults to VoronEquality (direct document lookup via id())
+    public QueryProfile QueryProfile { get; init; } = QueryProfile.VoronEquality;
 
     public int BulkBatchSize { get; init; } = 100;
     public int BulkDepth { get; init; } = 1;
@@ -176,8 +176,8 @@ public enum WorkloadProfile
     Reads,
     QueryById,
     BulkWrites,
-    StackOverflowReads,
-    StackOverflowQueries,
+    StackOverflowRandomReads,
+    StackOverflowTextSearch,
     QueryUsersByName,
     VectorSearch,
     VectorSearchExact
@@ -217,9 +217,16 @@ public static class WorkloadProfiles
 public enum QueryProfile
 {
     /// <summary>
-    /// Equality queries (e.g., WHERE Name = $name)
+    /// Direct Voron document lookup via id() function.
+    /// Uses: from @all_docs where id() = $id
     /// </summary>
-    Equality = 0,
+    VoronEquality = 0,
+
+    /// <summary>
+    /// Index-based field lookup by document ID field.
+    /// Uses: from Questions where Id = $id
+    /// </summary>
+    IndexEquality,
 
     /// <summary>
     /// Range queries (e.g., WHERE Reputation BETWEEN $min AND $max)

@@ -17,7 +17,7 @@ public class ReporterTests
             Profile = WorkloadProfile.Reads,
             Dataset = "stackoverflow",
             Transport = "raw",
-            QueryProfile = QueryProfile.Equality
+            QueryProfile = QueryProfile.VoronEquality
         };
 
         var summary1 = new BenchmarkSummary

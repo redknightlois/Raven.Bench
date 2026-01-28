@@ -7,12 +7,15 @@ namespace RavenBench.Core.Workload;
 public sealed class StackOverflowQueryWorkload : IWorkload
 {
     private readonly int[] _questionIds;
+    private readonly bool _useVoronPath;
 
     /// <summary>
     /// Creates a StackOverflow query workload using sampled question IDs.
     /// </summary>
     /// <param name="metadata">Workload metadata containing sampled document IDs</param>
-    public StackOverflowQueryWorkload(StackOverflowWorkloadMetadata metadata)
+    /// <param name="useVoronPath">If true, uses direct Voron lookup (from @all_docs where id() = $id).
+    /// If false, uses index-based lookup (from Questions where Id = $id).</param>
+    public StackOverflowQueryWorkload(StackOverflowWorkloadMetadata metadata, bool useVoronPath = true)
     {
         if (metadata.QuestionIds.Length == 0)
         {
@@ -20,15 +23,21 @@ public sealed class StackOverflowQueryWorkload : IWorkload
         }
 
         _questionIds = metadata.QuestionIds;
+        _useVoronPath = useVoronPath;
     }
 
     public OperationBase NextOperation(Random rng)
     {
         var questionId = _questionIds[rng.Next(_questionIds.Length)];
         var docId = $"questions/{questionId}";
+
+        var queryText = _useVoronPath
+            ? "from @all_docs where id() = $id"
+            : "from Questions where Id = $id";
+
         return new QueryOperation
         {
-            QueryText = "from @all_docs where id() = $id",
+            QueryText = queryText,
             Parameters = new Dictionary<string, object?> { ["id"] = docId }
         };
     }

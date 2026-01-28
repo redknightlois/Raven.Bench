@@ -135,8 +135,8 @@ public class BenchmarkRunner(RunOptions opts)
         // Create static indexes for StackOverflow/Users workloads (replaces auto-indexes)
         // This must happen before metadata discovery so we can set the index names
         StackOverflowDatasetProvider.StaticIndexNames? staticIndexNames = null;
-        var needsStaticIndexes = opts.Profile == WorkloadProfile.StackOverflowReads ||
-                                  opts.Profile == WorkloadProfile.StackOverflowQueries ||
+        var needsStaticIndexes = opts.Profile == WorkloadProfile.StackOverflowRandomReads ||
+                                  opts.Profile == WorkloadProfile.StackOverflowTextSearch ||
                                   opts.Profile == WorkloadProfile.QueryUsersByName;
         if (needsStaticIndexes && opts.Dataset?.Equals("stackoverflow", StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -150,7 +150,7 @@ public class BenchmarkRunner(RunOptions opts)
 
         // Discover workload metadata for StackOverflow profiles (after dataset import and index wait)
         StackOverflowWorkloadMetadata? stackOverflowMetadata = null;
-        if (opts.Profile == WorkloadProfile.StackOverflowReads || opts.Profile == WorkloadProfile.StackOverflowQueries)
+        if (opts.Profile == WorkloadProfile.StackOverflowRandomReads || opts.Profile == WorkloadProfile.StackOverflowTextSearch)
         {
             stackOverflowMetadata = await StackOverflowWorkloadHelper.DiscoverOrLoadMetadataAsync(
                 opts.Url,
@@ -171,17 +171,17 @@ public class BenchmarkRunner(RunOptions opts)
         }
 
         // Discover workload metadata for QueryUsersByName profile (after dataset import and index wait)
-        UsersWorkloadMetadata? usersMetadata = null;
+        StackOverflowUsersWorkloadMetadata? usersMetadata = null;
         if (opts.Profile == WorkloadProfile.QueryUsersByName)
         {
-            usersMetadata = await UsersWorkloadHelper.DiscoverOrLoadMetadataAsync(
+            usersMetadata = await StackOverflowUsersWorkloadHelper.DiscoverOrLoadMetadataAsync(
                 opts.Url,
                 effectiveDatabase,
                 opts.Seed);
 
             if (usersMetadata == null)
             {
-                throw new InvalidOperationException("Users metadata not available. Ensure Users dataset is imported and indexes are not stale.");
+                throw new InvalidOperationException("Users metadata not available. Ensure StackOverflow dataset is imported and indexes are not stale.");
             }
 
             // Set static index names on metadata for workloads to use
@@ -751,7 +751,7 @@ public class BenchmarkRunner(RunOptions opts)
 
 
 
-    internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, UsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)
+    internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, StackOverflowUsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)
     {
         if (opts.Profile == WorkloadProfile.Unspecified)
             throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id|query-users-by-name.");
@@ -782,8 +782,8 @@ public class BenchmarkRunner(RunOptions opts)
             WorkloadProfile.Reads => BuildReadWorkload(opts, CreateDistribution()),
             WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
             WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, startingKey: opts.Preload),
-            WorkloadProfile.StackOverflowReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
-            WorkloadProfile.StackOverflowQueries => BuildStackOverflowQueryWorkload(opts, stackOverflowMetadata!),
+            WorkloadProfile.StackOverflowRandomReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
+            WorkloadProfile.StackOverflowTextSearch => BuildStackOverflowQueryWorkload(opts, stackOverflowMetadata!),
             WorkloadProfile.QueryUsersByName => BuildUsersQueryWorkload(opts, usersMetadata!),
             WorkloadProfile.VectorSearch => BuildVectorSearchWorkload(opts, vectorMetadata!),
             WorkloadProfile.VectorSearchExact => BuildVectorSearchWorkload(opts, vectorMetadata!, exactSearch: true),
@@ -822,23 +822,24 @@ public class BenchmarkRunner(RunOptions opts)
     {
         return opts.QueryProfile switch
         {
-            QueryProfile.Equality => new StackOverflowQueryWorkload(metadata), // query by id
+            QueryProfile.VoronEquality => new StackOverflowQueryWorkload(metadata, useVoronPath: true), // direct Voron lookup via id()
+            QueryProfile.IndexEquality => new StackOverflowQueryWorkload(metadata, useVoronPath: false), // index-based lookup
             QueryProfile.TextPrefix => new QuestionsByTitlePrefixWorkload(metadata),
             QueryProfile.TextSearch => new QuestionsByTitleSearchWorkload(metadata, 0.3), // 30% rare, 70% common
             QueryProfile.TextSearchRare => new QuestionsByTitleSearchWorkload(metadata, 1.0), // 100% rare
             QueryProfile.TextSearchCommon => new QuestionsByTitleSearchWorkload(metadata, 0.0), // 100% common
             QueryProfile.TextSearchMixed => new QuestionsByTitleSearchWorkload(metadata, 0.5), // 50% rare, 50% common
-            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for StackOverflow queries. Supported profiles: equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
+            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for StackOverflow queries. Supported profiles: voron-equality, index-equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
         };
     }
 
-    private static IWorkload BuildUsersQueryWorkload(RunOptions opts, UsersWorkloadMetadata metadata)
+    private static IWorkload BuildUsersQueryWorkload(RunOptions opts, StackOverflowUsersWorkloadMetadata metadata)
     {
         return opts.QueryProfile switch
         {
-            QueryProfile.Equality => new UsersByNameQueryWorkload(metadata),
-            QueryProfile.Range => new UsersRangeQueryWorkload(metadata),
-            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for Users queries. Supported profiles: equality, range")
+            QueryProfile.VoronEquality or QueryProfile.IndexEquality => new StackOverflowUsersByNameQueryWorkload(metadata),
+            QueryProfile.Range => new StackOverflowUsersRangeQueryWorkload(metadata),
+            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range")
         };
     }
 
@@ -1344,7 +1345,7 @@ public class BenchmarkRunner(RunOptions opts)
             AvgResultCount = finalAvgResultCount,
             TotalResults = queryOps > 0 ? totalResults : null,
             StaleQueryCount = staleQueries > 0 ? staleQueries : null,
-            QueryProfile = opts.QueryProfile != QueryProfile.Equality ? opts.QueryProfile : null, // Only include if not default
+            QueryProfile = opts.QueryProfile != QueryProfile.VoronEquality ? opts.QueryProfile : null, // Only include if not default
         };
         
         return (stepResult, hist);

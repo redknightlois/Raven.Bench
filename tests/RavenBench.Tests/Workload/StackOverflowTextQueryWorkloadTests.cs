@@ -238,7 +238,7 @@ public class QuestionsByTitleSearchWorkloadTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = WorkloadProfile.StackOverflowQueries,
+            Profile = WorkloadProfile.StackOverflowTextSearch,
             QueryProfile = QueryProfile.TextPrefix
         };
 

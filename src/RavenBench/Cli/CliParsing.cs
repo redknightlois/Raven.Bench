@@ -122,31 +122,32 @@ internal static class CliParsing
             "reads" or "read" => WorkloadProfile.Reads,
             "query-by-id" or "querybyid" => WorkloadProfile.QueryById,
             "bulk-writes" or "bulkwrites" => WorkloadProfile.BulkWrites,
-            "stackoverflow-reads" or "so-reads" => WorkloadProfile.StackOverflowReads,
-            "stackoverflow-queries" or "so-queries" => WorkloadProfile.StackOverflowQueries,
+            "stackoverflow-random-reads" or "so-random-reads" => WorkloadProfile.StackOverflowRandomReads,
+            "stackoverflow-text-search" or "so-text-search" => WorkloadProfile.StackOverflowTextSearch,
             "query-users-by-name" or "queryusersbyname" => WorkloadProfile.QueryUsersByName,
             "vector-search" or "vectorsearch" => WorkloadProfile.VectorSearch,
             "vector-search-exact" or "vectorsearchexact" => WorkloadProfile.VectorSearchExact,
-            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name, vector-search, vector-search-exact")
+            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact")
         };
     }
 
     private static QueryProfile ParseQueryProfile(string queryProfile)
     {
-        // Default to Equality for backward compatibility
+        // Default to VoronEquality (direct document lookup via id())
         if (string.IsNullOrWhiteSpace(queryProfile))
-            return QueryProfile.Equality;
+            return QueryProfile.VoronEquality;
 
         return queryProfile.Trim().ToLowerInvariant() switch
         {
-            "equality" or "eq" => QueryProfile.Equality,
+            "voron-equality" or "voron" => QueryProfile.VoronEquality,
+            "index-equality" or "index" => QueryProfile.IndexEquality,
             "range" => QueryProfile.Range,
             "text-prefix" or "textprefix" or "prefix" => QueryProfile.TextPrefix,
             "text-search" or "textsearch" or "search" => QueryProfile.TextSearch,
             "text-search-rare" or "textsearchrare" or "search-rare" => QueryProfile.TextSearchRare,
             "text-search-common" or "textsearchcommon" or "search-common" => QueryProfile.TextSearchCommon,
             "text-search-mixed" or "textsearchmixed" or "search-mixed" => QueryProfile.TextSearchMixed,
-            _ => throw new ArgumentException($"Invalid query profile: {queryProfile}. Valid options: equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
+            _ => throw new ArgumentException($"Invalid query profile: {queryProfile}. Valid options: voron-equality, index-equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
         };
     }
 

@@ -4,10 +4,10 @@ using Raven.Client.Documents.Session;
 namespace RavenBench.Core.Workload;
 
 /// <summary>
-/// Metadata for Users collection, containing sampled names for parameterized equality queries
+/// Metadata for Users collection (from StackOverflow dataset), containing sampled names for parameterized equality queries
 /// and reputation histogram for range queries.
 /// </summary>
-public sealed class UsersWorkloadMetadata
+public sealed class StackOverflowUsersWorkloadMetadata
 {
     public string[] SampleNames { get; set; } = Array.Empty<string>();
     public long SampleCount { get; set; }
@@ -38,9 +38,9 @@ public sealed class ReputationBucket
 }
 
 /// <summary>
-/// Helper for discovering and caching Users workload metadata (sampled names).
+/// Helper for discovering and caching StackOverflow Users workload metadata (sampled names).
 /// </summary>
-public static class UsersWorkloadHelper
+public static class StackOverflowUsersWorkloadHelper
 {
     private const string MetadataDocId = "workload/users-metadata";
     private const int DefaultSampleSize = 10000;
@@ -49,7 +49,7 @@ public static class UsersWorkloadHelper
     /// Discovers actual user names by sampling the database and caches them for workload use.
     /// Returns sampled names that exist in the database.
     /// </summary>
-    public static async Task<UsersWorkloadMetadata> DiscoverOrLoadMetadataAsync(
+    public static async Task<StackOverflowUsersWorkloadMetadata> DiscoverOrLoadMetadataAsync(
         string serverUrl,
         string databaseName,
         int seed,
@@ -64,7 +64,7 @@ public static class UsersWorkloadHelper
 
         // Check if we have cached metadata
         using var session = store.OpenAsyncSession();
-        var cached = await session.LoadAsync<UsersWorkloadMetadata>(MetadataDocId);
+        var cached = await session.LoadAsync<StackOverflowUsersWorkloadMetadata>(MetadataDocId);
 
         if (cached != null && cached.SampleNames.Length > 0)
         {
@@ -81,7 +81,7 @@ public static class UsersWorkloadHelper
         {
             throw new InvalidOperationException(
                 $"Failed to discover Users names. Found {sampleNames.Count} names. " +
-                "Ensure the Users dataset is imported before running benchmarks.");
+                "Ensure the StackOverflow dataset is imported before running benchmarks.");
         }
 
         // Get actual total count of Users documents
@@ -94,7 +94,7 @@ public static class UsersWorkloadHelper
         Console.WriteLine($"[Workload] Discovered reputation range: {minReputation} to {maxReputation} across {reputationBuckets.Length} buckets");
 
         // Store metadata for future use
-        var metadata = new UsersWorkloadMetadata
+        var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = sampleNames.ToArray(),
             SampleCount = sampleNames.Count,
@@ -302,10 +302,10 @@ public static class UsersWorkloadHelper
 }
 
 /// <summary>
-/// Workload that exercises parameterized equality queries against the Users collection.
-/// Queries use the pattern: FROM Users WHERE Name = $name
+/// Workload that exercises parameterized equality queries against the Users collection (from StackOverflow dataset).
+/// Queries use the pattern: FROM Users WHERE DisplayName = $name
 /// </summary>
-public sealed class UsersByNameQueryWorkload : IWorkload
+public sealed class StackOverflowUsersByNameQueryWorkload : IWorkload
 {
     private readonly string[] _sampleNames;
     private readonly string _expectedIndexName;
@@ -314,7 +314,7 @@ public sealed class UsersByNameQueryWorkload : IWorkload
     /// Creates a Users query workload using sampled names.
     /// </summary>
     /// <param name="metadata">Workload metadata containing sampled user names and static index name</param>
-    public UsersByNameQueryWorkload(UsersWorkloadMetadata metadata)
+    public StackOverflowUsersByNameQueryWorkload(StackOverflowUsersWorkloadMetadata metadata)
     {
         if (metadata.SampleNames.Length == 0)
         {
@@ -340,11 +340,11 @@ public sealed class UsersByNameQueryWorkload : IWorkload
 }
 
 /// <summary>
-/// Workload that exercises parameterized range queries against the Users collection.
+/// Workload that exercises parameterized range queries against the Users collection (from StackOverflow dataset).
 /// Queries use the pattern: FROM Users WHERE Reputation BETWEEN $min AND $max
 /// Samples from pre-computed histogram buckets to ensure varying selectivity.
 /// </summary>
-public sealed class UsersRangeQueryWorkload : IWorkload
+public sealed class StackOverflowUsersRangeQueryWorkload : IWorkload
 {
     private readonly ReputationBucket[] _buckets;
     private readonly string _expectedIndexName;
@@ -353,7 +353,7 @@ public sealed class UsersRangeQueryWorkload : IWorkload
     /// Creates a Users range query workload using reputation histogram buckets.
     /// </summary>
     /// <param name="metadata">Workload metadata containing reputation buckets and static index name</param>
-    public UsersRangeQueryWorkload(UsersWorkloadMetadata metadata)
+    public StackOverflowUsersRangeQueryWorkload(StackOverflowUsersWorkloadMetadata metadata)
     {
         if (metadata.ReputationBuckets.Length == 0)
         {

@@ -49,11 +49,11 @@ public abstract class BaseRunSettings : CommandSettings
     public int VectorDimension { get; init; } = 128;
 
     [CommandOption("--profile")]
-    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-reads, stackoverflow-queries, query-users-by-name, vector-search, vector-search-exact")]
+    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact")]
     public string? Profile { get; init; }
 
     [CommandOption("--query-profile")]
-    [Description("Query profile for query workloads: equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed (default: equality)")]
+    [Description("Query profile for query workloads: voron-equality (direct id() lookup), index-equality (index-based), range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed (default: voron-equality)")]
     public string? QueryProfile { get; init; }
 
     [CommandOption("--bulk-batch-size")]
