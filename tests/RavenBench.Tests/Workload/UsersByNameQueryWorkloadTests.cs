@@ -43,10 +43,10 @@ public class UsersByNameQueryWorkloadTests
         op.Should().BeOfType<QueryOperation>();
         var queryOp = (QueryOperation)op;
 
-        queryOp.QueryText.Should().Be("from Users where Name = $name");
+        queryOp.QueryText.Should().Be("from Users where DisplayName = $name");
         queryOp.Parameters.Should().ContainKey("name");
         queryOp.Parameters["name"].Should().BeOneOf("Alice", "Bob", "Charlie");
-        queryOp.ExpectedIndex.Should().Be("Auto/Users/ByName");
+        queryOp.ExpectedIndex.Should().Be("Auto/Users/ByDisplayName");
     }
 
     [Fact]

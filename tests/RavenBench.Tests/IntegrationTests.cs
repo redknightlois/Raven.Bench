@@ -227,7 +227,7 @@ public class IntegrationTests
         var eqOp = usersEqualityWorkload.NextOperation(rng);
         eqOp.Should().BeOfType<QueryOperation>();
         var eqQueryOp = (QueryOperation)eqOp;
-        eqQueryOp.QueryText.Should().Be("from Users where Name = $name");
+        eqQueryOp.QueryText.Should().Be("from Users where DisplayName = $name");
         eqQueryOp.Parameters.Should().ContainKey("name");
 
         // Test Users range query

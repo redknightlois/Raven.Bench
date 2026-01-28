@@ -123,7 +123,7 @@ public static class UsersWorkloadHelper
 
         // Use RavenDB's built-in random() ordering with a deterministic seed for reproducible sampling
         var samplingSeed = $"ravenbench-users-{seed}";
-        var query = session.Advanced.AsyncRawQuery<dynamic>($"from Users order by random('{samplingSeed}') select Name limit {sampleSize}");
+        var query = session.Advanced.AsyncRawQuery<dynamic>($"from Users order by random('{samplingSeed}') select DisplayName limit {sampleSize}");
 
         await using var stream = await session.Advanced.StreamAsync(query);
 
@@ -143,7 +143,7 @@ public static class UsersWorkloadHelper
                 // Try to get Name property dynamically
                 try
                 {
-                    name = (result as dynamic)?.Name;
+                    name = (result as dynamic)?.DisplayName;
                 }
                 catch
                 {
@@ -303,7 +303,7 @@ public static class UsersWorkloadHelper
 public sealed class UsersByNameQueryWorkload : IWorkload
 {
     private readonly string[] _sampleNames;
-    private const string ExpectedIndexName = "Auto/Users/ByName";
+    private const string ExpectedIndexName = "Auto/Users/ByDisplayName";
 
     /// <summary>
     /// Creates a Users query workload using sampled names.
@@ -325,7 +325,7 @@ public sealed class UsersByNameQueryWorkload : IWorkload
 
         return new QueryOperation
         {
-            QueryText = "from Users where Name = $name",
+            QueryText = "from Users where DisplayName = $name",
             Parameters = new Dictionary<string, object?> { ["name"] = name },
             ExpectedIndex = ExpectedIndexName
         };
