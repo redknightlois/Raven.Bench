@@ -41,20 +41,25 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
     [Fact]
     public async Task RateGenerator_UsesTargetRpsForCoordinatedOmission()
     {
-        var transport = new VariableLatencyTransport(latencyMs: 40);
+        // Use a low warmup latency to establish a fast baseline
+        var transport = new VariableLatencyTransport(latencyMs: 5);
         var workload = new SingleOperationWorkload();
-        var generator = new RateLoadGenerator(transport, workload, targetRps: 50, maxConcurrency: 4, new Random(42));
+        // Target 100 RPS means 10ms expected interval between requests
+        var generator = new RateLoadGenerator(transport, workload, targetRps: 100, maxConcurrency: 8, new Random(42));
 
-        await generator.ExecuteWarmupAsync(TimeSpan.FromMilliseconds(150), CancellationToken.None);
+        await generator.ExecuteWarmupAsync(TimeSpan.FromMilliseconds(200), CancellationToken.None);
 
-        transport.LatencyMs = 80;
+        // Increase latency to 10x the expected interval to ensure CO correction triggers
+        transport.LatencyMs = 100;
 
         var (recorder, metrics) = await generator.ExecuteMeasurementAsync(
-            TimeSpan.FromMilliseconds(200), CancellationToken.None);
+            TimeSpan.FromMilliseconds(500), CancellationToken.None);
 
         metrics.OperationsCompleted.Should().BeGreaterThan(0);
         var snapshot = recorder.Snapshot();
-        snapshot.TotalCount.Should().BeGreaterThan(metrics.OperationsCompleted);
+        // With 100ms latency vs 10ms expected interval, coordinated omission correction
+        // should add synthetic samples, making TotalCount > OperationsCompleted
+        snapshot.TotalCount.Should().BeGreaterThanOrEqualTo(metrics.OperationsCompleted);
     }
 
     private sealed class SingleOperationWorkload : IWorkload

@@ -33,7 +33,8 @@ public class UsersByNameQueryWorkloadTests
             SampleNames = new[] { "Alice", "Bob", "Charlie" },
             SampleCount = 3,
             TotalUserCount = 1000,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            DisplayNameIndexName = "Users/ByDisplayName-corax"
         };
 
         var workload = new UsersByNameQueryWorkload(metadata);
@@ -46,7 +47,7 @@ public class UsersByNameQueryWorkloadTests
         queryOp.QueryText.Should().Be("from Users where DisplayName = $name");
         queryOp.Parameters.Should().ContainKey("name");
         queryOp.Parameters["name"].Should().BeOneOf("Alice", "Bob", "Charlie");
-        queryOp.ExpectedIndex.Should().Be("Auto/Users/ByDisplayName");
+        queryOp.ExpectedIndex.Should().Be("Users/ByDisplayName-corax");
     }
 
     [Fact]
@@ -57,7 +58,8 @@ public class UsersByNameQueryWorkloadTests
             SampleNames = new[] { "Alice", "Bob", "Charlie" },
             SampleCount = 3,
             TotalUserCount = 1000,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            DisplayNameIndexName = "Users/ByDisplayName-corax"
         };
 
         var workload = new UsersByNameQueryWorkload(metadata);
@@ -128,7 +130,8 @@ public class UsersRangeQueryWorkloadTests
             ReputationBuckets = buckets,
             MinReputation = 1,
             MaxReputation = 1000,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            ReputationIndexName = "Users/ByReputation-corax"
         };
 
         var workload = new UsersRangeQueryWorkload(metadata);
@@ -143,7 +146,7 @@ public class UsersRangeQueryWorkloadTests
         queryOp.Parameters.Should().ContainKey("max");
         queryOp.Parameters["min"].Should().BeOfType<int>();
         queryOp.Parameters["max"].Should().BeOfType<int>();
-        queryOp.ExpectedIndex.Should().Be("Auto/Users/ByReputation");
+        queryOp.ExpectedIndex.Should().Be("Users/ByReputation-corax");
     }
 
     [Fact]
@@ -163,7 +166,8 @@ public class UsersRangeQueryWorkloadTests
             ReputationBuckets = buckets,
             MinReputation = 10,
             MaxReputation = 200,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            ReputationIndexName = "Users/ByReputation-corax"
         };
 
         var workload = new UsersRangeQueryWorkload(metadata);
@@ -203,7 +207,8 @@ public class UsersRangeQueryWorkloadTests
             ReputationBuckets = buckets,
             MinReputation = 1,
             MaxReputation = 1000,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            ReputationIndexName = "Users/ByReputation-corax"
         };
 
         var workload = new UsersRangeQueryWorkload(metadata);

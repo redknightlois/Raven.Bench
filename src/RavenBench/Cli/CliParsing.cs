@@ -85,18 +85,19 @@ internal static class CliParsing
             Dataset = settings.Dataset,
             DatasetProfile = settings.DatasetProfile,
             DatasetSize = settings.DatasetSize,
-            DatasetSkipIfExists = (settings.DatasetSkipIfExists ?? true) && !settings.ForceDatasetImport,
+            DatasetSkipIfExists = (settings.DatasetSkipIfExists ?? true) && settings.ForceDatasetImport == false,
             DatasetCacheDir = settings.DatasetCacheDir,
             OutputDir = settings.OutputDir,
             LatencyHistogramsDir = null,
-            LatencyHistogramsFormat = ParseHistogramExportFormat(settings.HistogramsFormat)
+            LatencyHistogramsFormat = ParseHistogramExportFormat(settings.HistogramsFormat),
+            SearchEngine = ParseSearchEngine(settings.SearchEngine)
         };
     }
 
 
     private static SnmpOptions BuildSnmpOptions(BaseRunSettings s)
     {
-        if (!s.SnmpEnabled)
+        if (s.SnmpEnabled == false)
             return SnmpOptions.Disabled;
 
         return new SnmpOptions
@@ -267,6 +268,16 @@ internal static class CliParsing
             "int8" => VectorQuantization.Int8,
             "binary" => VectorQuantization.Binary,
             _ => throw new ArgumentException($"Invalid vector quantization: {quantization}. Valid options: none, int8, binary")
+        };
+    }
+
+    private static IndexingEngine ParseSearchEngine(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "lucene" => IndexingEngine.Lucene,
+            "corax" => IndexingEngine.Corax,
+            _ => IndexingEngine.Corax // Default to Corax for unknown values
         };
     }
 

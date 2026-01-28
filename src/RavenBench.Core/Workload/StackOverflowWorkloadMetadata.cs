@@ -24,6 +24,11 @@ public sealed class StackOverflowWorkloadMetadata
     // Search terms for full-text search queries (rare and common terms)
     public string[] SearchTermsRare { get; set; } = Array.Empty<string>();
     public string[] SearchTermsCommon { get; set; } = Array.Empty<string>();
+
+    // Static index names (set by BenchmarkRunner after index creation)
+    // These are populated at runtime with the actual index names including engine suffix
+    public string? TitleIndexName { get; set; }
+    public string? TitleSearchIndexName { get; set; }
 }
 
 /// <summary>
@@ -167,7 +172,7 @@ public static class StackOverflowWorkloadHelper
         numericId = 0;
 
         var prefix = expectedPrefix + "/";
-        if (!docId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (docId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == false)
             return false;
 
         var idPart = docId.Substring(prefix.Length);

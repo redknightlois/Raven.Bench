@@ -89,7 +89,7 @@ namespace RavenBench.Cli
 
         public static List<MetricColumn> GetVisibleColumns(BenchmarkSummary summary, TableScope scope)
         {
-            if (!summary.Steps.Any())
+            if (summary.Steps.Any() == false)
                 return new List<MetricColumn>();
 
             return GetColumns(summary)

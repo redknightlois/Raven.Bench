@@ -147,7 +147,9 @@ public class IntegrationTests
             },
             MinReputation = 1,
             MaxReputation = 1000,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            DisplayNameIndexName = "Users/ByDisplayName-corax",
+            ReputationIndexName = "Users/ByReputation-corax"
         };
 
         var stackOverflowMetadata = new StackOverflowWorkloadMetadata
@@ -159,7 +161,9 @@ public class IntegrationTests
             TitlePrefixes = new[] { "How", "What" },
             SearchTermsRare = new[] { "algorithm" },
             SearchTermsCommon = new[] { "error", "help" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleIndexName = "Questions/ByTitle-corax",
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         // Test Users equality workload
@@ -205,7 +209,9 @@ public class IntegrationTests
             },
             MinReputation = 10,
             MaxReputation = 100,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            DisplayNameIndexName = "Users/ByDisplayName-corax",
+            ReputationIndexName = "Users/ByReputation-corax"
         };
 
         var stackOverflowMetadata = new StackOverflowWorkloadMetadata
@@ -217,7 +223,9 @@ public class IntegrationTests
             TitlePrefixes = new[] { "How", "What" },
             SearchTermsRare = new[] { "algorithm" },
             SearchTermsCommon = new[] { "error", "help" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleIndexName = "Questions/ByTitle-corax",
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         var rng = new Random(42);
@@ -291,7 +299,9 @@ public class IntegrationTests
             UserIds = new[] { 1 },
             QuestionCount = 2,
             UserCount = 1,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleIndexName = "Questions/ByTitle-corax",
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
         var workload = BenchmarkRunner.BuildWorkload(soTextPrefixOpts, validMetadata, null, null);
         workload.Should().BeOfType<QuestionsByTitlePrefixWorkload>();

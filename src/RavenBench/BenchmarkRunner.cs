@@ -70,6 +70,15 @@ public class BenchmarkRunner(RunOptions opts)
         // Reset error tracking for this benchmark run
         VerboseErrorTracker.Reset();
 
+        // Validate search engine compatibility with profile
+        if (WorkloadProfiles.SupportsEngine(opts.Profile, opts.SearchEngine) == false)
+        {
+            var supported = string.Join(", ", WorkloadProfiles.GetSupportedEngines(opts.Profile).Select(e => e.ToString().ToLowerInvariant()));
+            throw new InvalidOperationException(
+                $"Profile '{opts.Profile}' does not support {opts.SearchEngine} indexing engine. " +
+                $"Supported engines: {supported}.");
+        }
+
         // Set ThreadPool minimum threads based on command-line parameters
         var workers = opts.ThreadPoolWorkers ?? 8192;
         var iocp = opts.ThreadPoolIOCP ?? 8192;
@@ -123,6 +132,22 @@ public class BenchmarkRunner(RunOptions opts)
             await WaitForNonStaleIndexesAsync(opts.Url, effectiveDatabase, negotiatedHttpVersion);
         }
 
+        // Create static indexes for StackOverflow/Users workloads (replaces auto-indexes)
+        // This must happen before metadata discovery so we can set the index names
+        StackOverflowDatasetProvider.StaticIndexNames? staticIndexNames = null;
+        var needsStaticIndexes = opts.Profile == WorkloadProfile.StackOverflowReads ||
+                                  opts.Profile == WorkloadProfile.StackOverflowQueries ||
+                                  opts.Profile == WorkloadProfile.QueryUsersByName;
+        if (needsStaticIndexes && opts.Dataset?.Equals("stackoverflow", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            var stackOverflowProvider = new StackOverflowDatasetProvider();
+            staticIndexNames = await stackOverflowProvider.CreateStaticIndexesAsync(
+                opts.Url,
+                effectiveDatabase,
+                opts.SearchEngine,
+                negotiatedHttpVersion);
+        }
+
         // Discover workload metadata for StackOverflow profiles (after dataset import and index wait)
         StackOverflowWorkloadMetadata? stackOverflowMetadata = null;
         if (opts.Profile == WorkloadProfile.StackOverflowReads || opts.Profile == WorkloadProfile.StackOverflowQueries)
@@ -135,6 +160,13 @@ public class BenchmarkRunner(RunOptions opts)
             if (stackOverflowMetadata == null)
             {
                 throw new InvalidOperationException("StackOverflow metadata not available. Ensure dataset is imported and indexes are not stale.");
+            }
+
+            // Set static index names on metadata for workloads to use
+            if (staticIndexNames != null)
+            {
+                stackOverflowMetadata.TitleIndexName = staticIndexNames.QuestionsTitleIndex;
+                stackOverflowMetadata.TitleSearchIndexName = staticIndexNames.QuestionsTitleSearchIndex;
             }
         }
 
@@ -150,6 +182,13 @@ public class BenchmarkRunner(RunOptions opts)
             if (usersMetadata == null)
             {
                 throw new InvalidOperationException("Users metadata not available. Ensure Users dataset is imported and indexes are not stale.");
+            }
+
+            // Set static index names on metadata for workloads to use
+            if (staticIndexNames != null)
+            {
+                usersMetadata.DisplayNameIndexName = staticIndexNames.UsersDisplayNameIndex;
+                usersMetadata.ReputationIndexName = staticIndexNames.UsersReputationIndex;
             }
         }
 
@@ -852,7 +891,7 @@ public class BenchmarkRunner(RunOptions opts)
         // Construct path to query vectors file for other datasets
         var queryFilePath = Path.Combine(datasetCacheDir, GetQueryFileName(datasetName));
         
-        if (!File.Exists(queryFilePath))
+        if (File.Exists(queryFilePath) == false)
         {
             Console.WriteLine($"[Raven.Bench] Query vectors file not found: {queryFilePath}");
             Console.WriteLine($"[Raven.Bench] Please download dataset using --dataset {datasetName} or manually place query vectors in cache directory.");
@@ -994,7 +1033,7 @@ public class BenchmarkRunner(RunOptions opts)
         string targetDatabase;
         int datasetSize;
 
-        if (!string.IsNullOrEmpty(opts.DatasetProfile))
+        if (string.IsNullOrEmpty(opts.DatasetProfile) == false)
         {
             // Use predefined profile
             var profile = Enum.Parse<Dataset.DatasetProfile>(opts.DatasetProfile, ignoreCase: true);
@@ -1082,9 +1121,9 @@ public class BenchmarkRunner(RunOptions opts)
         }
 
         // Import words as documents with embeddings
-        Console.WriteLine($"[Raven.Bench] Importing clinical word embeddings to RavenDB...");
+        Console.WriteLine($"[Raven.Bench] Importing clinical word embeddings to RavenDB (engine: {opts.SearchEngine})...");
         var exactSearch = opts.Profile == WorkloadProfile.VectorSearchExact || opts.VectorExactSearch;
-        await provider.ImportWordsAsync(opts.Url, targetDatabase, opts.VectorQuantization, exactSearch, httpVersion: httpVersion);
+        await provider.ImportWordsAsync(opts.Url, targetDatabase, opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine);
 
         Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D import complete.");
 
@@ -1393,7 +1432,7 @@ public class BenchmarkRunner(RunOptions opts)
         {
             var snmpSample = await transport.GetSnmpMetricsAsync(opts.Snmp, opts.Database);
 
-            if (!snmpSample.IsEmpty)
+            if (snmpSample.IsEmpty == false)
             {
                 Console.WriteLine("[Raven.Bench] SNMP validation successful:");
                 if (snmpSample.MachineCpu.HasValue)

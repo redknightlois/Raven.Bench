@@ -8,12 +8,12 @@ namespace RavenBench.Core.Workload;
 public sealed class QuestionsByTitlePrefixWorkload : IWorkload
 {
     private readonly string[] _titlePrefixes;
-    private const string ExpectedIndexName = "Auto/Questions/ByTitle";
+    private readonly string _expectedIndexName;
 
     /// <summary>
     /// Creates a Questions prefix search workload using sampled title prefixes.
     /// </summary>
-    /// <param name="metadata">Workload metadata containing title prefixes</param>
+    /// <param name="metadata">Workload metadata containing title prefixes and static index name</param>
     public QuestionsByTitlePrefixWorkload(StackOverflowWorkloadMetadata metadata)
     {
         if (metadata.TitlePrefixes.Length == 0)
@@ -22,6 +22,8 @@ public sealed class QuestionsByTitlePrefixWorkload : IWorkload
         }
 
         _titlePrefixes = metadata.TitlePrefixes;
+        _expectedIndexName = metadata.TitleIndexName
+            ?? throw new ArgumentException("Metadata must contain TitleIndexName for static index");
     }
 
     public OperationBase NextOperation(Random rng)
@@ -33,7 +35,7 @@ public sealed class QuestionsByTitlePrefixWorkload : IWorkload
         {
             QueryText = "from questions where startsWith(Title, $prefix)",
             Parameters = new Dictionary<string, object?> { ["prefix"] = prefix },
-            ExpectedIndex = ExpectedIndexName
+            ExpectedIndex = _expectedIndexName
         };
     }
 }
@@ -47,13 +49,13 @@ public sealed class QuestionsByTitleSearchWorkload : IWorkload
 {
     private readonly string[] _searchTermsRare;
     private readonly string[] _searchTermsCommon;
-    private const string ExpectedIndexName = "Auto/Questions/Search(Title)";
+    private readonly string _expectedIndexName;
     private readonly double _rareTermProbability; // Probability of selecting rare terms (0.0 = common only, 1.0 = rare only)
 
     /// <summary>
     /// Creates a Questions full-text search workload using sampled search terms.
     /// </summary>
-    /// <param name="metadata">Workload metadata containing rare and common search terms</param>
+    /// <param name="metadata">Workload metadata containing rare and common search terms and static index name</param>
     /// <param name="rareTermProbability">Probability of selecting rare terms (0.0 to 1.0). Must be between 0.0 and 1.0 inclusive.</param>
     public QuestionsByTitleSearchWorkload(StackOverflowWorkloadMetadata metadata, double rareTermProbability = 0.3)
     {
@@ -69,6 +71,8 @@ public sealed class QuestionsByTitleSearchWorkload : IWorkload
 
         _searchTermsRare = metadata.SearchTermsRare;
         _searchTermsCommon = metadata.SearchTermsCommon;
+        _expectedIndexName = metadata.TitleSearchIndexName
+            ?? throw new ArgumentException("Metadata must contain TitleSearchIndexName for static index");
         _rareTermProbability = rareTermProbability;
     }
 
@@ -84,7 +88,7 @@ public sealed class QuestionsByTitleSearchWorkload : IWorkload
         {
             QueryText = "from questions where search(Title, $term)",
             Parameters = new Dictionary<string, object?> { ["term"] = searchTerm },
-            ExpectedIndex = ExpectedIndexName
+            ExpectedIndex = _expectedIndexName
         };
     }
 }

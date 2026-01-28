@@ -24,7 +24,7 @@ public static class SummaryLoader
     /// <exception cref="JsonException">Thrown if the JSON is invalid.</exception>
     public static async Task<BenchmarkSummary> LoadAsync(string summaryPath)
     {
-        if (!File.Exists(summaryPath))
+        if (File.Exists(summaryPath) == false)
             throw new FileNotFoundException($"Summary file not found: {summaryPath}");
 
         await using var stream = File.OpenRead(summaryPath);

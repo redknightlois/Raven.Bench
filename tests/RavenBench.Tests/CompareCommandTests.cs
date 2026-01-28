@@ -112,12 +112,17 @@ public class CompareCommandTests
     }
 
     [Fact]
-    public void ComparisonModelBuilder_Build_MoreThanThreeSummaries_Throws()
+    public void ComparisonModelBuilder_Build_MoreThanThreeSummaries_Succeeds()
     {
+        // The comparison builder now supports 2+ summaries (no upper limit)
         var summaries = CreateCompatibleSummaries(4);
         var labels = new List<string> { "A", "B", "C", "D" };
 
-        Assert.Throws<ArgumentException>(() => ComparisonModelBuilder.Build(summaries, labels));
+        var model = ComparisonModelBuilder.Build(summaries, labels);
+
+        Assert.NotNull(model);
+        Assert.Equal("A", model.Baseline.Label);
+        Assert.Equal(3, model.Contenders.Count);
     }
 
     [Fact]

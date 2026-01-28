@@ -85,7 +85,7 @@ internal static class ReportRenderUtilities
     private static string ResolveChromeExecutable()
     {
         string? executablePath = Environment.GetEnvironmentVariable(ChromeExecutableEnvVar);
-        if (!string.IsNullOrWhiteSpace(executablePath) && File.Exists(executablePath))
+        if (string.IsNullOrWhiteSpace(executablePath) == false && File.Exists(executablePath))
         {
             return executablePath;
         }

@@ -213,5 +213,8 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("Histogram export format: hlog, csv, both (default: hlog, auto-enabled when CSV output specified)")]
     public string HistogramsFormat { get; init; } = "hlog";
 
+    [CommandOption("--search-engine")]
+    [Description("Search engine for indexes: corax (default), lucene. Vector search requires corax.")]
+    public string SearchEngine { get; init; } = "corax";
 
 }

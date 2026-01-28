@@ -551,7 +551,7 @@ public sealed class RavenClientTransport : ITransport
         bool first = true;
         foreach (var param in queryOp.Parameters)
         {
-            if (!first) size += Encoding.UTF8.GetByteCount(",");
+            if (first == false) size += Encoding.UTF8.GetByteCount(",");
             first = false;
 
             // Parameter key and value

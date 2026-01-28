@@ -45,7 +45,7 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
 
     public ClinicalWordsDatasetProvider(int dimensions = 100)
     {
-        if (!ParquetFiles.ContainsKey(dimensions))
+        if (ParquetFiles.ContainsKey(dimensions) == false)
             throw new ArgumentException($"Supported dimensions: 100, 300, 600. Got: {dimensions}");
         _dimensions = dimensions;
     }
@@ -250,7 +250,7 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
                 .Take(1)
                 .AnyAsync();
 
-            if (!wordsExist)
+            if (wordsExist == false)
             {
                 Console.WriteLine($"[ClinicalWords] Database '{databaseName}' exists but 'WordDocuments' collection is missing");
                 return false;
@@ -271,33 +271,36 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
     /// Imports all words with their embeddings as documents into RavenDB.
     /// Each word becomes a document: {{ "Word": "patient", "Embedding": [0.1, 0.2, ...] }}
     /// </summary>
-    public async Task ImportWordsAsync(string serverUrl, string databaseName, VectorQuantization quantization = VectorQuantization.None, bool exactSearch = false, int batchSize = 1000, Version? httpVersion = null)
+    public async Task ImportWordsAsync(
+        string serverUrl,
+        string databaseName,
+        VectorQuantization quantization = VectorQuantization.None,
+        bool exactSearch = false,
+        int batchSize = 1000,
+        Version? httpVersion = null,
+        IndexingEngine searchEngine = IndexingEngine.Corax)
     {
         using var store = new DocumentStore { Urls = new[] { serverUrl }, Database = databaseName };
         if (httpVersion != null)
             HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
 
-        // Create database if needed
+        // Create database if needed (use default Corax, search engine is set per-index)
         var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName));
         if (dbRecord == null)
         {
             Console.WriteLine($"[ClinicalWords] Creating database: {databaseName}");
-            await store.Maintenance.Server.SendAsync(new CreateDatabaseOperation(new DatabaseRecord(databaseName)
-            {
-                Settings = new Dictionary<string, string>
-                {
-                    { "Indexing.Static.SearchEngineType", "Corax" },
-                    { "Indexing.Auto.SearchEngineType", "Corax" }
-                }
-            }));
+            await store.Maintenance.Server.SendAsync(new CreateDatabaseOperation(new DatabaseRecord(databaseName)));
         }
+
+        // Determine search engine name for per-index configuration
+        var engineName = searchEngine == IndexingEngine.Lucene ? "Lucene" : "Corax";
 
         // Check if documents already exist
         var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
         bool documentsExist = stats.CountOfDocuments >= MinExpectedDocuments;
 
-        if (!documentsExist)
+        if (documentsExist == false)
         {
             // Import documents
             var words = await LoadWordVectorsAsync();
@@ -331,14 +334,16 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         }
 
         // Create vector index based on quantization setting
+        // Include search engine suffix to allow both Lucene and Corax indexes to coexist
+        var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
         var indexName = quantization switch
         {
-            VectorQuantization.Int8 => "Words/ByEmbeddingInt8",
-            VectorQuantization.Binary => "Words/ByEmbeddingBinary",
-            _ => "Words/ByEmbedding"
+            VectorQuantization.Int8 => $"Words/ByEmbeddingInt8{engineSuffix}",
+            VectorQuantization.Binary => $"Words/ByEmbeddingBinary{engineSuffix}",
+            _ => $"Words/ByEmbedding{engineSuffix}"
         };
 
-        Console.WriteLine($"[ClinicalWords] Creating vector index '{indexName}' (quantization: {quantization}, exact: {exactSearch})...");
+        Console.WriteLine($"[ClinicalWords] Creating vector index '{indexName}' (quantization: {quantization}, exact: {exactSearch}, engine: {engineName})...");
 
         // Determine vector embedding types based on quantization
         var (sourceType, destType) = quantization switch
@@ -367,7 +372,7 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
                     }
                 }
             },
-            Configuration = new IndexConfiguration { { "Indexing.Static.SearchEngineType", "Corax" } }
+            Configuration = new IndexConfiguration { { "Indexing.Static.SearchEngineType", engineName } }
         };
 
         await store.Maintenance.SendAsync(new PutIndexesOperation(index));

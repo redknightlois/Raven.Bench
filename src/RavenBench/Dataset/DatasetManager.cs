@@ -101,9 +101,9 @@ public sealed class DatasetManager
             Urls = new[] { serverUrl }
         };
         
-        if (!string.IsNullOrEmpty(httpVersion))
+        if (string.IsNullOrEmpty(httpVersion) == false)
             HttpHelper.ConfigureHttpVersion(store, httpVersion);
-        
+
         store.Initialize();
 
         var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName), ct);
@@ -130,9 +130,9 @@ public sealed class DatasetManager
             Database = databaseName
         };
         
-        if (!string.IsNullOrEmpty(httpVersion))
+        if (string.IsNullOrEmpty(httpVersion) == false)
             HttpHelper.ConfigureHttpVersion(store, httpVersion);
-        
+
         store.Initialize();
 
         var operation = await store.Smuggler.ImportAsync(new DatabaseSmugglerImportOptions(), dumpFilePath, ct);
@@ -185,9 +185,9 @@ public sealed class DatasetManager
                 Urls = new[] { serverUrl }
             };
             
-            if (!string.IsNullOrEmpty(httpVersion))
+            if (string.IsNullOrEmpty(httpVersion) == false)
                 HttpHelper.ConfigureHttpVersion(store, httpVersion);
-            
+
             store.Initialize();
 
             // First check if database exists
@@ -217,7 +217,7 @@ public sealed class DatasetManager
                 .Take(1)
                 .AnyAsync();
 
-            if (!questionsExist || !usersExist)
+            if (questionsExist == false || usersExist == false)
             {
                 Console.WriteLine($"[Dataset] Database '{databaseName}' exists but missing expected collections (questions: {questionsExist}, users: {usersExist})");
                 return false;

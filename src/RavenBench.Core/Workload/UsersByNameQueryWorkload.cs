@@ -19,6 +19,11 @@ public sealed class UsersWorkloadMetadata
     public ReputationBucket[] ReputationBuckets { get; set; } = Array.Empty<ReputationBucket>();
     public int MinReputation { get; set; }
     public int MaxReputation { get; set; }
+
+    // Static index names (set by BenchmarkRunner after index creation)
+    // These are populated at runtime with the actual index names including engine suffix
+    public string? DisplayNameIndexName { get; set; }
+    public string? ReputationIndexName { get; set; }
 }
 
 /// <summary>
@@ -303,12 +308,12 @@ public static class UsersWorkloadHelper
 public sealed class UsersByNameQueryWorkload : IWorkload
 {
     private readonly string[] _sampleNames;
-    private const string ExpectedIndexName = "Auto/Users/ByDisplayName";
+    private readonly string _expectedIndexName;
 
     /// <summary>
     /// Creates a Users query workload using sampled names.
     /// </summary>
-    /// <param name="metadata">Workload metadata containing sampled user names</param>
+    /// <param name="metadata">Workload metadata containing sampled user names and static index name</param>
     public UsersByNameQueryWorkload(UsersWorkloadMetadata metadata)
     {
         if (metadata.SampleNames.Length == 0)
@@ -317,6 +322,8 @@ public sealed class UsersByNameQueryWorkload : IWorkload
         }
 
         _sampleNames = metadata.SampleNames;
+        _expectedIndexName = metadata.DisplayNameIndexName
+            ?? throw new ArgumentException("Metadata must contain DisplayNameIndexName for static index");
     }
 
     public OperationBase NextOperation(Random rng)
@@ -327,7 +334,7 @@ public sealed class UsersByNameQueryWorkload : IWorkload
         {
             QueryText = "from Users where DisplayName = $name",
             Parameters = new Dictionary<string, object?> { ["name"] = name },
-            ExpectedIndex = ExpectedIndexName
+            ExpectedIndex = _expectedIndexName
         };
     }
 }
@@ -340,12 +347,12 @@ public sealed class UsersByNameQueryWorkload : IWorkload
 public sealed class UsersRangeQueryWorkload : IWorkload
 {
     private readonly ReputationBucket[] _buckets;
-    private const string ExpectedIndexName = "Auto/Users/ByReputation";
+    private readonly string _expectedIndexName;
 
     /// <summary>
     /// Creates a Users range query workload using reputation histogram buckets.
     /// </summary>
-    /// <param name="metadata">Workload metadata containing reputation buckets</param>
+    /// <param name="metadata">Workload metadata containing reputation buckets and static index name</param>
     public UsersRangeQueryWorkload(UsersWorkloadMetadata metadata)
     {
         if (metadata.ReputationBuckets.Length == 0)
@@ -354,6 +361,8 @@ public sealed class UsersRangeQueryWorkload : IWorkload
         }
 
         _buckets = metadata.ReputationBuckets;
+        _expectedIndexName = metadata.ReputationIndexName
+            ?? throw new ArgumentException("Metadata must contain ReputationIndexName for static index");
     }
 
     public OperationBase NextOperation(Random rng)
@@ -389,7 +398,7 @@ public sealed class UsersRangeQueryWorkload : IWorkload
                 ["min"] = minRep,
                 ["max"] = maxRep
             },
-            ExpectedIndex = ExpectedIndexName
+            ExpectedIndex = _expectedIndexName
         };
     }
 }

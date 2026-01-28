@@ -4,6 +4,24 @@ using RavenBench.Core.Workload;
 
 namespace RavenBench.Core;
 
+/// <summary>
+/// Search engine type for RavenDB indexes.
+/// </summary>
+public enum IndexingEngine
+{
+    /// <summary>
+    /// Corax - Modern, high-performance search engine (default).
+    /// Required for vector search.
+    /// </summary>
+    Corax,
+
+    /// <summary>
+    /// Lucene - Legacy search engine.
+    /// Does not support vector indexing.
+    /// </summary>
+    Lucene
+}
+
 public enum LatencyDisplayType
 {
     Normalized,
@@ -142,6 +160,12 @@ public sealed record RunOptions
 
     public string? LatencyHistogramsDir { get; init; }
     public HistogramExportFormat LatencyHistogramsFormat { get; init; } = HistogramExportFormat.Hlog;
+
+    /// <summary>
+    /// Search engine type for indexes. Defaults to Corax.
+    /// Vector search profiles require Corax.
+    /// </summary>
+    public IndexingEngine SearchEngine { get; init; } = IndexingEngine.Corax;
 }
 
 public enum WorkloadProfile
@@ -157,6 +181,33 @@ public enum WorkloadProfile
     QueryUsersByName,
     VectorSearch,
     VectorSearchExact
+}
+
+public static class WorkloadProfiles
+{
+    /// <summary>
+    /// Returns the indexing engines supported by the given profile.
+    /// </summary>
+    public static IndexingEngine[] GetSupportedEngines(WorkloadProfile profile)
+    {
+        return profile switch
+        {
+            // Vector search only works with Corax
+            WorkloadProfile.VectorSearch => [IndexingEngine.Corax],
+            WorkloadProfile.VectorSearchExact => [IndexingEngine.Corax],
+
+            // All other profiles support both engines
+            _ => [IndexingEngine.Corax, IndexingEngine.Lucene]
+        };
+    }
+
+    /// <summary>
+    /// Checks if the profile supports the specified indexing engine.
+    /// </summary>
+    public static bool SupportsEngine(WorkloadProfile profile, IndexingEngine engine)
+    {
+        return GetSupportedEngines(profile).Contains(engine);
+    }
 }
 
 /// <summary>

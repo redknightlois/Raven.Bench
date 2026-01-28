@@ -39,7 +39,8 @@ public class QuestionsByTitlePrefixWorkloadTests
             QuestionCount = 3,
             UserCount = 2,
             TitlePrefixes = new[] { "How", "What", "Why" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleIndexName = "Questions/ByTitle-corax"
         };
 
         var workload = new QuestionsByTitlePrefixWorkload(metadata);
@@ -52,7 +53,7 @@ public class QuestionsByTitlePrefixWorkloadTests
         queryOp.QueryText.Should().Be("from questions where startsWith(Title, $prefix)");
         queryOp.Parameters.Should().ContainKey("prefix");
         queryOp.Parameters["prefix"].Should().BeOneOf("How", "What", "Why");
-        queryOp.ExpectedIndex.Should().Be("Auto/Questions/ByTitle");
+        queryOp.ExpectedIndex.Should().Be("Questions/ByTitle-corax");
     }
 
     [Fact]
@@ -66,7 +67,8 @@ public class QuestionsByTitlePrefixWorkloadTests
             QuestionCount = 3,
             UserCount = 2,
             TitlePrefixes = prefixes,
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleIndexName = "Questions/ByTitle-corax"
         };
 
         var workload = new QuestionsByTitlePrefixWorkload(metadata);
@@ -118,7 +120,8 @@ public class QuestionsByTitleSearchWorkloadTests
             UserCount = 2,
             SearchTermsRare = new[] { "algorithm", "optimization" },
             SearchTermsCommon = new[] { "error", "problem", "help" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         var workload = new QuestionsByTitleSearchWorkload(metadata);
@@ -131,7 +134,7 @@ public class QuestionsByTitleSearchWorkloadTests
         queryOp.QueryText.Should().Be("from questions where search(Title, $term)");
         queryOp.Parameters.Should().ContainKey("term");
         queryOp.Parameters["term"].Should().BeOneOf("algorithm", "optimization", "error", "problem", "help");
-        queryOp.ExpectedIndex.Should().Be("Auto/Questions/Search(Title)");
+        queryOp.ExpectedIndex.Should().Be("Questions/ByTitleSearch-corax");
     }
 
     [Fact]
@@ -145,7 +148,8 @@ public class QuestionsByTitleSearchWorkloadTests
             UserCount = 2,
             SearchTermsRare = new[] { "rare1", "rare2" },
             SearchTermsCommon = new[] { "common1", "common2", "common3" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         var workload = new QuestionsByTitleSearchWorkload(metadata);
@@ -274,7 +278,8 @@ public class QuestionsByTitleSearchWorkloadTests
             UserCount = 2,
             SearchTermsRare = new[] { "rare1", "rare2" },
             SearchTermsCommon = new[] { "common1", "common2" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         var workload = new QuestionsByTitleSearchWorkload(metadata, 1.0); // 100% rare
@@ -287,7 +292,7 @@ public class QuestionsByTitleSearchWorkloadTests
         queryOp.QueryText.Should().Be("from questions where search(Title, $term)");
         queryOp.Parameters.Should().ContainKey("term");
         queryOp.Parameters["term"].Should().BeOneOf("rare1", "rare2");
-        queryOp.ExpectedIndex.Should().Be("Auto/Questions/Search(Title)");
+        queryOp.ExpectedIndex.Should().Be("Questions/ByTitleSearch-corax");
     }
 
     [Fact]
@@ -301,7 +306,8 @@ public class QuestionsByTitleSearchWorkloadTests
             UserCount = 2,
             SearchTermsRare = new[] { "rare1", "rare2" },
             SearchTermsCommon = new[] { "common1", "common2" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         var workload = new QuestionsByTitleSearchWorkload(metadata, 0.0); // 100% common
@@ -314,7 +320,7 @@ public class QuestionsByTitleSearchWorkloadTests
         queryOp.QueryText.Should().Be("from questions where search(Title, $term)");
         queryOp.Parameters.Should().ContainKey("term");
         queryOp.Parameters["term"].Should().BeOneOf("common1", "common2");
-        queryOp.ExpectedIndex.Should().Be("Auto/Questions/Search(Title)");
+        queryOp.ExpectedIndex.Should().Be("Questions/ByTitleSearch-corax");
     }
 
     [Fact]
@@ -328,7 +334,8 @@ public class QuestionsByTitleSearchWorkloadTests
             UserCount = 2,
             SearchTermsRare = new[] { "rare1" },
             SearchTermsCommon = new[] { "common1" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         var workload = new QuestionsByTitleSearchWorkload(metadata, 0.5); // 50% rare, 50% common
@@ -368,7 +375,8 @@ public class QuestionsByTitleSearchWorkloadTests
             UserCount = 2,
             SearchTermsRare = new[] { "rare1" },
             SearchTermsCommon = new[] { "common1" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         Action act = () => new QuestionsByTitleSearchWorkload(metadata, -0.1);
@@ -388,7 +396,8 @@ public class QuestionsByTitleSearchWorkloadTests
             UserCount = 2,
             SearchTermsRare = new[] { "rare1" },
             SearchTermsCommon = new[] { "common1" },
-            ComputedAt = DateTime.UtcNow
+            ComputedAt = DateTime.UtcNow,
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
 
         Action act = () => new QuestionsByTitleSearchWorkload(metadata, 1.1);
