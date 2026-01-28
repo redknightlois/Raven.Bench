@@ -166,8 +166,11 @@ public class BenchmarkRunner(RunOptions opts)
 
         var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
 
-        if (opts.Preload > 0)
+        // Only preload for profiles that actually use bench/ prefix documents
+        if (opts.Preload > 0 && ProfileRequiresPreload(opts.Profile))
             await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
+        else if (opts.Preload > 0)
+            Console.WriteLine($"[Raven.Bench] Skipping preload - profile '{opts.Profile}' uses imported dataset");
 
         var steps = new List<StepResult>();
         var histogramArtifacts = new List<HistogramArtifact>();
@@ -804,6 +807,22 @@ public class BenchmarkRunner(RunOptions opts)
     {
         return profile == WorkloadProfile.VectorSearch ||
                profile == WorkloadProfile.VectorSearchExact;
+    }
+
+    /// <summary>
+    /// Determines if a profile requires preloaded bench/ documents.
+    /// Dataset-based profiles (StackOverflow, Users, Vector) use their own imported data.
+    /// </summary>
+    private static bool ProfileRequiresPreload(WorkloadProfile profile)
+    {
+        return profile switch
+        {
+            WorkloadProfile.Mixed => true,
+            WorkloadProfile.Reads => true,
+            WorkloadProfile.QueryById => true,
+            // All other profiles either generate data on-the-fly or use imported datasets
+            _ => false
+        };
     }
 
     private static async Task<VectorWorkloadMetadata?> LoadVectorMetadataAsync(RunOptions opts, string database)
