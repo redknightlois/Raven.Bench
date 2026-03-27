@@ -31,6 +31,7 @@ public sealed class DatasetManager
             { "clinicalwords100d", new ClinicalWordsDatasetProvider(100) },
             { "clinicalwords300d", new ClinicalWordsDatasetProvider(300) },
             { "clinicalwords600d", new ClinicalWordsDatasetProvider(600) },
+            { "sphere", new SphereDatasetProvider() },
         };
     }
 
