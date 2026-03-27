@@ -117,8 +117,8 @@ public class VectorSearchOperation : OperationBase
         if (MinimumSimilarity > 0)
             whereClause += " >= $minSimilarity";
 
-        // Select index based on quantization type
-        var indexName = Quantization switch
+        // Use explicit index name if set, otherwise fall back to ClinicalWords default
+        var indexName = ExpectedIndex ?? Quantization switch
         {
             VectorQuantization.Int8 => "Words/ByEmbeddingInt8",
             VectorQuantization.Binary => "Words/ByEmbeddingBinary",

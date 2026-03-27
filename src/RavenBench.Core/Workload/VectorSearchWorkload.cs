@@ -60,7 +60,8 @@ public sealed class VectorSearchWorkload : IWorkload
             TopK = _topK,
             MinimumSimilarity = _minimumSimilarity,
             UseExactSearch = _useExactSearch,
-            Quantization = _quantization
+            Quantization = _quantization,
+            ExpectedIndex = _metadata.IndexName
         };
     }
 }

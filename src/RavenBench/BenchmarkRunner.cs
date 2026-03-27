@@ -105,6 +105,12 @@ public class BenchmarkRunner(RunOptions opts)
                 datasetDatabase = database;
                 datasetWasImported = imported;
             }
+            else if (opts.Dataset.Equals("sphere", StringComparison.OrdinalIgnoreCase))
+            {
+                var (database, imported) = await ImportSphereDatasetAsync(opts, negotiatedHttpVersion);
+                datasetDatabase = database;
+                datasetWasImported = imported;
+            }
             else
             {
                 datasetDatabase = await ImportDatasetAsync(opts);
@@ -884,14 +890,36 @@ public class BenchmarkRunner(RunOptions opts)
             int dimensions = 100;
             if (datasetName.Contains("300d")) dimensions = 300;
             else if (datasetName.Contains("600d")) dimensions = 600;
-            
+
             var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
             return await provider.GenerateQueryVectorsAsync(count: 1000);
         }
 
+        // For sphere dataset, generate query vectors from imported data
+        if (datasetName.Equals("sphere", StringComparison.OrdinalIgnoreCase))
+        {
+            var provider = new Dataset.SphereDatasetProvider();
+            var metadata = await provider.GenerateQueryVectorsAsync(
+                opts.Url,
+                database,
+                queryCount: 1000);
+
+            // Set the correct index name so VectorSearchOperation targets the right index
+            var indexName = Dataset.SphereDatasetProvider.GetIndexName(opts.VectorQuantization, opts.SearchEngine);
+            return new VectorWorkloadMetadata
+            {
+                QueryVectors = metadata.QueryVectors,
+                FieldName = metadata.FieldName,
+                VectorDimensions = metadata.VectorDimensions,
+                BaseVectorCount = metadata.BaseVectorCount,
+                GroundTruth = metadata.GroundTruth,
+                IndexName = indexName
+            };
+        }
+
         // Construct path to query vectors file for other datasets
         var queryFilePath = Path.Combine(datasetCacheDir, GetQueryFileName(datasetName));
-        
+
         if (File.Exists(queryFilePath) == false)
         {
             Console.WriteLine($"[Raven.Bench] Query vectors file not found: {queryFilePath}");
@@ -1127,6 +1155,51 @@ public class BenchmarkRunner(RunOptions opts)
         await provider.ImportWordsAsync(opts.Url, targetDatabase, opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine);
 
         Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D import complete.");
+
+        return (targetDatabase, imported: true);
+    }
+
+    private static async Task<(string database, bool imported)> ImportSphereDatasetAsync(RunOptions opts, Version httpVersion)
+    {
+        var provider = new Dataset.SphereDatasetProvider();
+        var profile = opts.DatasetProfile ?? "100k";
+        var targetDatabase = provider.GetDatabaseName(profile);
+
+        Console.WriteLine($"[Raven.Bench] SPHERE dataset ({profile}) -> '{targetDatabase}'");
+
+        // Check if already imported
+        if (opts.DatasetSkipIfExists)
+        {
+            Console.WriteLine($"[Raven.Bench] Checking if SPHERE data already imported...");
+            var profileName = profile.Trim().ToLowerInvariant();
+            int expectedDocs = profileName switch
+            {
+                "100k" => 100_000,
+                "1m" => 1_000_000,
+                "10m" => 10_000_000,
+                "100m" => 100_000_000,
+                "full" => 899_000_000,
+                _ => 1000
+            };
+
+            var exists = await provider.IsDatasetImportedAsync(
+                opts.Url, targetDatabase, expectedMinDocuments: expectedDocs, httpVersion: httpVersion);
+            if (exists)
+            {
+                Console.WriteLine($"[Raven.Bench] SPHERE {profile} already imported. Ready to use.");
+                return (targetDatabase, imported: false);
+            }
+            Console.WriteLine($"[Raven.Bench] SPHERE data not found or incomplete, will import.");
+        }
+
+        Console.WriteLine($"[Raven.Bench] Importing SPHERE data (engine: {opts.SearchEngine})...");
+        var (importTime, indexingTime) = await provider.ImportAsync(
+            opts.Url, targetDatabase, profile,
+            sourcePathOverride: null,
+            cacheDir: opts.DatasetCacheDir,
+            opts.VectorQuantization, opts.SearchEngine, httpVersion);
+
+        Console.WriteLine($"[Raven.Bench] SPHERE import complete. Import: {importTime}, Indexing: {indexingTime}");
 
         return (targetDatabase, imported: true);
     }
