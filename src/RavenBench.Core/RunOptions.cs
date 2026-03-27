@@ -150,6 +150,7 @@ public sealed record RunOptions
     public int DatasetSize { get; init; } = 0; // 0 = full dataset, N = use N post dump files for partial (overridden by DatasetProfile)
     public bool DatasetSkipIfExists { get; init; } = true; // Skip import if dataset appears to exist
     public string? DatasetCacheDir { get; init; }
+    public string? DatasetSource { get; init; }
 
     public string? OutputDir { get; init; }  // Prefix for all output files when using --output-prefix
 

@@ -87,6 +87,7 @@ internal static class CliParsing
             DatasetSize = settings.DatasetSize,
             DatasetSkipIfExists = (settings.DatasetSkipIfExists ?? true) && settings.ForceDatasetImport == false,
             DatasetCacheDir = settings.DatasetCacheDir,
+            DatasetSource = settings.DatasetSource,
             OutputDir = settings.OutputDir,
             LatencyHistogramsDir = null,
             LatencyHistogramsFormat = ParseHistogramExportFormat(settings.HistogramsFormat),

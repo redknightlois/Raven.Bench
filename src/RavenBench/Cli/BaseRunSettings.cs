@@ -65,11 +65,11 @@ public abstract class BaseRunSettings : CommandSettings
     public int BulkDepth { get; init; } = 1;
 
     [CommandOption("--dataset")]
-    [Description("Dataset to import: stackoverflow, clinicalwords100d, clinicalwords300d, clinicalwords600d (auto-downloads and imports)")]
+    [Description("Dataset to import: stackoverflow, clinicalwords100d/300d/600d, sphere (auto-downloads and imports)")]
     public string? Dataset { get; init; }
 
     [CommandOption("--dataset-profile")]
-    [Description("Dataset size profile: small (~5GB), half (~20GB), full (~50GB) - automatically sets database name and size")]
+    [Description("Dataset size profile: small/half/full (stackoverflow), 100k/1m/10m/100m/full (sphere)")]
     public string? DatasetProfile { get; init; }
 
     [CommandOption("--dataset-size")]
@@ -87,6 +87,10 @@ public abstract class BaseRunSettings : CommandSettings
     [CommandOption("--dataset-cache-dir")]
     [Description("Directory for caching downloaded dataset files")]
     public string? DatasetCacheDir { get; init; }
+
+    [CommandOption("--dataset-source")]
+    [Description("Path to dataset source file or directory (for sphere: .jsonl.tar.gz file or directory)")]
+    public string? DatasetSource { get; init; }
 
     [CommandOption("--distribution")]
     [Description("Key distribution: uniform, zipfian (default: uniform)")]
