@@ -32,6 +32,11 @@ public sealed class VectorWorkloadMetadata
     public int QueryVectorCount => QueryVectors.Length;
 
     /// <summary>
+    /// Optional index name to query against. When set, overrides the default index selection in VectorSearchOperation.
+    /// </summary>
+    public string? IndexName { get; init; }
+
+    /// <summary>
     /// Optional ground truth data for recall@k calculation.
     /// Dictionary mapping query index to list of nearest neighbor IDs.
     /// </summary>
