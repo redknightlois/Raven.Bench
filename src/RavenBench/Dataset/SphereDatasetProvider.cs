@@ -58,7 +58,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         public float[] Vector { get; set; } = [];
     }
 
-    private record Passage(string Text, string Sha, string Title, string Url, float[] Embedding);
+    private record Passage(string Text, string Sha, string Title, string Url);
 
     private sealed class ImportCheckpoint
     {
@@ -220,9 +220,15 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                         if (imported >= profile.TargetDocCount)
                             break;
 
-                        var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url, line.Vector);
+                        var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url);
                         var docId = string.IsNullOrEmpty(line.Id) ? $"{CollectionName}/{line.Sha}" : $"{CollectionName}/{line.Id}";
                         await bulkInsert.StoreAsync(doc, docId);
+
+                        // Store vector as binary attachment (768D × 4 bytes = 3072 bytes)
+                        var vectorBytes = new byte[line.Vector.Length * sizeof(float)];
+                        Buffer.BlockCopy(line.Vector, 0, vectorBytes, 0, vectorBytes.Length);
+                        using var vectorStream = new MemoryStream(vectorBytes);
+                        bulkInsert.AttachmentsFor(docId).Store("vector", vectorStream);
                         imported++;
                         lastSha = line.Sha;
 
@@ -294,7 +300,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         using var session = store.OpenAsyncSession();
         session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
 
-        // Load a pool larger than count so the RNG has room to pick from
+        // Load a pool of document IDs, then sample and load their vector attachments
         var poolSize = (int)Math.Min(totalDocs, count * 3);
         var pool = await session.Advanced.AsyncRawQuery<Passage>(
                 $"from {CollectionName} order by id()")
@@ -304,16 +310,26 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         // Deterministic shuffle and pick
         var rng = new Random(seed);
         var indices = Enumerable.Range(0, pool.Count).ToArray();
-        // Fisher-Yates shuffle with seeded RNG
         for (int i = indices.Length - 1; i > 0; i--)
         {
             int j = rng.Next(i + 1);
             (indices[i], indices[j]) = (indices[j], indices[i]);
         }
 
-        var selected = indices.Take(Math.Min(count, pool.Count))
-            .Select(idx => pool[idx].Embedding)
-            .ToArray();
+        var selectedIndices = indices.Take(Math.Min(count, pool.Count)).ToArray();
+        var selected = new float[selectedIndices.Length][];
+        for (int i = 0; i < selectedIndices.Length; i++)
+        {
+            var docId = session.Advanced.GetDocumentId(pool[selectedIndices[i]]);
+            using var attachmentResult = await session.Advanced.Attachments.GetAsync(docId, "vector");
+            if (attachmentResult == null)
+                throw new InvalidOperationException($"Document {docId} has no 'vector' attachment. Was the dataset imported with attachment-based vectors?");
+            var bytes = new byte[VectorDimensions * sizeof(float)];
+            await attachmentResult.Stream.ReadExactlyAsync(bytes);
+            var floats = new float[VectorDimensions];
+            Buffer.BlockCopy(bytes, 0, floats, 0, bytes.Length);
+            selected[i] = floats;
+        }
 
         Console.WriteLine($"[Sphere] Sampled {selected.Length} query vectors ({VectorDimensions}D) from {totalDocs:N0} documents");
 
@@ -562,7 +578,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
             Name = indexName,
             Maps = new HashSet<string>
             {
-                $"from p in docs.{CollectionName} select new {{ Vector = CreateVector(p.Embedding) }}"
+                $"from p in docs.{CollectionName} let attachment = LoadAttachment(p, \"vector\") select new {{ Vector = CreateVector(attachment.GetContentAsStream()) }}"
             },
             Fields = new Dictionary<string, IndexFieldOptions>
             {
