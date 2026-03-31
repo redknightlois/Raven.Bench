@@ -436,6 +436,9 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         {
             VectorQuantization.Int8 => $"{CollectionName}/ByEmbeddingInt8{engineSuffix}",
             VectorQuantization.Binary => $"{CollectionName}/ByEmbeddingBinary{engineSuffix}",
+            VectorQuantization.Int4 => $"{CollectionName}/ByEmbeddingInt4{engineSuffix}",
+            VectorQuantization.Int3 => $"{CollectionName}/ByEmbeddingInt3{engineSuffix}",
+            VectorQuantization.Int2 => $"{CollectionName}/ByEmbeddingInt2{engineSuffix}",
             _ => $"{CollectionName}/ByEmbedding{engineSuffix}"
         };
 
@@ -445,6 +448,11 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         {
             VectorQuantization.Int8 => (VectorEmbeddingType.Single, VectorEmbeddingType.Int8),
             VectorQuantization.Binary => (VectorEmbeddingType.Single, VectorEmbeddingType.Binary),
+            // Int2=4, Int3=5, Int4=6 in the turboquant VectorEmbeddingType enum — cast directly
+            // since the NuGet client library doesn't define these values yet.
+            VectorQuantization.Int4 => (VectorEmbeddingType.Single, (VectorEmbeddingType)6),
+            VectorQuantization.Int3 => (VectorEmbeddingType.Single, (VectorEmbeddingType)5),
+            VectorQuantization.Int2 => (VectorEmbeddingType.Single, (VectorEmbeddingType)4),
             _ => (VectorEmbeddingType.Single, VectorEmbeddingType.Single)
         };
 

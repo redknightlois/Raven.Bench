@@ -96,6 +96,9 @@ public class VectorSearchOperation : OperationBase
         {
             VectorQuantization.Int8 => $"embedding.f32_i8('{FieldName}')",
             VectorQuantization.Binary => $"embedding.f32_i1('{FieldName}')",
+            VectorQuantization.Int4 => $"embedding.f32_i4('{FieldName}')",
+            VectorQuantization.Int3 => $"embedding.f32_i3('{FieldName}')",
+            VectorQuantization.Int2 => $"embedding.f32_i2('{FieldName}')",
             _ => $"'{FieldName}'"
         };
     }
@@ -122,6 +125,9 @@ public class VectorSearchOperation : OperationBase
         {
             VectorQuantization.Int8 => "Words/ByEmbeddingInt8",
             VectorQuantization.Binary => "Words/ByEmbeddingBinary",
+            VectorQuantization.Int4 => "Words/ByEmbeddingInt4",
+            VectorQuantization.Int3 => "Words/ByEmbeddingInt3",
+            VectorQuantization.Int2 => "Words/ByEmbeddingInt2",
             _ => "Words/ByEmbedding"
         };
 
@@ -147,7 +153,25 @@ public enum VectorQuantization
     /// <summary>
     /// Binary quantization (f32_i1). Reduces memory by ~32x.
     /// </summary>
-    Binary
+    Binary,
+
+    /// <summary>
+    /// 4-bit integer quantization (f32_i4). Reduces memory by ~8x.
+    /// Not yet supported by the RavenDB client library — index creation will fail.
+    /// </summary>
+    Int4,
+
+    /// <summary>
+    /// 3-bit integer quantization (f32_i3). Reduces memory by ~10.7x.
+    /// Not yet supported by the RavenDB client library — index creation will fail.
+    /// </summary>
+    Int3,
+
+    /// <summary>
+    /// 2-bit integer quantization (f32_i2). Reduces memory by ~16x.
+    /// Not yet supported by the RavenDB client library — index creation will fail.
+    /// </summary>
+    Int2
 }
 
 public class InsertOperation<T> : OperationBase

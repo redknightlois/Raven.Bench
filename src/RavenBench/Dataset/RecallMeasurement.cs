@@ -400,6 +400,9 @@ public sealed class RecallMeasurement
         {
             VectorQuantization.Int8 => $"embedding.f32_i8('{fieldName}')",
             VectorQuantization.Binary => $"embedding.f32_i1('{fieldName}')",
+            VectorQuantization.Int4 => $"embedding.f32_i4('{fieldName}')",
+            VectorQuantization.Int3 => $"embedding.f32_i3('{fieldName}')",
+            VectorQuantization.Int2 => $"embedding.f32_i2('{fieldName}')",
             _ => $"'{fieldName}'"
         };
     }
@@ -420,6 +423,9 @@ public sealed class RecallMeasurement
         {
             VectorQuantization.Int8 => $"{collection}/ByEmbeddingInt8{engineSuffix}",
             VectorQuantization.Binary => $"{collection}/ByEmbeddingBinary{engineSuffix}",
+            VectorQuantization.Int4 => $"{collection}/ByEmbeddingInt4{engineSuffix}",
+            VectorQuantization.Int3 => $"{collection}/ByEmbeddingInt3{engineSuffix}",
+            VectorQuantization.Int2 => $"{collection}/ByEmbeddingInt2{engineSuffix}",
             _ => $"{collection}/ByEmbedding{engineSuffix}"
         };
     }
