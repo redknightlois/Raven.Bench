@@ -325,13 +325,51 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
     /// <summary>
     /// Resolves the data source path to a list of .jsonl.tar.gz or .jsonl.gz files.
-    /// If no local files are found, downloads from Google Cloud Storage.
+    /// If a profile is specified, looks for the profile-specific file first and downloads if missing.
     /// </summary>
     public static List<string> ResolveSourceFiles(string dataSourcePath, string? profile = null)
     {
+        // If a specific file was provided, use it directly
         if (File.Exists(dataSourcePath))
             return [dataSourcePath];
 
+        // When we know the profile, look for the profile-specific file first
+        if (profile != null && ProfileFileNames.TryGetValue(profile, out var expectedFileName))
+        {
+            // Search in the provided path and datasets/sphere/ directories
+            var searchDirs = new List<string>();
+            if (Directory.Exists(dataSourcePath))
+                searchDirs.Add(dataSourcePath);
+
+            foreach (var startDir in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+            {
+                var dir = new DirectoryInfo(startDir);
+                while (dir != null)
+                {
+                    var sphereDir = Path.Combine(dir.FullName, "datasets", "sphere");
+                    if (Directory.Exists(sphereDir))
+                        searchDirs.Add(sphereDir);
+                    dir = dir.Parent;
+                }
+            }
+
+            // Check if the profile-specific file exists in any search directory
+            foreach (var searchDir in searchDirs)
+            {
+                var profileFile = Path.Combine(searchDir, expectedFileName);
+                if (File.Exists(profileFile))
+                    return [profileFile];
+            }
+
+            // Profile file not found locally — download it
+            var targetDir = searchDirs.Count > 0 ? searchDirs[0]
+                : Path.Combine(Directory.GetCurrentDirectory(), "datasets", "sphere");
+            var downloaded = DownloadSphereFileAsync(profile, targetDir).GetAwaiter().GetResult();
+            if (downloaded != null)
+                return [downloaded];
+        }
+
+        // Fallback: find any sphere files in the provided path or datasets/sphere/
         if (Directory.Exists(dataSourcePath))
         {
             var files = FindSphereFiles(dataSourcePath);
@@ -339,7 +377,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                 return files;
         }
 
-        // Walk up from CWD and AppContext.BaseDirectory looking for datasets/sphere/
         foreach (var startDir in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {
             var dir = new DirectoryInfo(startDir);
@@ -354,15 +391,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                 }
                 dir = dir.Parent;
             }
-        }
-
-        // Auto-download from GCS if profile is known
-        if (profile != null)
-        {
-            var targetDir = Path.Combine(Directory.GetCurrentDirectory(), "datasets", "sphere");
-            var downloaded = DownloadSphereFileAsync(profile, targetDir).GetAwaiter().GetResult();
-            if (downloaded != null)
-                return [downloaded];
         }
 
         throw new FileNotFoundException(
