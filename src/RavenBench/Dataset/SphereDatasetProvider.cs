@@ -193,7 +193,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                 Console.WriteLine($"[Sphere] Resuming from line {skipLines:N0} (checkpoint: {checkpoint!.LastSha})");
 
             // Resolve data source files
-            var files = ResolveSourceFiles(dataSourcePath);
+            var files = ResolveSourceFiles(dataSourcePath, _profile);
             Console.WriteLine($"[Sphere] Importing from {files.Count} file(s) into {databaseName} (target: {profile.TargetDocCount:N0} docs)");
 
             long imported = 0;
@@ -325,8 +325,9 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
     /// <summary>
     /// Resolves the data source path to a list of .jsonl.tar.gz or .jsonl.gz files.
+    /// If no local files are found, downloads from Google Cloud Storage.
     /// </summary>
-    public static List<string> ResolveSourceFiles(string dataSourcePath)
+    public static List<string> ResolveSourceFiles(string dataSourcePath, string? profile = null)
     {
         if (File.Exists(dataSourcePath))
             return [dataSourcePath];
@@ -355,9 +356,77 @@ public sealed class SphereDatasetProvider : IDatasetProvider
             }
         }
 
+        // Auto-download from GCS if profile is known
+        if (profile != null)
+        {
+            var targetDir = Path.Combine(Directory.GetCurrentDirectory(), "datasets", "sphere");
+            var downloaded = DownloadSphereFileAsync(profile, targetDir).GetAwaiter().GetResult();
+            if (downloaded != null)
+                return [downloaded];
+        }
+
         throw new FileNotFoundException(
             $"SPHERE data source not found at '{dataSourcePath}'. " +
             "Provide a .jsonl.tar.gz file, a directory containing them, or place files in datasets/sphere/.");
+    }
+
+    private static readonly Dictionary<string, string> ProfileFileNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "100k", "full.sphere.100K.jsonl.tar.gz" },
+        { "1m", "full.sphere.1M.jsonl.tar.gz" },
+        { "10m", "full.sphere.10M.jsonl.tar.gz" },
+        { "100m", "full.sphere.100M.jsonl.tar.gz" },
+        { "full", "full.sphere.899M.jsonl.tar.gz" },
+    };
+
+    private static async Task<string?> DownloadSphereFileAsync(string profile, string targetDir)
+    {
+        if (ProfileFileNames.TryGetValue(profile, out var fileName) == false)
+            return null;
+
+        Directory.CreateDirectory(targetDir);
+        var targetPath = Path.Combine(targetDir, fileName);
+
+        if (File.Exists(targetPath))
+            return targetPath;
+
+        var url = $"https://storage.googleapis.com/sphere-demo/{fileName}";
+        Console.WriteLine($"[Sphere] Downloading {fileName} from {url}...");
+
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromHours(12) };
+        using var response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+
+        var totalBytes = response.Content.Headers.ContentLength;
+        var totalMB = totalBytes.HasValue ? $"{totalBytes.Value / (1024.0 * 1024.0):N0} MB" : "unknown size";
+        Console.WriteLine($"[Sphere] Download size: {totalMB}");
+
+        await using var contentStream = await response.Content.ReadAsStreamAsync();
+        var tempPath = targetPath + ".downloading";
+        await using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
+        {
+            var buffer = new byte[81920];
+            long totalRead = 0;
+            int bytesRead;
+            var lastReport = DateTime.UtcNow;
+
+            while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
+            {
+                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+                totalRead += bytesRead;
+
+                if ((DateTime.UtcNow - lastReport).TotalSeconds >= 5)
+                {
+                    var pct = totalBytes.HasValue ? $" ({100.0 * totalRead / totalBytes.Value:F1}%)" : "";
+                    Console.Write($"\r[Sphere] Downloaded {totalRead / (1024.0 * 1024.0):N0} MB{pct}");
+                    lastReport = DateTime.UtcNow;
+                }
+            }
+        }
+
+        File.Move(tempPath, targetPath);
+        Console.WriteLine($"\n[Sphere] Download complete: {targetPath}");
+        return targetPath;
     }
 
     private static List<string> FindSphereFiles(string directory)
