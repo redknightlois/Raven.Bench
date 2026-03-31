@@ -398,9 +398,10 @@ public sealed class SphereDatasetProvider : IDatasetProvider
             "Provide a .jsonl.tar.gz file, a directory containing them, or place files in datasets/sphere/.");
     }
 
+    // Profile -> GCS file mapping. Available at: https://storage.googleapis.com/sphere-demo/
     private static readonly Dictionary<string, string> ProfileFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        { "100k", "full.sphere.100K.jsonl.tar.gz" },
+        { "100k", "full.sphere.100k.jsonl.tar.gz" },
         { "1m", "full.sphere.1M.jsonl.tar.gz" },
         { "10m", "full.sphere.10M.jsonl.tar.gz" },
         { "100m", "full.sphere.100M.jsonl.tar.gz" },
