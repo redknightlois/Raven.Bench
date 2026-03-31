@@ -104,6 +104,8 @@ public sealed record RunOptions
     public bool VectorExactSearch { get; init; } = false;
     public float VectorMinSimilarity { get; init; } = 0.0f;
     public int VectorDimension { get; init; } = 128; // Default to SIFT1M
+    public int? VectorEdges { get; init; } // HNSW M parameter (numberOfEdges)
+    public int? VectorCandidates { get; init; } // HNSW efConstruction parameter (numberOfCandidatesForIndexing)
 
     /// <summary>
     /// K values at which to compute recall (e.g., [1, 5, 10]).

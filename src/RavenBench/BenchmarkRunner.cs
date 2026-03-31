@@ -1202,7 +1202,8 @@ public class BenchmarkRunner(RunOptions opts)
         Console.WriteLine($"[Raven.Bench] Importing SPHERE dataset from '{dataSourcePath}' (engine: {opts.SearchEngine})...");
         var exactSearch = opts.Profile == WorkloadProfile.VectorSearchExact || opts.VectorExactSearch;
         await provider.ImportAsync(opts.Url, targetDatabase, dataSourcePath,
-            opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine);
+            opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine,
+            numberOfEdges: opts.VectorEdges, numberOfCandidatesForIndexing: opts.VectorCandidates);
 
         Console.WriteLine($"[Raven.Bench] SPHERE {profile} import complete.");
 

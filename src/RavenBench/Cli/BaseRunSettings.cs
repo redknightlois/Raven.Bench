@@ -48,6 +48,14 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("Vector dimension (128, 384, 768, 1536)")]
     public int VectorDimension { get; init; } = 128;
 
+    [CommandOption("--vector-edges")]
+    [Description("HNSW M parameter (number of edges per node). Controls graph connectivity.")]
+    public int? VectorEdges { get; init; }
+
+    [CommandOption("--vector-candidates")]
+    [Description("HNSW efConstruction parameter (candidates during index build). Higher = better recall, slower indexing.")]
+    public int? VectorCandidates { get; init; }
+
     [CommandOption("--vector-recall-ks")]
     [Description("Comma-separated K values for recall@K measurement (e.g., 1,5,10). Computes ground truth via exact search and measures recall at each K.")]
     public string? VectorRecallKs { get; init; }
