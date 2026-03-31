@@ -308,8 +308,11 @@ internal static class CliParsing
         {
             "none" => VectorQuantization.None,
             "int8" => VectorQuantization.Int8,
+            "int4" => VectorQuantization.Int4,
+            "int3" => VectorQuantization.Int3,
+            "int2" => VectorQuantization.Int2,
             "binary" => VectorQuantization.Binary,
-            _ => throw new ArgumentException($"Invalid vector quantization: {quantization}. Valid options: none, int8, binary")
+            _ => throw new ArgumentException($"Invalid vector quantization: {quantization}. Valid options: none, int8, int4, int3, int2, binary")
         };
     }
 

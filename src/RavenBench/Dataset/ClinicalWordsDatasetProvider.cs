@@ -340,6 +340,9 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         {
             VectorQuantization.Int8 => $"Words/ByEmbeddingInt8{engineSuffix}",
             VectorQuantization.Binary => $"Words/ByEmbeddingBinary{engineSuffix}",
+            VectorQuantization.Int4 => $"Words/ByEmbeddingInt4{engineSuffix}",
+            VectorQuantization.Int3 => $"Words/ByEmbeddingInt3{engineSuffix}",
+            VectorQuantization.Int2 => $"Words/ByEmbeddingInt2{engineSuffix}",
             _ => $"Words/ByEmbedding{engineSuffix}"
         };
 
@@ -350,6 +353,11 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         {
             VectorQuantization.Int8 => (VectorEmbeddingType.Single, VectorEmbeddingType.Int8),
             VectorQuantization.Binary => (VectorEmbeddingType.Single, VectorEmbeddingType.Binary),
+            // Int2=4, Int3=5, Int4=6 in the turboquant VectorEmbeddingType enum — cast directly
+            // since the NuGet client library doesn't define these values yet.
+            VectorQuantization.Int4 => (VectorEmbeddingType.Single, (VectorEmbeddingType)6),
+            VectorQuantization.Int3 => (VectorEmbeddingType.Single, (VectorEmbeddingType)5),
+            VectorQuantization.Int2 => (VectorEmbeddingType.Single, (VectorEmbeddingType)4),
             _ => (VectorEmbeddingType.Single, VectorEmbeddingType.Single)
         };
 

@@ -113,6 +113,9 @@ public class VectorSearchWorkloadTests
     [Theory]
     [InlineData(VectorQuantization.None)]
     [InlineData(VectorQuantization.Int8)]
+    [InlineData(VectorQuantization.Int4)]
+    [InlineData(VectorQuantization.Int3)]
+    [InlineData(VectorQuantization.Int2)]
     [InlineData(VectorQuantization.Binary)]
     public void VectorSearchOperation_ShouldSupportAllQuantizationTypes(VectorQuantization quantization)
     {
@@ -357,6 +360,41 @@ public class VectorSearchWorkloadTests
     }
 
     [Theory]
+    [InlineData(VectorQuantization.Int4, "embedding.f32_i4('Embedding')")]
+    [InlineData(VectorQuantization.Int3, "embedding.f32_i3('Embedding')")]
+    [InlineData(VectorQuantization.Int2, "embedding.f32_i2('Embedding')")]
+    public void GetEmbeddingSelector_ReturnsCorrectSelector_ForNewQuantizationTypes(
+        VectorQuantization quantization, string expected)
+    {
+        var op = new VectorSearchOperation
+        {
+            QueryVector = new float[] { 0.1f },
+            FieldName = "Embedding",
+            Quantization = quantization
+        };
+
+        var selector = op.GetEmbeddingSelector();
+
+        Assert.Equal(expected, selector);
+    }
 
     [Theory]
+    [InlineData(VectorQuantization.Int4, "Words/ByEmbeddingInt4")]
+    [InlineData(VectorQuantization.Int3, "Words/ByEmbeddingInt3")]
+    [InlineData(VectorQuantization.Int2, "Words/ByEmbeddingInt2")]
+    public void ToRqlQuery_GeneratesCorrectQuery_WithNewQuantizationTypes(
+        VectorQuantization quantization, string expectedIndex)
+    {
+        var op = new VectorSearchOperation
+        {
+            QueryVector = new float[] { 0.1f },
+            FieldName = "Embedding",
+            Quantization = quantization
+        };
+
+        var query = op.ToRqlQuery();
+
+        Assert.StartsWith($"from index '{expectedIndex}'", query);
+        Assert.Contains("vector.search(", query);
+    }
 }

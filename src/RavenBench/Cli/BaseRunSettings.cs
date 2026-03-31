@@ -33,7 +33,7 @@ public abstract class BaseRunSettings : CommandSettings
     public int VectorTopK { get; init; } = 10;
 
     [CommandOption("--vector-quantization")]
-    [Description("Vector quantization: none, int8, binary (default: none)")]
+    [Description("Vector quantization: none, int8, int4, int3, int2, binary (default: none)")]
     public string VectorQuantization { get; init; } = "none";
 
     [CommandOption("--vector-exact-search")]
