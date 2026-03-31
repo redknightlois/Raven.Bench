@@ -49,6 +49,8 @@ internal static class CliParsing
             VectorExactSearch = settings.VectorExactSearch,
             VectorMinSimilarity = settings.VectorMinSimilarity,
             VectorDimension = settings.VectorDimension,
+            VectorEdges = settings.VectorEdges,
+            VectorCandidates = settings.VectorCandidates,
             VectorRecallKs = ParseRecallKs(settings.VectorRecallKs, settings.VectorTopK),
             VectorRecallEfSweep = ParseEfSweep(settings.VectorRecallEfSweep),
             Profile = ParseProfile(settings.Profile),
