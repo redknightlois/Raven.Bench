@@ -80,6 +80,25 @@ new("Concurrency", _ => true, s => s.Concurrency),
             new("PrimaryIndexUsage", summary => summary.Steps.Any(s => s.IndexUsage != null && s.IndexUsage.Count > 0), s => s.IndexUsage?.OrderByDescending(kvp => kvp.Value).FirstOrDefault().Value),
         };
 
+        /// <summary>
+        /// Generates dynamic recall@K CSV fields based on the benchmark summary.
+        /// Returns one column per K value (e.g., "Recall@1", "Recall@5", "Recall@10").
+        /// These are benchmark-wide values repeated in each step row.
+        /// </summary>
+        public static List<CsvField> GetRecallFields(BenchmarkSummary summary)
+        {
+            if (summary.Recall?.RecallAtK == null || summary.Recall.RecallAtK.Count == 0)
+                return [];
+
+            return summary.Recall.RecallAtK
+                .OrderBy(kvp => kvp.Key)
+                .Select(kvp => new CsvField(
+                    $"Recall@{kvp.Key}",
+                    _ => true,
+                    _ => kvp.Value))
+                .ToList();
+        }
+
         public static List<CsvField> GetVisibleFields(BenchmarkSummary summary)
         {
             return AllFields

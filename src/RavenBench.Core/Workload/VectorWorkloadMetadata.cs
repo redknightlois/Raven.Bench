@@ -32,8 +32,27 @@ public sealed class VectorWorkloadMetadata
     public int QueryVectorCount => QueryVectors.Length;
 
     /// <summary>
-    /// Optional ground truth data for recall@k calculation.
-    /// Dictionary mapping query index to list of nearest neighbor IDs.
+    /// Optional ground truth data for recall@K calculation.
+    /// Dictionary mapping query index to ordered list of nearest neighbor document IDs.
+    /// Computed via exact (brute-force) search and cached in the target database.
     /// </summary>
-    public Dictionary<int, int[]>? GroundTruth { get; init; }
+    public Dictionary<int, string[]>? GroundTruth { get; init; }
+
+    /// <summary>
+    /// The index name used for vector search queries (e.g., "SpherePassages/ByEmbedding-corax").
+    /// Set by the dataset provider that created the index.
+    /// </summary>
+    /// <summary>
+    /// The field name as it appears in the index (e.g., "Vector" when the index map is "Vector = CreateVector(p.Embedding)").
+    /// Defaults to FieldName if not set. Used for building vector.search() queries.
+    /// </summary>
+    public string? IndexedFieldName { get; set; }
+
+    public string? IndexName { get; set; }
+
+    /// <summary>
+    /// The collection name containing the vector documents (e.g., "SpherePassages", "Words").
+    /// Used for building recall measurement queries.
+    /// </summary>
+    public string? CollectionName { get; set; }
 }

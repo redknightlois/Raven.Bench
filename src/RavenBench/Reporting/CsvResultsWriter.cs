@@ -14,6 +14,7 @@ namespace RavenBench.Reporting
             using var csv = new CsvWriter(writer, CultureInfo.InvariantCulture);
 
             var fields = CsvMetrics.GetVisibleFields(summary);
+            fields.AddRange(CsvMetrics.GetRecallFields(summary));
 
             foreach (var field in fields)
             {

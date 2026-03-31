@@ -1,4 +1,5 @@
 using RavenBench.Dataset;
+using RavenBench.Tests.Infrastructure;
 using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
@@ -7,7 +8,7 @@ namespace RavenBench.Tests.Dataset;
 
 public class ClinicalWordsDatasetProviderTests
 {
-    [Theory]
+    [RequiresClinicalWordsTheory]
     [InlineData(100)]
     [InlineData(300)]
     [InlineData(600)]
@@ -25,7 +26,7 @@ public class ClinicalWordsDatasetProviderTests
         Assert.True(vectors.BaseVectorCount > 300000, $"Expected >300k words, got {vectors.BaseVectorCount}");
     }
 
-    [Fact]
+    [RequiresClinicalWordsFact]
     public async Task ComputeDocumentEmbedding_WithValidText_ReturnsVector()
     {
         // Arrange
@@ -40,7 +41,7 @@ public class ClinicalWordsDatasetProviderTests
         Assert.True(embedding.Any(v => v != 0), "Embedding should not be all zeros");
     }
 
-    [Fact]
+    [RequiresClinicalWordsFact]
     public async Task GetWordVector_ExistingWord_ReturnsVector()
     {
         // Arrange
@@ -54,7 +55,7 @@ public class ClinicalWordsDatasetProviderTests
         Assert.Equal(100, vector!.Length);
     }
 
-    [Fact]
+    [RequiresClinicalWordsFact]
     public async Task GetWordVector_NonExistingWord_ReturnsNull()
     {
         // Arrange
@@ -67,7 +68,7 @@ public class ClinicalWordsDatasetProviderTests
         Assert.Null(vector);
     }
 
-    [Fact]
+    [RequiresClinicalWordsFact]
     public async Task GetWordVector_ReturnsCorrectDimensionVectors()
     {
         // Arrange
@@ -91,7 +92,7 @@ public class ClinicalWordsDatasetProviderTests
         Assert.True(distinctValues > 10, $"Expected diverse vector values, got only {distinctValues} distinct values");
     }
 
-    [Fact]
+    [RequiresClinicalWordsFact]
     public async Task GenerateQueryVectors_ReturnsValidVectors()
     {
         // Arrange

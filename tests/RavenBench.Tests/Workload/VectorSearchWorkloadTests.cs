@@ -355,4 +355,8 @@ public class VectorSearchWorkloadTests
 
         Assert.Equal("embedding.f32_i1('Embedding')", selector);
     }
+
+    [Theory]
+
+    [Theory]
 }

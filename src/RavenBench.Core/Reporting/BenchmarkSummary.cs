@@ -1,5 +1,6 @@
 using RavenBench.Core;
 using RavenBench.Core.Diagnostics;
+using RavenBench.Core.Metrics;
 
 namespace RavenBench.Core.Reporting;
 
@@ -22,4 +23,18 @@ public sealed class BenchmarkSummary
 
     // Full histogram data for each concurrency step
     public List<HistogramArtifact>? HistogramArtifacts { get; init; }
+
+    /// <summary>
+    /// Recall@K measurement results for vector search benchmarks.
+    /// Null when recall measurement is not enabled (--vector-recall-ks not specified).
+    /// When efSearch sweep is used, this holds the result for the default efSearch.
+    /// </summary>
+    public RecallResult? Recall { get; set; }
+
+    /// <summary>
+    /// Recall@K results across multiple efSearch values (sweep mode).
+    /// Key is efSearch value, value is the recall result at that efSearch.
+    /// Null when --vector-recall-ef-sweep is not specified.
+    /// </summary>
+    public Dictionary<int, RecallResult>? RecallSweep { get; set; }
 }
