@@ -44,6 +44,8 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
     public sealed class SphereJsonLine
     {
+        [JsonPropertyName("id")]
+        public string Id { get; set; } = "";
         [JsonPropertyName("raw")]
         public string Raw { get; set; } = "";
         [JsonPropertyName("sha")]
@@ -219,7 +221,8 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                             break;
 
                         var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url, line.Vector);
-                        await bulkInsert.StoreAsync(doc, $"{CollectionName}/{line.Sha}");
+                        var docId = string.IsNullOrEmpty(line.Id) ? $"{CollectionName}/{line.Sha}" : $"{CollectionName}/{line.Id}";
+                        await bulkInsert.StoreAsync(doc, docId);
                         imported++;
                         lastSha = line.Sha;
 
