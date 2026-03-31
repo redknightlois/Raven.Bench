@@ -105,6 +105,20 @@ public sealed record RunOptions
     public float VectorMinSimilarity { get; init; } = 0.0f;
     public int VectorDimension { get; init; } = 128; // Default to SIFT1M
 
+    /// <summary>
+    /// K values at which to compute recall (e.g., [1, 5, 10]).
+    /// When set, ground truth is computed via exact search and recall@K is measured
+    /// by comparing approximate HNSW results against ground truth at each K cutoff.
+    /// Null or empty disables recall measurement.
+    /// </summary>
+    public int[]? VectorRecallKs { get; init; }
+
+    /// <summary>
+    /// efSearch values to sweep for recall measurement (e.g., [16, 32, 64, 128, 256]).
+    /// When set, recall is measured at each efSearch value to show the recall/speed tradeoff.
+    /// </summary>
+    public int[]? VectorRecallEfSweep { get; init; }
+
     public string Distribution { get; init; } = "uniform";
     public int DocumentSizeBytes { get; init; } = 1024;
     public string Transport { get; init; } = "raw";

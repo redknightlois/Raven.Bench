@@ -49,6 +49,8 @@ internal static class CliParsing
             VectorExactSearch = settings.VectorExactSearch,
             VectorMinSimilarity = settings.VectorMinSimilarity,
             VectorDimension = settings.VectorDimension,
+            VectorRecallKs = ParseRecallKs(settings.VectorRecallKs, settings.VectorTopK),
+            VectorRecallEfSweep = ParseEfSweep(settings.VectorRecallEfSweep),
             Profile = ParseProfile(settings.Profile),
             QueryProfile = ParseQueryProfile(settings.QueryProfile),
             DocumentSizeBytes = ParseSize(settings.DocSize),
@@ -260,6 +262,44 @@ internal static class CliParsing
             "both" => HistogramExportFormat.Both,
             _ => throw new ArgumentException($"Invalid histogram export format: {format}. Valid options: hlog, csv, both")
         };
+    }
+
+    private static int[] ParseRecallKs(string recallKs, int vectorTopK)
+    {
+        if (string.IsNullOrWhiteSpace(recallKs))
+            return null;
+
+        var parts = recallKs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var ks = new int[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            ks[i] = int.Parse(parts[i], CultureInfo.InvariantCulture);
+            if (ks[i] <= 0)
+                throw new ArgumentException($"--vector-recall-ks values must be positive, got {ks[i]}");
+            if (ks[i] > vectorTopK)
+                throw new ArgumentException($"--vector-recall-ks value {ks[i]} exceeds --vector-topk {vectorTopK}");
+        }
+
+        Array.Sort(ks);
+        return ks;
+    }
+
+    private static int[] ParseEfSweep(string efSweep)
+    {
+        if (string.IsNullOrWhiteSpace(efSweep))
+            return null;
+
+        var parts = efSweep.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var values = new int[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            values[i] = int.Parse(parts[i], CultureInfo.InvariantCulture);
+            if (values[i] <= 0)
+                throw new ArgumentException($"--vector-recall-ef-sweep values must be positive, got {values[i]}");
+        }
+
+        Array.Sort(values);
+        return values;
     }
 
     private static VectorQuantization ParseVectorQuantization(string quantization)

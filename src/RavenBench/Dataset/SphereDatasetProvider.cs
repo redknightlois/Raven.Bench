@@ -24,7 +24,7 @@ namespace RavenBench.Dataset;
 public sealed class SphereDatasetProvider : IDatasetProvider
 {
     public const int VectorDimensions = 768; // facebook-dpr-ctx_encoder-single-nq-base
-    public const string CollectionName = "SpherePassages";
+    public const string CollectionName = "Passages";
     private const string CheckpointDocId = "sphere/import-checkpoint";
     private const int ProgressInterval = 10_000;
     private const int CheckpointInterval = 100_000;
@@ -56,7 +56,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         public float[] Vector { get; set; } = [];
     }
 
-    private record SpherePassageDocument(string Text, string Sha, string Title, string Url, float[] Embedding);
+    private record Passage(string Text, string Sha, string Title, string Url, float[] Embedding);
 
     private sealed class ImportCheckpoint
     {
@@ -157,6 +157,8 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         bool exactSearch = false,
         Version? httpVersion = null,
         IndexingEngine searchEngine = IndexingEngine.Corax,
+        int? numberOfEdges = null,
+        int? numberOfCandidatesForIndexing = null,
         CancellationToken ct = default)
     {
         using var store = new DocumentStore { Urls = [serverUrl], Database = databaseName };
@@ -216,7 +218,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                         if (imported >= profile.TargetDocCount)
                             break;
 
-                        var doc = new SpherePassageDocument(line.Raw, line.Sha, line.Title, line.Url, line.Vector);
+                        var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url, line.Vector);
                         await bulkInsert.StoreAsync(doc, $"{CollectionName}/{line.Sha}");
                         imported++;
                         lastSha = line.Sha;
@@ -256,7 +258,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
         // Create vector index and measure indexing time
         var indexingSw = Stopwatch.StartNew();
-        await CreateVectorIndexAsync(store, quantization, exactSearch, searchEngine);
+        await CreateVectorIndexAsync(store, quantization, exactSearch, searchEngine, numberOfEdges, numberOfCandidatesForIndexing);
         indexingSw.Stop();
         var indexingDuration = indexingSw.Elapsed;
 
@@ -269,38 +271,55 @@ public sealed class SphereDatasetProvider : IDatasetProvider
     /// Generates query vectors by sampling random documents from the imported SPHERE data.
     /// </summary>
     public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(
-        string serverUrl, string databaseName, int count = 1000, Version? httpVersion = null)
+        string serverUrl, string databaseName, int count = 1000, Version? httpVersion = null, int seed = 42)
     {
         using var store = new DocumentStore { Urls = [serverUrl], Database = databaseName };
         if (httpVersion != null)
             HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
 
-        Console.WriteLine($"[Sphere] Sampling {count} query vectors from {databaseName}...");
+        var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
+        var totalDocs = stats.CountOfDocuments;
+
+        if (totalDocs == 0)
+            throw new InvalidOperationException($"No documents found in {CollectionName} collection. Import the SPHERE dataset first.");
+
+        // Deterministic sampling: load a block of documents ordered by id, then pick
+        // with a seeded RNG. Same seed → same query vectors → ground truth cache reusable.
+        Console.WriteLine($"[Sphere] Sampling {count} query vectors from {databaseName} (seed={seed})...");
 
         using var session = store.OpenAsyncSession();
         session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
 
-        var results = await session.Advanced.AsyncRawQuery<SpherePassageDocument>(
-                $"from {CollectionName} order by random()")
-            .Take(count)
+        // Load a pool larger than count so the RNG has room to pick from
+        var poolSize = (int)Math.Min(totalDocs, count * 3);
+        var pool = await session.Advanced.AsyncRawQuery<Passage>(
+                $"from {CollectionName} order by id()")
+            .Take(poolSize)
             .ToListAsync();
 
-        if (results.Count == 0)
-            throw new InvalidOperationException($"No documents found in {CollectionName} collection. Import the SPHERE dataset first.");
+        // Deterministic shuffle and pick
+        var rng = new Random(seed);
+        var indices = Enumerable.Range(0, pool.Count).ToArray();
+        // Fisher-Yates shuffle with seeded RNG
+        for (int i = indices.Length - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (indices[i], indices[j]) = (indices[j], indices[i]);
+        }
 
-        var queryVectors = results.Select(r => r.Embedding).ToArray();
+        var selected = indices.Take(Math.Min(count, pool.Count))
+            .Select(idx => pool[idx].Embedding)
+            .ToArray();
 
-        var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
-
-        Console.WriteLine($"[Sphere] Sampled {queryVectors.Length} query vectors ({VectorDimensions}D) from {stats.CountOfDocuments:N0} documents");
+        Console.WriteLine($"[Sphere] Sampled {selected.Length} query vectors ({VectorDimensions}D) from {totalDocs:N0} documents");
 
         return new VectorWorkloadMetadata
         {
-            QueryVectors = queryVectors,
+            QueryVectors = selected,
             FieldName = "Embedding",
             VectorDimensions = VectorDimensions,
-            BaseVectorCount = stats.CountOfDocuments
+            BaseVectorCount = totalDocs
         };
     }
 
@@ -406,7 +425,9 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         IDocumentStore store,
         VectorQuantization quantization,
         bool exactSearch,
-        IndexingEngine searchEngine)
+        IndexingEngine searchEngine,
+        int? numberOfEdges = null,
+        int? numberOfCandidatesForIndexing = null)
     {
         var engineName = searchEngine == IndexingEngine.Lucene ? "Lucene" : "Corax";
         var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
@@ -444,7 +465,9 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                         {
                             Dimensions = VectorDimensions,
                             SourceEmbeddingType = sourceType,
-                            DestinationEmbeddingType = destType
+                            DestinationEmbeddingType = destType,
+                            NumberOfEdges = numberOfEdges,
+                            NumberOfCandidatesForIndexing = numberOfCandidatesForIndexing
                         }
                     }
                 }
@@ -458,7 +481,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         Console.WriteLine($"[Sphere] Waiting for index to become non-stale...");
         using var session = store.OpenAsyncSession();
         session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-        await session.Query<SpherePassageDocument>(indexName)
+        await session.Query<Passage>(indexName)
             .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
             .Take(0)
             .ToListAsync();

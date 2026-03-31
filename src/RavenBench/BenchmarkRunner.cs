@@ -532,7 +532,9 @@ public class BenchmarkRunner(RunOptions opts)
             EffectiveHttpVersion = httpVersion,
             StartupCalibration = startupCalibration,
             ServerMetricsHistory = serverMetricsHistory.Count > 0 ? serverMetricsHistory : null,
-            HistogramArtifacts = histogramArtifacts.Count > 0 ? histogramArtifacts : null
+            HistogramArtifacts = histogramArtifacts.Count > 0 ? histogramArtifacts : null,
+            VectorMetadata = vectorMetadata,
+            EffectiveDatabase = effectiveDatabase
         };
     }
 
@@ -884,15 +886,25 @@ public class BenchmarkRunner(RunOptions opts)
             throw new InvalidOperationException("Vector search profiles require --dataset option. Supported: clinicalwords100d, clinicalwords300d, clinicalwords600d, sphere");
         }
 
+        var engineSuffix = opts.SearchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
+
         // For clinicalwords datasets, generate query vectors directly from the provider
         if (datasetName.StartsWith("clinicalwords", StringComparison.OrdinalIgnoreCase))
         {
             int dimensions = 100;
             if (datasetName.Contains("300d")) dimensions = 300;
             else if (datasetName.Contains("600d")) dimensions = 600;
-            
+
             var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
-            return await provider.GenerateQueryVectorsAsync(count: 1000);
+            var metadata = await provider.GenerateQueryVectorsAsync(count: 1000);
+            metadata.IndexName = opts.VectorQuantization switch
+            {
+                VectorQuantization.Int8 => $"Words/ByEmbeddingInt8{engineSuffix}",
+                VectorQuantization.Binary => $"Words/ByEmbeddingBinary{engineSuffix}",
+                _ => $"Words/ByEmbedding{engineSuffix}"
+            };
+            metadata.CollectionName = "WordDocuments";
+            return metadata;
         }
 
         // For sphere datasets, generate query vectors from the imported data
@@ -901,7 +913,16 @@ public class BenchmarkRunner(RunOptions opts)
             var profile = opts.DatasetProfile ?? "100k";
             var provider = new Dataset.SphereDatasetProvider(profile);
             var dbName = provider.GetDatabaseName(profile);
-            return await provider.GenerateQueryVectorsAsync(opts.Url, dbName, count: 1000);
+            var metadata = await provider.GenerateQueryVectorsAsync(opts.Url, dbName, count: 1000);
+            metadata.IndexName = opts.VectorQuantization switch
+            {
+                VectorQuantization.Int8 => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbeddingInt8{engineSuffix}",
+                VectorQuantization.Binary => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbeddingBinary{engineSuffix}",
+                _ => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbedding{engineSuffix}"
+            };
+            metadata.CollectionName = Dataset.SphereDatasetProvider.CollectionName;
+            metadata.IndexedFieldName = "Vector";
+            return metadata;
         }
 
         // Construct path to query vectors file for other datasets

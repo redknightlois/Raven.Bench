@@ -8,6 +8,7 @@ using RavenBench.Core.Reporting;
 using RavenBench.Reporting;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using RecallResult = RavenBench.Core.Metrics.RecallResult;
 
 namespace RavenBench.Cli;
 
@@ -46,6 +47,41 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
 
         var analysis = ResultAnalyzer.Analyze(run, knee, opts, tempSummary);
 
+        // Run recall@K measurement if requested and vector metadata is available
+        RecallResult? recallResult = null;
+        Dictionary<int, RecallResult>? recallSweep = null;
+        if (opts.VectorRecallKs is { Length: > 0 } && run.VectorMetadata != null)
+        {
+            var recall = new Dataset.RecallMeasurement();
+            var httpVersion = opts.HttpVersion != "auto" ? HttpHelper.ParseHttpVersion(HttpHelper.NormalizeHttpVersion(opts.HttpVersion)) : null;
+
+            if (opts.VectorRecallEfSweep is { Length: > 0 })
+            {
+                recallSweep = await recall.MeasureSweepAsync(
+                    opts.Url,
+                    run.EffectiveDatabase,
+                    run.VectorMetadata,
+                    opts.VectorRecallKs,
+                    opts.VectorRecallEfSweep,
+                    opts.VectorQuantization,
+                    opts.SearchEngine,
+                    httpVersion);
+                // Use the last (highest) efSearch result as the primary recall
+                recallResult = recallSweep[recallSweep.Keys.Max()];
+            }
+            else
+            {
+                recallResult = await recall.MeasureAsync(
+                    opts.Url,
+                    run.EffectiveDatabase,
+                    run.VectorMetadata,
+                    opts.VectorRecallKs,
+                    opts.VectorQuantization,
+                    opts.SearchEngine,
+                    httpVersion);
+            }
+        }
+
         var summary = new BenchmarkSummary
         {
             Options = opts,
@@ -58,7 +94,9 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
             Notes = opts.Notes,
             SnmpTimeSeries = snmpTimeSeries,
             SnmpAggregations = snmpAggregations,
-            HistogramArtifacts = run.HistogramArtifacts
+            HistogramArtifacts = run.HistogramArtifacts,
+            Recall = recallResult,
+            RecallSweep = recallSweep
         };
 
         if (string.IsNullOrWhiteSpace(opts.OutJson) == false)
@@ -143,6 +181,41 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
         }
 
         AnsiConsole.MarkupLine($"[bold]Verdict:[/]\n {summary.Verdict}");
+
+        // Render recall@K results if available
+        if (summary.RecallSweep is { Count: > 0 } sweep)
+        {
+            // Sweep mode: show a table of efSearch × recall@K
+            var table = new Table().Border(TableBorder.Rounded).Title("[blue]Recall@K by efSearch[/]");
+            table.AddColumn("efSearch");
+            var ks = sweep.Values.First().RecallAtK.Keys.OrderBy(k => k).ToList();
+            foreach (var k in ks)
+                table.AddColumn($"recall@{k}");
+            table.AddColumn("time");
+
+            foreach (var (ef, result) in sweep.OrderBy(kvp => kvp.Key))
+            {
+                var row = new List<string> { ef.ToString() };
+                foreach (var k in ks)
+                    row.Add(result.RecallAtK.TryGetValue(k, out var v) ? $"{v:P2}" : "-");
+                row.Add($"{result.MeasurementTime.TotalSeconds:F1}s");
+                table.AddRow(row.ToArray());
+            }
+
+            AnsiConsole.Write(table);
+        }
+        else if (summary.Recall?.RecallAtK is { Count: > 0 } recallAtK)
+        {
+            var recallLines = recallAtK
+                .OrderBy(kvp => kvp.Key)
+                .Select(kvp => $"recall@{kvp.Key} = {kvp.Value:P2}");
+            var recallText = string.Join(" | ", recallLines);
+            var cached = summary.Recall.GroundTruthCached ? " (ground truth cached)" : $" (ground truth computed in {summary.Recall.GroundTruthComputeTime.TotalSeconds:F1}s)";
+            var recallPanel = new Panel($"{recallText}\n[dim]{summary.Recall.QueryCount} queries, measurement: {summary.Recall.MeasurementTime.TotalSeconds:F1}s{cached}[/]")
+                .Header("Recall@K")
+                .BorderColor(Color.Blue);
+            AnsiConsole.Write(recallPanel);
+        }
 
         if (maxNetUtil >= 0.80 && summary.Options.NetworkLimitedMode == false)
         {

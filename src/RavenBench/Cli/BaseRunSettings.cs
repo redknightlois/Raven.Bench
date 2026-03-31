@@ -48,6 +48,14 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("Vector dimension (128, 384, 768, 1536)")]
     public int VectorDimension { get; init; } = 128;
 
+    [CommandOption("--vector-recall-ks")]
+    [Description("Comma-separated K values for recall@K measurement (e.g., 1,5,10). Computes ground truth via exact search and measures recall at each K.")]
+    public string? VectorRecallKs { get; init; }
+
+    [CommandOption("--vector-recall-ef-sweep")]
+    [Description("Comma-separated efSearch values to sweep for recall measurement (e.g., 16,32,64,128,256). Measures recall at each efSearch.")]
+    public string? VectorRecallEfSweep { get; init; }
+
     [CommandOption("--profile")]
     [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact")]
     public string? Profile { get; init; }
