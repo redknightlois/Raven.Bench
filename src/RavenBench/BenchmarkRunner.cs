@@ -980,24 +980,26 @@ public class BenchmarkRunner(RunOptions opts)
         var indexes = await store.Maintenance.SendAsync(
             new Raven.Client.Documents.Operations.Indexes.GetIndexNamesOperation(0, int.MaxValue));
 
-        if (indexes.Contains(indexName))
+        if (indexes.Contains(indexName) == false)
         {
-            Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' verified");
-            return;
+            Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' not found — creating...");
+            if (metadata.EnsureIndexExists != null)
+                await metadata.EnsureIndexExists(store, indexName);
+            else
+                throw new InvalidOperationException(
+                    $"Vector index '{indexName}' does not exist and cannot be auto-created. " +
+                    "Ensure the dataset was imported with the correct HNSW parameters.");
         }
 
-        Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' not found — creating...");
-        if (metadata.EnsureIndexExists != null)
-        {
-            await metadata.EnsureIndexExists(store, indexName);
-            Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' created and ready");
-        }
-        else
-        {
-            throw new InvalidOperationException(
-                $"Vector index '{indexName}' does not exist and cannot be auto-created. " +
-                "Ensure the dataset was imported with the correct HNSW parameters.");
-        }
+        // Wait for the index to be non-stale before starting benchmark steps
+        Console.WriteLine($"[Raven.Bench] Waiting for vector index '{indexName}' to be non-stale...");
+        using var session = store.OpenAsyncSession();
+        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
+        await session.Advanced.AsyncRawQuery<object>($"from index '{indexName}'")
+            .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
+            .Take(0)
+            .ToListAsync();
+        Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' is ready");
     }
 
     private static IWorkload BuildVectorSearchWorkload(
