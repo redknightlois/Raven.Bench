@@ -23,11 +23,14 @@ internal static class VerboseErrorTracker
 
     public static void LogError(string errorMessage, bool verbose)
     {
-        if (verbose == false || string.IsNullOrEmpty(errorMessage))
+        if (string.IsNullOrEmpty(errorMessage))
             return;
 
-        // Just count the error, don't print it immediately
-        ErrorCounts.AddOrUpdate(errorMessage, 1, (key, oldValue) => oldValue + 1);
+        var newCount = ErrorCounts.AddOrUpdate(errorMessage, 1, (_, v) => v + 1);
+
+        // Always print the first occurrence of each unique error so failures are visible without --verbose
+        if (newCount == 1)
+            Console.WriteLine($"[Raven.Bench] Error (first occurrence): {errorMessage}");
     }
 
     public static void Reset()
