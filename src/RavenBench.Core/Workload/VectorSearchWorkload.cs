@@ -56,11 +56,12 @@ public sealed class VectorSearchWorkload : IWorkload
         return new VectorSearchOperation
         {
             QueryVector = queryVector,
-            FieldName = _metadata.FieldName,
+            FieldName = _metadata.IndexedFieldName ?? _metadata.FieldName,
             TopK = _topK,
             MinimumSimilarity = _minimumSimilarity,
             UseExactSearch = _useExactSearch,
-            Quantization = _quantization
+            Quantization = _quantization,
+            ExpectedIndex = _metadata.IndexName
         };
     }
 }
