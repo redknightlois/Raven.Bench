@@ -995,7 +995,7 @@ public class BenchmarkRunner(RunOptions opts)
         Console.WriteLine($"[Raven.Bench] Waiting for vector index '{indexName}' to be non-stale...");
         using var session = store.OpenAsyncSession();
         session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-        await session.Advanced.AsyncRawQuery<object>($"from index '{indexName}'")
+        await session.Query<object>(indexName)
             .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
             .Take(0)
             .ToListAsync();
