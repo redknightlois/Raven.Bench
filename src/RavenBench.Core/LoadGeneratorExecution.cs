@@ -130,7 +130,7 @@ public static class LoadGeneratorExecution
     }
 }
 
-internal readonly struct WorkItemResult
+public readonly struct WorkItemResult
 {
     public bool IsError { get; init; }
     public string? ErrorDetails { get; init; }
@@ -139,7 +139,7 @@ internal readonly struct WorkItemResult
     public long LatencyMicros { get; init; }
 }
 
-internal sealed class LoadGeneratorCounters
+public sealed class LoadGeneratorCounters
 {
     private long _operations;
     private long _errors;
