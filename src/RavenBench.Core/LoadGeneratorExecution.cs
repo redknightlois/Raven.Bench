@@ -8,7 +8,7 @@ using RavenBench.Core.Workload;
 
 namespace RavenBench.Core;
 
-internal static class LoadGeneratorExecution
+public static class LoadGeneratorExecution
 {
     /// <summary>
     /// Optional callback invoked on the first occurrence of each unique error message.
