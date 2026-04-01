@@ -72,6 +72,8 @@ public class BenchmarkRunner(RunOptions opts)
     {
         // Reset error tracking for this benchmark run
         VerboseErrorTracker.Reset();
+        LoadGeneratorExecution.ResetErrorTracking();
+        LoadGeneratorExecution.OnFirstError = msg => Console.WriteLine($"[Raven.Bench] Error (first occurrence): {msg}");
 
         // Validate search engine compatibility with profile
         if (WorkloadProfiles.SupportsEngine(opts.Profile, opts.SearchEngine) == false)

@@ -10,6 +10,16 @@ namespace RavenBench.Core;
 
 internal static class LoadGeneratorExecution
 {
+    /// <summary>
+    /// Optional callback invoked on the first occurrence of each unique error message.
+    /// Wire up from BenchmarkRunner to surface errors without requiring --verbose.
+    /// </summary>
+    public static Action<string>? OnFirstError { get; set; }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _seenErrors = new();
+
+    public static void ResetErrorTracking() => _seenErrors.Clear();
+
     public static async Task<WorkItemResult> ExecuteOperationAsync(
         ITransport transport,
         OperationBase operation,
@@ -19,6 +29,7 @@ internal static class LoadGeneratorExecution
     {
         var start = Stopwatch.GetTimestamp();
         bool isError = false;
+        string? errorDetails = null;
         long bytesOut = 0;
         long bytesIn = 0;
         long latencyMicros = 0;
@@ -29,6 +40,9 @@ internal static class LoadGeneratorExecution
             if (result.IsSuccess == false)
             {
                 isError = true;
+                errorDetails = result.ErrorDetails;
+                if (errorDetails != null && _seenErrors.TryAdd(errorDetails, true))
+                    OnFirstError?.Invoke(errorDetails);
             }
             else
             {
@@ -36,9 +50,10 @@ internal static class LoadGeneratorExecution
                 bytesIn = result.BytesIn;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             isError = true;
+            errorDetails = ex.Message;
         }
         finally
         {
@@ -65,6 +80,7 @@ internal static class LoadGeneratorExecution
         return new WorkItemResult
         {
             IsError = isError,
+            ErrorDetails = errorDetails,
             BytesOut = bytesOut,
             BytesIn = bytesIn,
             LatencyMicros = latencyMicros
@@ -117,6 +133,7 @@ internal static class LoadGeneratorExecution
 internal readonly struct WorkItemResult
 {
     public bool IsError { get; init; }
+    public string? ErrorDetails { get; init; }
     public long BytesOut { get; init; }
     public long BytesIn { get; init; }
     public long LatencyMicros { get; init; }
