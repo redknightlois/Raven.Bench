@@ -551,15 +551,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         var engineName = searchEngine == IndexingEngine.Lucene ? "Lucene" : "Corax";
         var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
 
-        var indexName = quantization switch
-        {
-            VectorQuantization.Int8 => $"{CollectionName}/ByEmbeddingInt8{engineSuffix}",
-            VectorQuantization.Binary => $"{CollectionName}/ByEmbeddingBinary{engineSuffix}",
-            VectorQuantization.Int4 => $"{CollectionName}/ByEmbeddingInt4{engineSuffix}",
-            VectorQuantization.Int3 => $"{CollectionName}/ByEmbeddingInt3{engineSuffix}",
-            VectorQuantization.Int2 => $"{CollectionName}/ByEmbeddingInt2{engineSuffix}",
-            _ => $"{CollectionName}/ByEmbedding{engineSuffix}"
-        };
+        var indexName = VectorIndexNaming.GetIndexName(CollectionName, quantization, engineSuffix, numberOfEdges, numberOfCandidatesForIndexing);
 
         Console.WriteLine($"[Sphere] Creating vector index '{indexName}' (quantization: {quantization}, exact: {exactSearch}, engine: {engineName})...");
 

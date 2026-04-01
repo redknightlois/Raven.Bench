@@ -897,15 +897,7 @@ public class BenchmarkRunner(RunOptions opts)
 
             var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
             var metadata = await provider.GenerateQueryVectorsAsync(count: 1000);
-            metadata.IndexName = opts.VectorQuantization switch
-            {
-                VectorQuantization.Int8 => $"Words/ByEmbeddingInt8{engineSuffix}",
-                VectorQuantization.Binary => $"Words/ByEmbeddingBinary{engineSuffix}",
-                VectorQuantization.Int4 => $"Words/ByEmbeddingInt4{engineSuffix}",
-                VectorQuantization.Int3 => $"Words/ByEmbeddingInt3{engineSuffix}",
-                VectorQuantization.Int2 => $"Words/ByEmbeddingInt2{engineSuffix}",
-                _ => $"Words/ByEmbedding{engineSuffix}"
-            };
+            metadata.IndexName = VectorIndexNaming.GetIndexName("Words", opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
             metadata.CollectionName = "WordDocuments";
             return metadata;
         }
@@ -917,15 +909,7 @@ public class BenchmarkRunner(RunOptions opts)
             var provider = new Dataset.SphereDatasetProvider(profile);
             var dbName = provider.GetDatabaseName(profile);
             var metadata = await provider.GenerateQueryVectorsAsync(opts.Url, dbName, count: 1000);
-            metadata.IndexName = opts.VectorQuantization switch
-            {
-                VectorQuantization.Int8 => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbeddingInt8{engineSuffix}",
-                VectorQuantization.Binary => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbeddingBinary{engineSuffix}",
-                VectorQuantization.Int4 => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbeddingInt4{engineSuffix}",
-                VectorQuantization.Int3 => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbeddingInt3{engineSuffix}",
-                VectorQuantization.Int2 => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbeddingInt2{engineSuffix}",
-                _ => $"{Dataset.SphereDatasetProvider.CollectionName}/ByEmbedding{engineSuffix}"
-            };
+            metadata.IndexName = VectorIndexNaming.GetIndexName(Dataset.SphereDatasetProvider.CollectionName, opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
             metadata.CollectionName = Dataset.SphereDatasetProvider.CollectionName;
             metadata.IndexedFieldName = "Vector";
             return metadata;
