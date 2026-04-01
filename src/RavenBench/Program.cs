@@ -24,7 +24,9 @@ internal static class Program
             cfg.AddCommand<RateCommand>("rate")
                 .WithDescription("Run a rate-based benchmark with constant RPS steps.")
                 .WithExample("rate", "--url", "http://localhost:10101", "--database", "ycsb", "--reads", "75", "--writes", "25", "--compression", "raw:identity", "--step", "200..20000x1.5");
-
+            cfg.AddCommand<RecallCommand>("recall")
+                .WithDescription("Measure recall@K only (no throughput benchmark). Requires data already imported.")
+                .WithExample("recall", "--url", "http://localhost:10101", "--dataset", "sphere", "--dataset-profile", "100k", "--vector-quantization", "Int2", "--vector-recall-ef-sweep", "64,128,256,512");
 
         });
 
