@@ -43,6 +43,10 @@ public sealed class RecallMeasurement
             HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
 
+        // Ensure the index exists before querying
+        var indexName = GetIndexName(metadata, quantization, searchEngine);
+        await EnsureIndexExistsAsync(store, metadata, indexName);
+
         // Step 1: Compute or load ground truth
         var queryFingerprint = ComputeQueryFingerprint(metadata);
         var (groundTruth, cached, groundTruthTime) = await GetGroundTruthAsync(store, metadata, maxK, quantization, searchEngine, queryFingerprint);
@@ -86,6 +90,10 @@ public sealed class RecallMeasurement
         if (httpVersion != null)
             HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
+
+        // Ensure the index exists before querying
+        var indexName = GetIndexName(metadata, quantization, searchEngine);
+        await EnsureIndexExistsAsync(store, metadata, indexName);
 
         // Compute ground truth once
         var queryFingerprint = ComputeQueryFingerprint(metadata);
@@ -420,6 +428,21 @@ public sealed class RecallMeasurement
         var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
         var collection = metadata.CollectionName ?? "Words";
         return VectorIndexNaming.GetIndexName(collection, quantization, engineSuffix);
+    }
+
+    private static async Task EnsureIndexExistsAsync(IDocumentStore store, VectorWorkloadMetadata metadata, string indexName)
+    {
+        var indexes = await store.Maintenance.SendAsync(new Raven.Client.Documents.Operations.Indexes.GetIndexNamesOperation(0, int.MaxValue));
+        if (indexes.Contains(indexName))
+            return;
+
+        Console.WriteLine($"[Recall] Index '{indexName}' not found — creating via metadata callback...");
+        if (metadata.EnsureIndexExists == null)
+            throw new InvalidOperationException(
+                $"Index '{indexName}' does not exist and no EnsureIndexExists callback is configured. " +
+                "Run the benchmark first to create the index, or use the standalone recall command.");
+
+        await metadata.EnsureIndexExists(store, indexName);
     }
 
     // --- Ground truth document model ---

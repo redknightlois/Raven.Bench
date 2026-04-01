@@ -540,7 +540,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
     // --- Vector index ---
 
-    private static async Task CreateVectorIndexAsync(
+    public static async Task CreateVectorIndexAsync(
         IDocumentStore store,
         VectorQuantization quantization,
         bool exactSearch,

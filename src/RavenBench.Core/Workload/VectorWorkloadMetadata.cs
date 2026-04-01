@@ -55,4 +55,11 @@ public sealed class VectorWorkloadMetadata
     /// Used for building recall measurement queries.
     /// </summary>
     public string? CollectionName { get; set; }
+
+    /// <summary>
+    /// Optional callback to ensure the required vector index exists before querying.
+    /// Called by RecallMeasurement before running ground truth or approximate queries.
+    /// The callback receives (IDocumentStore, indexName) and should create the index if missing.
+    /// </summary>
+    public Func<object, string, Task>? EnsureIndexExists { get; set; }
 }

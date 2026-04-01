@@ -152,6 +152,12 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             metadata.IndexName = VectorIndexNaming.GetIndexName(SphereDatasetProvider.CollectionName, settings.VectorQuantization, engineSuffix);
             metadata.CollectionName = SphereDatasetProvider.CollectionName;
             metadata.IndexedFieldName = "Vector";
+            metadata.EnsureIndexExists = async (storeObj, indexName) =>
+            {
+                var s = (Raven.Client.Documents.IDocumentStore)storeObj;
+                await SphereDatasetProvider.CreateVectorIndexAsync(
+                    s, settings.VectorQuantization, false, settings.SearchEngine);
+            };
             return metadata;
         }
 
