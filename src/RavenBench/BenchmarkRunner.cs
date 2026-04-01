@@ -209,6 +209,12 @@ public class BenchmarkRunner(RunOptions opts)
             }
         }
 
+        // Pre-flight: verify the vector index exists before starting benchmark steps
+        if (vectorMetadata?.IndexName != null)
+        {
+            await EnsureVectorIndexExistsAsync(transport, opts, vectorMetadata);
+        }
+
         var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
 
         // Only preload for profiles that actually use bench/ prefix documents
@@ -948,6 +954,49 @@ public class BenchmarkRunner(RunOptions opts)
         if (name.StartsWith("clinicalwords"))
             return $"{name}_queries.json";
         throw new NotSupportedException($"Unknown dataset: {datasetName}");
+    }
+
+    private static async Task EnsureVectorIndexExistsAsync(
+        ITransport transport,
+        RunOptions opts,
+        VectorWorkloadMetadata metadata)
+    {
+        var indexName = metadata.IndexName!;
+        Console.WriteLine($"[Raven.Bench] Verifying vector index '{indexName}' exists...");
+
+        using var store = new Raven.Client.Documents.DocumentStore
+        {
+            Urls = [opts.Url],
+            Database = opts.Database
+        };
+        var httpVersion = opts.HttpVersion != "auto"
+            ? HttpHelper.ParseHttpVersion(HttpHelper.NormalizeHttpVersion(opts.HttpVersion))
+            : null;
+        if (httpVersion != null)
+            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
+        store.Initialize();
+
+        var indexes = await store.Maintenance.SendAsync(
+            new Raven.Client.Documents.Operations.Indexes.GetIndexNamesOperation(0, int.MaxValue));
+
+        if (indexes.Contains(indexName))
+        {
+            Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' verified");
+            return;
+        }
+
+        Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' not found — creating...");
+        if (metadata.EnsureIndexExists != null)
+        {
+            await metadata.EnsureIndexExists(store, indexName);
+            Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' created and ready");
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Vector index '{indexName}' does not exist and cannot be auto-created. " +
+                "Ensure the dataset was imported with the correct HNSW parameters.");
+        }
     }
 
     private static IWorkload BuildVectorSearchWorkload(

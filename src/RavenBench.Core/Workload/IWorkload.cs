@@ -120,16 +120,8 @@ public class VectorSearchOperation : OperationBase
         if (MinimumSimilarity > 0)
             whereClause += " >= $minSimilarity";
 
-        // Select index based on quantization type
-        var indexName = Quantization switch
-        {
-            VectorQuantization.Int8 => "Words/ByEmbeddingInt8",
-            VectorQuantization.Binary => "Words/ByEmbeddingBinary",
-            VectorQuantization.Int4 => "Words/ByEmbeddingInt4",
-            VectorQuantization.Int3 => "Words/ByEmbeddingInt3",
-            VectorQuantization.Int2 => "Words/ByEmbeddingInt2",
-            _ => "Words/ByEmbedding"
-        };
+        // Use explicit index name if set, otherwise fall back to convention
+        var indexName = ExpectedIndex ?? VectorIndexNaming.GetIndexName("Words", Quantization, "");
 
         return $"from index '{indexName}' where {whereClause}";
     }

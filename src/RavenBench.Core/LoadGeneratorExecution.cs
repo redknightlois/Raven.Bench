@@ -26,8 +26,15 @@ internal static class LoadGeneratorExecution
         try
         {
             var result = await transport.ExecuteAsync(operation, cancellationToken);
-            bytesOut = result.BytesOut;
-            bytesIn = result.BytesIn;
+            if (result.IsSuccess == false)
+            {
+                isError = true;
+            }
+            else
+            {
+                bytesOut = result.BytesOut;
+                bytesIn = result.BytesIn;
+            }
         }
         catch (Exception)
         {
