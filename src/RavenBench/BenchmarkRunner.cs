@@ -912,6 +912,13 @@ public class BenchmarkRunner(RunOptions opts)
             metadata.IndexName = VectorIndexNaming.GetIndexName(Dataset.SphereDatasetProvider.CollectionName, opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
             metadata.CollectionName = Dataset.SphereDatasetProvider.CollectionName;
             metadata.IndexedFieldName = "Vector";
+            metadata.EnsureIndexExists = async (storeObj, indexName) =>
+            {
+                var s = (IDocumentStore)storeObj;
+                await Dataset.SphereDatasetProvider.CreateVectorIndexAsync(
+                    s, opts.VectorQuantization, opts.VectorExactSearch, opts.SearchEngine,
+                    opts.VectorEdges, opts.VectorCandidates);
+            };
             return metadata;
         }
 
