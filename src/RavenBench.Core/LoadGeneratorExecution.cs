@@ -16,9 +16,9 @@ public static class LoadGeneratorExecution
     /// </summary>
     public static Action<string>? OnFirstError { get; set; }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _seenErrors = new();
+    private static int _firstErrorLogged = 0;
 
-    public static void ResetErrorTracking() => _seenErrors.Clear();
+    public static void ResetErrorTracking() => Interlocked.Exchange(ref _firstErrorLogged, 0);
 
     public static async Task<WorkItemResult> ExecuteOperationAsync(
         ITransport transport,
@@ -41,7 +41,7 @@ public static class LoadGeneratorExecution
             {
                 isError = true;
                 errorDetails = result.ErrorDetails;
-                if (errorDetails != null && _seenErrors.TryAdd(errorDetails, true))
+                if (errorDetails != null && Interlocked.Exchange(ref _firstErrorLogged, 1) == 0)
                     OnFirstError?.Invoke(errorDetails);
             }
             else
