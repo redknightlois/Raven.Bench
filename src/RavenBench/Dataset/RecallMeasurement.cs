@@ -331,6 +331,9 @@ public sealed class RecallMeasurement
 
             // recall@K: is the true nearest neighbor found anywhere in the ANN top-K?
             // This is monotonically non-decreasing with K — if found in top-1, it's in top-10.
+            if (truthIds.Length == 0)
+                continue; // skip queries with no ground truth results (e.g. empty index)
+
             var trueNearest = truthIds[0]; // ground truth is ordered by similarity, [0] is the true #1
             foreach (var k in recallKs)
             {
