@@ -14,12 +14,13 @@ public class InvariantsTests
     {
         var opts = new RunOptions { Url = "u", Database = "d", Profile = WorkloadProfile.Mixed };
         var knee = new StepResult { Concurrency = 16 };
-        var run = new BenchmarkRun 
-        { 
+        var run = new BenchmarkRun
+        {
             Steps = new List<StepResult> { new() { Concurrency = 8 }, knee },
             MaxNetworkUtilization = 0.5,
             ClientCompression = "identity",
-            EffectiveHttpVersion = "1.1"
+            EffectiveHttpVersion = "1.1",
+            EffectiveDatabase = "test-db"
         };
         var summary = new BenchmarkSummary
         {
