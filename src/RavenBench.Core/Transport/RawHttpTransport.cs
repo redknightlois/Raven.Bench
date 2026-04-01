@@ -737,10 +737,10 @@ public sealed class RawHttpTransport : ITransport
             string queryText = vectorOp.ToRqlQuery();
 
             // Build query parameters
-            var parameters = new Dictionary<string, object> { ["$vector"] = vectorOp.QueryVector };
+            var parameters = new Dictionary<string, object> { ["vector"] = vectorOp.QueryVector };
             if (vectorOp.MinimumSimilarity > 0)
             {
-                parameters["$minSimilarity"] = vectorOp.MinimumSimilarity;
+                parameters["minSimilarity"] = vectorOp.MinimumSimilarity;
             }
 
             // Build query payload
