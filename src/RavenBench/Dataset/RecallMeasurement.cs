@@ -419,15 +419,7 @@ public sealed class RecallMeasurement
         // Fall back to the convention-based naming
         var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
         var collection = metadata.CollectionName ?? "Words";
-        return quantization switch
-        {
-            VectorQuantization.Int8 => $"{collection}/ByEmbeddingInt8{engineSuffix}",
-            VectorQuantization.Binary => $"{collection}/ByEmbeddingBinary{engineSuffix}",
-            VectorQuantization.Int4 => $"{collection}/ByEmbeddingInt4{engineSuffix}",
-            VectorQuantization.Int3 => $"{collection}/ByEmbeddingInt3{engineSuffix}",
-            VectorQuantization.Int2 => $"{collection}/ByEmbeddingInt2{engineSuffix}",
-            _ => $"{collection}/ByEmbedding{engineSuffix}"
-        };
+        return VectorIndexNaming.GetIndexName(collection, quantization, engineSuffix);
     }
 
     // --- Ground truth document model ---

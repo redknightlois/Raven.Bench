@@ -336,15 +336,7 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         // Create vector index based on quantization setting
         // Include search engine suffix to allow both Lucene and Corax indexes to coexist
         var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
-        var indexName = quantization switch
-        {
-            VectorQuantization.Int8 => $"Words/ByEmbeddingInt8{engineSuffix}",
-            VectorQuantization.Binary => $"Words/ByEmbeddingBinary{engineSuffix}",
-            VectorQuantization.Int4 => $"Words/ByEmbeddingInt4{engineSuffix}",
-            VectorQuantization.Int3 => $"Words/ByEmbeddingInt3{engineSuffix}",
-            VectorQuantization.Int2 => $"Words/ByEmbeddingInt2{engineSuffix}",
-            _ => $"Words/ByEmbedding{engineSuffix}"
-        };
+        var indexName = VectorIndexNaming.GetIndexName("Words", quantization, engineSuffix);
 
         Console.WriteLine($"[ClinicalWords] Creating vector index '{indexName}' (quantization: {quantization}, exact: {exactSearch}, engine: {engineName})...");
 

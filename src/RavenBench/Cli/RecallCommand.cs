@@ -149,15 +149,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             var provider = new SphereDatasetProvider(profile);
             var dbName = provider.GetDatabaseName(profile);
             var metadata = await provider.GenerateQueryVectorsAsync(settings.Url, dbName, count: 1000);
-            metadata.IndexName = settings.VectorQuantization switch
-            {
-                VectorQuantization.Int8 => $"{SphereDatasetProvider.CollectionName}/ByEmbeddingInt8{engineSuffix}",
-                VectorQuantization.Int2 => $"{SphereDatasetProvider.CollectionName}/ByEmbeddingInt2{engineSuffix}",
-                VectorQuantization.Int3 => $"{SphereDatasetProvider.CollectionName}/ByEmbeddingInt3{engineSuffix}",
-                VectorQuantization.Int4 => $"{SphereDatasetProvider.CollectionName}/ByEmbeddingInt4{engineSuffix}",
-                VectorQuantization.Binary => $"{SphereDatasetProvider.CollectionName}/ByEmbeddingBinary{engineSuffix}",
-                _ => $"{SphereDatasetProvider.CollectionName}/ByEmbedding{engineSuffix}"
-            };
+            metadata.IndexName = VectorIndexNaming.GetIndexName(SphereDatasetProvider.CollectionName, settings.VectorQuantization, engineSuffix);
             metadata.CollectionName = SphereDatasetProvider.CollectionName;
             metadata.IndexedFieldName = "Vector";
             return metadata;

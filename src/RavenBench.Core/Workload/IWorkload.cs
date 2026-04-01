@@ -174,6 +174,41 @@ public enum VectorQuantization
     Int2
 }
 
+/// <summary>
+/// Centralized vector index naming convention.
+/// Format: {collection}/ByEmbedding[Quantization]-{engine}[-m{edges}-ef{candidates}]
+/// </summary>
+public static class VectorIndexNaming
+{
+    public static string GetIndexName(
+        string collection,
+        VectorQuantization quantization,
+        string engineSuffix,
+        int? numberOfEdges = null,
+        int? numberOfCandidatesForIndexing = null)
+    {
+        var quantSuffix = quantization switch
+        {
+            VectorQuantization.Int8 => "Int8",
+            VectorQuantization.Binary => "Binary",
+            VectorQuantization.Int4 => "Int4",
+            VectorQuantization.Int3 => "Int3",
+            VectorQuantization.Int2 => "Int2",
+            _ => ""
+        };
+
+        var hnswSuffix = "";
+        if (numberOfEdges.HasValue || numberOfCandidatesForIndexing.HasValue)
+        {
+            var m = numberOfEdges.HasValue ? $"-m{numberOfEdges.Value}" : "";
+            var ef = numberOfCandidatesForIndexing.HasValue ? $"-ef{numberOfCandidatesForIndexing.Value}" : "";
+            hnswSuffix = $"{m}{ef}";
+        }
+
+        return $"{collection}/ByEmbedding{quantSuffix}{engineSuffix}{hnswSuffix}";
+    }
+}
+
 public class InsertOperation<T> : OperationBase
 {
     public required string Id { get; init; }
