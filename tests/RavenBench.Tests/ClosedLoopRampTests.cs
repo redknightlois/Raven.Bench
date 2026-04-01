@@ -85,7 +85,7 @@ public class ClosedLoopRampTests
                 steps.Add(res);
                 concurrency *= 2;
             }
-            return new BenchmarkRun { Steps = steps, MaxNetworkUtilization = 0, ClientCompression = "identity", EffectiveHttpVersion = "1.1" };
+            return new BenchmarkRun { Steps = steps, MaxNetworkUtilization = 0, ClientCompression = "identity", EffectiveHttpVersion = "1.1", EffectiveDatabase = "test-db" };
         }
     }
 }

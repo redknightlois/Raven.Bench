@@ -367,7 +367,8 @@ internal static class IntegrationTestHelper
             Steps = steps,
             MaxNetworkUtilization = steps.Max(s => s.NetworkUtilization),
             ClientCompression = "identity",
-            EffectiveHttpVersion = "1.1"
+            EffectiveHttpVersion = "1.1",
+            EffectiveDatabase = "test-db"
         };
     }
 }
