@@ -212,7 +212,7 @@ public class BenchmarkRunner(RunOptions opts)
         // Pre-flight: verify the vector index exists before starting benchmark steps
         if (vectorMetadata?.IndexName != null)
         {
-            await EnsureVectorIndexExistsAsync(transport, opts, vectorMetadata);
+            await EnsureVectorIndexExistsAsync(transport, opts, vectorMetadata, effectiveDatabase);
         }
 
         var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
@@ -959,7 +959,8 @@ public class BenchmarkRunner(RunOptions opts)
     private static async Task EnsureVectorIndexExistsAsync(
         ITransport transport,
         RunOptions opts,
-        VectorWorkloadMetadata metadata)
+        VectorWorkloadMetadata metadata,
+        string effectiveDatabase)
     {
         var indexName = metadata.IndexName!;
         Console.WriteLine($"[Raven.Bench] Verifying vector index '{indexName}' exists...");
@@ -967,7 +968,7 @@ public class BenchmarkRunner(RunOptions opts)
         using var store = new Raven.Client.Documents.DocumentStore
         {
             Urls = [opts.Url],
-            Database = opts.Database
+            Database = effectiveDatabase
         };
         var httpVersion = opts.HttpVersion != "auto"
             ? HttpHelper.ParseHttpVersion(HttpHelper.NormalizeHttpVersion(opts.HttpVersion))
