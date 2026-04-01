@@ -33,6 +33,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
     private static readonly Dictionary<string, SphereProfile> Profiles = new(StringComparer.OrdinalIgnoreCase)
     {
+        { "10k", new(10_000, "Sphere-10K") },
         { "100k", new(100_000, "Sphere-100K") },
         { "1m", new(1_000_000, "Sphere-1M") },
         { "10m", new(10_000_000, "Sphere-10M") },
@@ -338,7 +339,8 @@ public sealed class SphereDatasetProvider : IDatasetProvider
             QueryVectors = selected,
             FieldName = "Embedding",
             VectorDimensions = VectorDimensions,
-            BaseVectorCount = totalDocs
+            BaseVectorCount = totalDocs,
+            CollectionName = CollectionName
         };
     }
 

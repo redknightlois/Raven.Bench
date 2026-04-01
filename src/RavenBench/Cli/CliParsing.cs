@@ -266,6 +266,10 @@ internal static class CliParsing
         };
     }
 
+    // Public wrappers for the recall-only command
+    public static int[] ParseRecallKsRaw(string recallKs) => ParseRecallKs(recallKs, int.MaxValue);
+    public static int[] ParseEfSweepRaw(string efSweep) => ParseEfSweep(efSweep);
+
     private static int[] ParseRecallKs(string recallKs, int vectorTopK)
     {
         if (string.IsNullOrWhiteSpace(recallKs))
