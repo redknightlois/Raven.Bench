@@ -329,29 +329,31 @@ public sealed class RecallMeasurement
                 annIds[j] = session.Advanced.GetDocumentId(results[j]);
             }
 
-            // recall@K: is the true nearest neighbor found anywhere in the ANN top-K?
-            // This is monotonically non-decreasing with K — if found in top-1, it's in top-10.
+            // recall@K = |truth_top_K ∩ ann_top_K| / K, averaged over queries (standard
+            // ANN-benchmarks definition). Intersection at each K via a HashSet of the ANN
+            // top-K. The accumulator is total-matches / total-truth-items so that variable
+            // truth lengths (e.g. when an index returns < K docs) are handled correctly.
             if (truthIds.Length == 0)
                 continue; // skip queries with no ground truth results (e.g. empty index)
 
-            var trueNearest = truthIds[0]; // ground truth is ordered by similarity, [0] is the true #1
             foreach (var k in recallKs)
             {
                 var annAtK = annIds.Length >= k ? annIds.AsSpan(0, k) : annIds.AsSpan();
+                var truthAtK = truthIds.Length >= k ? truthIds.AsSpan(0, k) : truthIds.AsSpan();
 
-                bool found = false;
-                foreach (var annId in annAtK)
+                var annSet = new HashSet<string>(annAtK.Length);
+                foreach (var id in annAtK)
+                    annSet.Add(id);
+
+                int matches = 0;
+                foreach (var truthId in truthAtK)
                 {
-                    if (annId == trueNearest)
-                    {
-                        found = true;
-                        break;
-                    }
+                    if (annSet.Contains(truthId))
+                        matches++;
                 }
 
-                if (found)
-                    hits[k]++;
-                queryCount[k]++;
+                hits[k] += matches;
+                queryCount[k] += truthAtK.Length;
             }
 
             if ((i + 1) % 100 == 0 || i == metadata.QueryVectorCount - 1)
