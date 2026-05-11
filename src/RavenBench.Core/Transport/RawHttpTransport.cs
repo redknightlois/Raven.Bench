@@ -10,6 +10,7 @@ using RavenBench.Core.Workload;
 using RavenBench.Core.Metrics;
 using RavenBench.Core;
 using RavenBench.Core.Diagnostics;
+using ZstdSharp;
 
 namespace RavenBench.Core.Transport;
 
@@ -63,6 +64,17 @@ public sealed class RawHttpTransport : ITransport
         {
             _bufferPool.TryEnqueue(new byte[32768]); // 32KB buffers
         }
+    }
+
+    private static bool NeedsZstdDecode(HttpResponseMessage resp)
+    {
+        var enc = resp.Content.Headers.ContentEncoding;
+        if (enc == null || enc.Count == 0) return false;
+        foreach (var e in enc)
+        {
+            if (string.Equals(e, "zstd", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
@@ -767,25 +779,36 @@ public sealed class RawHttpTransport : ITransport
                     return new TransportResult(0, 0, errorDetails);
                 }
 
-                // Read and buffer the response
+                // Read and buffer the wire response (post-AutomaticDecompression for gzip/deflate/brotli;
+                // raw bytes for zstd/identity).
                 await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
 
                 if (_bufferPool.TryDequeue(out var buffer) == false)
                     buffer = new byte[32768];
 
-                using var ms = new MemoryStream();
+                using var wireMs = new MemoryStream();
                 int bytesRead;
                 while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
                 {
-                    ms.Write(buffer, 0, bytesRead);
+                    wireMs.Write(buffer, 0, bytesRead);
                 }
                 _bufferPool.TryEnqueue(buffer);
 
-                long bytesIn = ms.Length;
-                ms.Position = 0;
+                long bytesIn = wireMs.Length;
+                wireMs.Position = 0;
 
-                // Parse JSON from buffered response
-                using var doc = await JsonDocument.ParseAsync(ms, cancellationToken: ct).ConfigureAwait(false);
+                // If the server applied an encoding HttpClient cannot auto-decompress (zstd),
+                // wrap the buffered wire bytes in the matching decoder before parsing JSON.
+                Stream parseStream = wireMs;
+                Stream? zstdStream = null;
+                if (NeedsZstdDecode(resp))
+                {
+                    zstdStream = new DecompressionStream(wireMs);
+                    parseStream = zstdStream;
+                }
+
+                using var doc = await JsonDocument.ParseAsync(parseStream, cancellationToken: ct).ConfigureAwait(false);
+                zstdStream?.Dispose();
 
                 var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
                     ? indexProp.GetString()
