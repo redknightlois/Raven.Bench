@@ -69,11 +69,32 @@ namespace RavenBench.Core
             _cpuTracker.Start();
             _serverTracker?.Start();
 
+            using var exTracker = FirstChanceExceptionTracker.BeginStep();
+
             try
             {
                 // Measurement phase
                 var (latencyRecorder, metrics) = await loadGenerator.ExecuteMeasurementAsync(
                     measurementTime, cancellationToken);
+
+                var exSnap = exTracker.Take();
+                if (exSnap.Total > 0)
+                {
+                    var perOp = metrics.OperationsCompleted > 0
+                        ? (double)exSnap.Total / metrics.OperationsCompleted
+                        : 0.0;
+                    Console.Error.WriteLine(
+                        $"[Raven.Bench] WARNING: {exSnap.Total} first-chance exceptions during measurement step (concurrency={currentStepValue}, ops={metrics.OperationsCompleted}, ratio={perOp:F2}/op).");
+                    foreach (var (type, count) in exSnap.ByType.Take(5))
+                        Console.Error.WriteLine($"[Raven.Bench]   {count,10:N0}  {type}");
+                    if (exSnap.FirstType != null)
+                    {
+                        Console.Error.WriteLine($"[Raven.Bench] First exception: {exSnap.FirstType}: {exSnap.FirstMessage}");
+                        if (string.IsNullOrEmpty(exSnap.FirstStack) == false)
+                            Console.Error.WriteLine(exSnap.FirstStack);
+                    }
+                    Console.Error.WriteLine("[Raven.Bench] Benchmarks should not throw on the hot path; fix the transport or treat results as untrusted.");
+                }
 
                 // Build step result
                 var result = BuildStepResultAsync(
