@@ -37,6 +37,10 @@ public sealed class RecallSettings : CommandSettings
     [CommandOption("--engine")]
     [Description("Search engine: corax or lucene (default: corax)")]
     public IndexingEngine SearchEngine { get; init; } = IndexingEngine.Corax;
+
+    [CommandOption("--index-name")]
+    [Description("Override the index name to query (default: derived from collection/quantization/engine)")]
+    public string? IndexNameOverride { get; init; }
 }
 
 public sealed class RecallCommand : AsyncCommand<RecallSettings>
@@ -149,7 +153,9 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             var provider = new SphereDatasetProvider(profile);
             var dbName = provider.GetDatabaseName(profile);
             var metadata = await provider.GenerateQueryVectorsAsync(settings.Url, dbName, count: 1000);
-            metadata.IndexName = VectorIndexNaming.GetIndexName(SphereDatasetProvider.CollectionName, settings.VectorQuantization, engineSuffix);
+            metadata.IndexName = !string.IsNullOrWhiteSpace(settings.IndexNameOverride)
+                ? settings.IndexNameOverride
+                : VectorIndexNaming.GetIndexName(SphereDatasetProvider.CollectionName, settings.VectorQuantization, engineSuffix);
             metadata.CollectionName = SphereDatasetProvider.CollectionName;
             metadata.IndexedFieldName = "Vector";
             metadata.EnsureIndexExists = async (storeObj, indexName) =>

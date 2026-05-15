@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Raven.Client;
 using Raven.Client.Documents;
 using RavenBench.Core;
 using RavenBench.Core.Metrics;
@@ -264,7 +265,7 @@ public sealed class RecallMeasurement
             var ids = new string[results.Count];
             for (int j = 0; j < results.Count; j++)
             {
-                ids[j] = session.Advanced.GetDocumentId(results[j]);
+                ids[j] = ExtractDocumentId(results[j]);
             }
 
             groundTruth[i] = ids;
@@ -326,7 +327,7 @@ public sealed class RecallMeasurement
             var annIds = new string[results.Count];
             for (int j = 0; j < results.Count; j++)
             {
-                annIds[j] = session.Advanced.GetDocumentId(results[j]);
+                annIds[j] = ExtractDocumentId(results[j]);
             }
 
             // recall@K = |truth_top_K ∩ ann_top_K| / K, averaged over queries (standard
@@ -418,6 +419,14 @@ public sealed class RecallMeasurement
             VectorQuantization.Int2 => $"embedding.f32_i2('{fieldName}')",
             _ => $"'{fieldName}'"
         };
+    }
+
+    private static string ExtractDocumentId(BlittableJsonReaderObject blittable)
+    {
+        if (blittable.TryGet(Constants.Documents.Metadata.Key, out BlittableJsonReaderObject metadata) &&
+            metadata.TryGet(Constants.Documents.Metadata.Id, out string id))
+            return id;
+        return string.Empty;
     }
 
     private static string GetIndexName(
