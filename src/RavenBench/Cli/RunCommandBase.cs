@@ -217,7 +217,7 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
             AnsiConsole.Write(recallPanel);
         }
 
-        if (maxNetUtil >= 0.80 && summary.Options.NetworkLimitedMode == false)
+        if (maxNetUtil >= 0.80 && summary.Options.NetworkLimitedMode == false && ResultAnalyzer.IsLoopbackUrl(summary.Options.Url) == false)
         {
             AnsiConsole.MarkupLine("[yellow]WARNING: Network-limited. >80% link utilization. Identity runs may be hose-limited.[/]");
         }

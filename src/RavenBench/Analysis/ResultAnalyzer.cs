@@ -47,11 +47,25 @@ public static class ResultAnalyzer
         if (knee == null) return "unknown";
 
         var s = knee;
-        if (s.NetworkUtilization >= 0.85 && s.Raw.P95 > 0 && s.Throughput > 0)
+        if (s.NetworkUtilization >= 0.85 && s.Raw.P95 > 0 && s.Throughput > 0 && IsLoopbackUrl(opts.Url) == false)
             return $"network-limited at ~{opts.LinkMbps:F0} Mb/s (est.)";
         if (s.ClientCpu >= 0.85)
             return "client-limited (CPU)";
         // Without server counters, we can't attribute server/async/disk yet.
         return "unknown (collect server counters for attribution)";
+    }
+
+    public static bool IsLoopbackUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return false;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) == false)
+            return false;
+        var host = uri.Host;
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (System.Net.IPAddress.TryParse(host, out var ip))
+            return System.Net.IPAddress.IsLoopback(ip);
+        return false;
     }
 }
