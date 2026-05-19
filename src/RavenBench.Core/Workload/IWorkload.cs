@@ -84,6 +84,12 @@ public class VectorSearchOperation : OperationBase
     public string? ExpectedIndex { get; init; }
 
     /// <summary>
+    /// Optional HNSW search candidate budget (efSearch / numberOfCandidates).
+    /// When null the server-side default applies.
+    /// </summary>
+    public int? EfSearch { get; init; }
+
+    /// <summary>
     /// Builds the RQL embedding selector based on quantization type.
     /// Uses RavenDB's vector quantization functions for efficient search.
     /// </summary>
@@ -111,7 +117,12 @@ public class VectorSearchOperation : OperationBase
     public string ToRqlQuery()
     {
         var embeddingSelector = GetEmbeddingSelector();
-        var searchClause = $"vector.search({embeddingSelector}, $vector)";
+        // When efSearch is supplied, call vector.search with the explicit
+        // (minSimilarity, numberOfCandidates) overload so the server uses
+        // the bench-controlled ef instead of the server default.
+        string searchClause = EfSearch.HasValue
+            ? $"vector.search({embeddingSelector}, $vector, 0.0, $efSearch)"
+            : $"vector.search({embeddingSelector}, $vector)";
 
         if (UseExactSearch)
             searchClause = $"exact({searchClause})";

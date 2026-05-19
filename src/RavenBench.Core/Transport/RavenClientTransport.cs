@@ -211,6 +211,11 @@ public sealed class RavenClientTransport : ITransport
                             query = query.AddParameter("minSimilarity", vectorOp.MinimumSimilarity);
                         }
 
+                        if (vectorOp.EfSearch.HasValue)
+                        {
+                            query = query.AddParameter("efSearch", vectorOp.EfSearch.Value);
+                        }
+
                         // Execute query and capture statistics
                         var results = await query.Statistics(out var stats).ToListAsync(ct).ConfigureAwait(false);
 

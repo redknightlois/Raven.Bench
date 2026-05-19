@@ -11,6 +11,7 @@ public sealed class VectorSearchWorkload : IWorkload
     private readonly float _minimumSimilarity;
     private readonly bool _useExactSearch;
     private readonly VectorQuantization _quantization;
+    private readonly int? _efSearch;
 
     /// <summary>
     /// Creates a vector search workload for benchmarking RavenDB vector search performance.
@@ -25,7 +26,8 @@ public sealed class VectorSearchWorkload : IWorkload
         int topK = 10,
         float minimumSimilarity = 0.0f,
         bool useExactSearch = false,
-        VectorQuantization quantization = VectorQuantization.None)
+        VectorQuantization quantization = VectorQuantization.None,
+        int? efSearch = null)
     {
         _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
 
@@ -43,6 +45,7 @@ public sealed class VectorSearchWorkload : IWorkload
         _minimumSimilarity = minimumSimilarity;
         _useExactSearch = useExactSearch;
         _quantization = quantization;
+        _efSearch = efSearch;
     }
 
     /// <summary>
@@ -61,7 +64,8 @@ public sealed class VectorSearchWorkload : IWorkload
             MinimumSimilarity = _minimumSimilarity,
             UseExactSearch = _useExactSearch,
             Quantization = _quantization,
-            ExpectedIndex = _metadata.IndexName
+            ExpectedIndex = _metadata.IndexName,
+            EfSearch = _efSearch
         };
     }
 }

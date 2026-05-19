@@ -754,6 +754,10 @@ public sealed class RawHttpTransport : ITransport
             {
                 parameters["minSimilarity"] = vectorOp.MinimumSimilarity;
             }
+            if (vectorOp.EfSearch.HasValue)
+            {
+                parameters["efSearch"] = vectorOp.EfSearch.Value;
+            }
 
             // Build query payload
             var payload = new

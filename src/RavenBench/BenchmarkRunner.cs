@@ -1021,7 +1021,8 @@ public class BenchmarkRunner(RunOptions opts)
             topK: opts.VectorTopK,
             minimumSimilarity: opts.VectorMinSimilarity,
             useExactSearch: effectiveExactSearch,
-            quantization: effectiveQuantization);
+            quantization: effectiveQuantization,
+            efSearch: opts.VectorSearchEf);
     }
 
     private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion, string? databaseOverride = null)
