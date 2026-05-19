@@ -106,6 +106,7 @@ public sealed record RunOptions
     public int VectorDimension { get; init; } = 128; // Default to SIFT1M
     public int? VectorEdges { get; init; } // HNSW M parameter (numberOfEdges)
     public int? VectorCandidates { get; init; } // HNSW efConstruction parameter (numberOfCandidatesForIndexing)
+    public int? VectorSearchEf { get; init; } // HNSW efSearch parameter (numberOfCandidates at query time)
 
     /// <summary>
     /// K values at which to compute recall (e.g., [1, 5, 10]).

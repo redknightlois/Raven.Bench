@@ -56,6 +56,10 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("HNSW efConstruction parameter (candidates during index build). Higher = better recall, slower indexing.")]
     public int? VectorCandidates { get; init; }
 
+    [CommandOption("--vector-search-ef")]
+    [Description("HNSW efSearch parameter at query time (numberOfCandidates). When set, vector.search uses this candidate budget instead of the server default.")]
+    public int? VectorSearchEf { get; init; }
+
     [CommandOption("--vector-recall-ks")]
     [Description("Comma-separated K values for recall@K measurement (e.g., 1,5,10). Computes ground truth via exact search and measures recall at each K.")]
     public string? VectorRecallKs { get; init; }
