@@ -22,7 +22,6 @@ namespace RavenBench.Core
         private readonly int _maxConcurrency;
         private readonly Random _rng;
         private readonly object _workloadLock = new();
-        private long _expectedIntervalMicros;
 
         public int Concurrency => _maxConcurrency;
         public double? TargetThroughput => _targetRps;
@@ -55,7 +54,7 @@ namespace RavenBench.Core
 
         public void SetBaselineLatency(long baselineLatencyMicros)
         {
-            _expectedIntervalMicros = baselineLatencyMicros;
+            // Rate mode derives its expected schedule from the target rate, not from a measured baseline.
         }
 
         private async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteAsync(
@@ -67,9 +66,6 @@ namespace RavenBench.Core
             var measurementStopwatch = Stopwatch.StartNew();
             RollingRateStats? rollingStats = null;
             RollingRateSampler? rollingSampler = null;
-
-            // Pre-compute the expected interval so coordinated omission correction stays accurate.
-            ResolveIntervalMicros(targetRps);
 
             await using var scheduler = new TokenBucketScheduler(
                 targetRps,
@@ -136,16 +132,19 @@ namespace RavenBench.Core
                 {
                     try
                     {
-                        await foreach (var _ in scheduler.ConsumeAsync(cancellationToken))
+                        await foreach (var dueTimestamp in scheduler.ConsumeAsync(cancellationToken))
                         {
                             var operation = CreateOperation();
                             onOperationScheduled();
 
+                            // Measure from the token's scheduled time, not pickup: any wait while all
+                            // workers were busy is real client-observed latency, not to be omitted.
                             var result = await LoadGeneratorExecution.ExecuteOperationAsync(
                                 _transport,
                                 operation,
                                 latencyRecorder,
-                                baselineLatencyMicros: 0,
+                                dueTimestamp,
+                                expectedIntervalMicros: 0,
                                 cancellationToken);
                             counters.Record(result);
                         }
@@ -172,31 +171,23 @@ namespace RavenBench.Core
             }
         }
 
-        private long ResolveIntervalMicros(double targetRps)
-        {
-            var intervalMicros = targetRps > 0
-                ? Math.Max(1, (long)Math.Round(1_000_000.0 / targetRps))
-                : _expectedIntervalMicros;
-
-            if (intervalMicros > 0)
-                Interlocked.Exchange(ref _expectedIntervalMicros, intervalMicros);
-
-            return intervalMicros;
-        }
-
         /// <summary>
-        /// Simple token-bucket scheduler that releases work permits at the requested rate.
-        /// Workers consume the permits independently, which keeps pacing stable even
-        /// when the producer thread is delayed or preempted.
+        /// Token-bucket scheduler that releases work permits at the requested rate. Each permit carries
+        /// its scheduled (due) time as a <see cref="Stopwatch.GetTimestamp"/> value, computed against the
+        /// ideal arrival schedule (start + n / rate). Workers consume permits independently, so when they
+        /// fall behind the due times sit in the past and the lag surfaces as latency instead of being lost.
         /// </summary>
         private sealed class TokenBucketScheduler : IAsyncDisposable
         {
-            private readonly Channel<bool> _tokens;
+            private readonly Channel<long> _tokens;
             private readonly double _ratePerSecond;
             private readonly int _burstCapacity;
             private readonly CancellationToken _cancellationToken;
             private readonly CancellationTokenSource _producerCts = new();
             private readonly Task _producerTask;
+            private readonly long _startStamp;
+            private readonly double _ticksPerToken;
+            private long _sequence;
             private double _carry;
             private int _stopped;
 
@@ -205,8 +196,10 @@ namespace RavenBench.Core
                 _ratePerSecond = Math.Max(ratePerSecond, 0);
                 _burstCapacity = Math.Max(1, burstCapacity);
                 _cancellationToken = cancellationToken;
+                _startStamp = Stopwatch.GetTimestamp();
+                _ticksPerToken = _ratePerSecond > 0 ? Stopwatch.Frequency / _ratePerSecond : 0;
 
-                _tokens = Channel.CreateBounded<bool>(new BoundedChannelOptions(_burstCapacity)
+                _tokens = Channel.CreateBounded<long>(new BoundedChannelOptions(_burstCapacity)
                 {
                     SingleReader = false,
                     SingleWriter = true,
@@ -216,7 +209,7 @@ namespace RavenBench.Core
                 _producerTask = Task.Run(ReplenishAsync);
             }
 
-            public IAsyncEnumerable<bool> ConsumeAsync(CancellationToken cancellationToken)
+            public IAsyncEnumerable<long> ConsumeAsync(CancellationToken cancellationToken)
             {
                 return _tokens.Reader.ReadAllAsync(cancellationToken);
             }
@@ -279,7 +272,7 @@ namespace RavenBench.Core
                                 if (wholeTokens > 0)
                                 {
                                     _carry -= wholeTokens;
-                                    await WriteTokensAsync(_tokens.Writer, wholeTokens, _producerCts.Token).ConfigureAwait(false);
+                                    await WriteTokensAsync(wholeTokens, _producerCts.Token).ConfigureAwait(false);
                                 }
                             }
 
@@ -315,15 +308,19 @@ namespace RavenBench.Core
                 return Math.Clamp(intervalMs, 0.1, 1.0);
             }
 
-            private static async Task WriteTokensAsync(ChannelWriter<bool> writer, int count, CancellationToken cancellationToken)
+            private async Task WriteTokensAsync(int count, CancellationToken cancellationToken)
             {
+                var writer = _tokens.Writer;
                 for (int i = 0; i < count; i++)
                 {
+                    var due = _startStamp + (long)(_sequence * _ticksPerToken);
+                    _sequence++;
+
                     // Fast-path: try to write synchronously; only await when the channel is momentarily full.
-                    if (writer.TryWrite(true))
+                    if (writer.TryWrite(due))
                         continue;
 
-                    await writer.WriteAsync(true, cancellationToken).ConfigureAwait(false);
+                    await writer.WriteAsync(due, cancellationToken).ConfigureAwait(false);
                 }
             }
 

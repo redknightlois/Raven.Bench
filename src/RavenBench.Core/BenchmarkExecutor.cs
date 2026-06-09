@@ -164,7 +164,7 @@ namespace RavenBench.Core
                 SnmpIoWriteBytesPerSec = serverMetrics.SnmpIoWriteBytesPerSec,
                 ServerSnmpRequestsPerSec = serverMetrics.ServerSnmpRequestsPerSec,
                 SnmpErrorsPerSec = serverMetrics.SnmpErrorsPerSec,
-                NetworkUtilization = metrics.NetworkUtilization,
+                NetworkUtilization = LoadGeneratorExecution.Utilization(metrics.BytesOut, metrics.BytesIn, metrics.Duration, _options.LinkMbps),
                 Reason = metrics.Reason,
                 RollingRate = metrics.RollingRate
             };
@@ -221,7 +221,7 @@ namespace RavenBench.Core
         public double ErrorRate { get; init; }
         public long BytesOut { get; init; }
         public long BytesIn { get; init; }
-        public double NetworkUtilization { get; init; }
+        public TimeSpan Duration { get; init; }
         public string? Reason { get; init; }
         public RollingRateStats? RollingRate { get; init; }
         /// <summary>

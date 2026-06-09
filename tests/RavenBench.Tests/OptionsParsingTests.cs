@@ -330,7 +330,7 @@ public class CliParsingTests
                 ErrorRate = 0.0,
                 BytesOut = 100,
                 BytesIn = 50,
-                NetworkUtilization = 0.01,
+                Duration = duration,
                 ScheduledOperations = 1,
                 OperationsCompleted = 1
             };

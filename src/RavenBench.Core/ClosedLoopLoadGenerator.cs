@@ -79,6 +79,7 @@ namespace RavenBench.Core
                             _transport,
                             operation,
                             latencyRecorder,
+                            Stopwatch.GetTimestamp(),
                             _baselineLatencyMicros,
                             cancellationToken);
 
@@ -111,18 +112,20 @@ namespace RavenBench.Core
 
         private void UpdateBaselineFromWarmup(Recorder? warmupRecorder)
         {
-            if (warmupRecorder == null)
+            // A calibrated baseline (unloaded service time) is the correct coordinated-omission interval;
+            // never override it with the warmup floor, which is already inflated by queueing at this concurrency.
+            if (_baselineLatencyMicros > 0 || warmupRecorder == null)
                 return;
 
             var histogram = warmupRecorder.GetIntervalHistogram();
             if (histogram == null || histogram.TotalCount == 0)
                 return;
 
-            var median = histogram.GetValueAtPercentile(50.0);
-            if (median <= 0)
+            var floor = histogram.GetValueAtPercentile(1.0);
+            if (floor <= 0)
                 return;
 
-            Interlocked.Exchange(ref _baselineLatencyMicros, (long)median);
+            Interlocked.Exchange(ref _baselineLatencyMicros, (long)floor);
         }
     }
 }

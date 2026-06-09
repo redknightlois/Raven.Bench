@@ -20,14 +20,21 @@ public static class LoadGeneratorExecution
 
     public static void ResetErrorTracking() => Interlocked.Exchange(ref _firstErrorLogged, 0);
 
+    /// <summary>
+    /// Executes one operation and records its latency measured from <paramref name="startTimestamp"/>
+    /// (a <see cref="Stopwatch.GetTimestamp"/> value). Callers pass the moment the request was *due*:
+    /// for closed-loop that is the instant the worker dequeues it; for rate-based load it is the token's
+    /// scheduled time, so queue wait under saturation is included rather than coordinately omitted.
+    /// When <paramref name="expectedIntervalMicros"/> &gt; 0, HDRHistogram backfills omitted samples.
+    /// </summary>
     public static async Task<WorkItemResult> ExecuteOperationAsync(
         ITransport transport,
         OperationBase operation,
         LatencyRecorder latencyRecorder,
-        long baselineLatencyMicros,
+        long startTimestamp,
+        long expectedIntervalMicros,
         CancellationToken cancellationToken)
     {
-        var start = Stopwatch.GetTimestamp();
         bool isError = false;
         string? errorDetails = null;
         long bytesOut = 0;
@@ -58,13 +65,13 @@ public static class LoadGeneratorExecution
         finally
         {
             var end = Stopwatch.GetTimestamp();
-            latencyMicros = Math.Max(1, (long)Math.Round((end - start) * 1_000_000.0 / Stopwatch.Frequency));
+            latencyMicros = Math.Max(1, (long)Math.Round((end - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency));
             if (isError == false)
             {
                 try
                 {
-                    if (baselineLatencyMicros > 0)
-                        latencyRecorder.RecordWithExpectedInterval(latencyMicros, baselineLatencyMicros);
+                    if (expectedIntervalMicros > 0)
+                        latencyRecorder.RecordWithExpectedInterval(latencyMicros, expectedIntervalMicros);
                     else
                         latencyRecorder.Record(latencyMicros);
                 }
@@ -109,7 +116,7 @@ public static class LoadGeneratorExecution
             ErrorRate = errorRate,
             BytesOut = bytesOut,
             BytesIn = bytesIn,
-            NetworkUtilization = CalculateNetworkUtilization(bytesOut, bytesIn, duration),
+            Duration = duration,
             Reason = isWarmup ? "warmup" : null,
             ScheduledOperations = scheduledCount,
             OperationsCompleted = completed,
@@ -117,16 +124,19 @@ public static class LoadGeneratorExecution
         };
     }
 
-    public static double CalculateNetworkUtilization(long bytesOut, long bytesIn, TimeSpan duration)
+    /// <summary>
+    /// Fraction (0..1) of a <paramref name="linkMbps"/> link consumed by the combined in+out byte volume.
+    /// Lives here, the one place that owns the byte counters, but requires link capacity — a deployment
+    /// fact — to be supplied by the caller rather than assumed.
+    /// </summary>
+    public static double Utilization(long bytesOut, long bytesIn, TimeSpan duration, double linkMbps)
     {
-        if (duration.TotalSeconds <= 0)
+        var linkBps = linkMbps * 1_000_000.0;
+        if (duration.TotalSeconds <= 0 || linkBps <= 0)
             return 0;
 
-        var totalBytes = bytesOut + bytesIn;
-        var bytesPerSecond = totalBytes / duration.TotalSeconds;
-        var bitsPerSecond = bytesPerSecond * 8;
-
-        return Math.Min(bitsPerSecond / (1_000_000_000.0 / 100), 100.0);
+        var bitsPerSecond = (bytesOut + bytesIn) / duration.TotalSeconds * 8.0;
+        return Math.Min(bitsPerSecond / linkBps, 1.0);
     }
 }
 
