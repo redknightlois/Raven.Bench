@@ -748,28 +748,33 @@ public sealed class RawHttpTransport : ITransport
             // Build the RQL query using the shared helper method
             string queryText = vectorOp.ToRqlQuery();
 
-            // Build query parameters
-            var parameters = new Dictionary<string, object> { ["vector"] = vectorOp.QueryVector };
-            if (vectorOp.MinimumSimilarity > 0)
+            // Pre-sized for the cohere-768 worst case (~10KB); 16KB avoids a Grow.
+            var bufferWriter = new ArrayBufferWriter<byte>(16384);
+            using (var writer = new Utf8JsonWriter(bufferWriter))
             {
-                parameters["minSimilarity"] = vectorOp.MinimumSimilarity;
+                writer.WriteStartObject();
+                writer.WriteString("Query", queryText);
+                writer.WritePropertyName("QueryParameters");
+                writer.WriteStartObject();
+                writer.WritePropertyName("vector");
+                writer.WriteStartArray();
+                var vec = vectorOp.QueryVector;
+                for (int i = 0; i < vec.Length; i++)
+                    writer.WriteNumberValue(vec[i]);
+                writer.WriteEndArray();
+                if (vectorOp.EfSearch.HasValue)
+                    writer.WriteNumber("efSearch", vectorOp.EfSearch.Value);
+                else if (vectorOp.MinimumSimilarity > 0)
+                    writer.WriteNumber("minSimilarity", vectorOp.MinimumSimilarity);
+                writer.WriteEndObject();
+                writer.WriteBoolean("MetadataOnly", false);
+                writer.WriteNumber("PageSize", vectorOp.TopK);
+                writer.WriteEndObject();
             }
-            if (vectorOp.EfSearch.HasValue)
-            {
-                parameters["efSearch"] = vectorOp.EfSearch.Value;
-            }
-
-            // Build query payload
-            var payload = new
-            {
-                Query = queryText,
-                QueryParameters = parameters,
-                MetadataOnly = false,
-                PageSize = vectorOp.TopK
-            };
-
-            var queryPayload = JsonSerializer.Serialize(payload);
-            req.Content = new StringContent(queryPayload, Encoding.UTF8, "application/json");
+            var jsonBytes = bufferWriter.WrittenMemory;
+            var jsonByteCount = jsonBytes.Length;
+            req.Content = new ReadOnlyMemoryContent(jsonBytes);
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -836,7 +841,7 @@ public sealed class RawHttpTransport : ITransport
                 }
 
                 // Calculate byte counts
-                long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+                long bodyBytes = req.Content?.Headers.ContentLength ?? jsonByteCount;
                 long headerBytes = CalculateHeaderSize(req);
                 long bytesOut = headerBytes + bodyBytes;
 

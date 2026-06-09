@@ -425,7 +425,9 @@ public sealed class RecallMeasurement
     {
         if (blittable.TryGet(Constants.Documents.Metadata.Key, out BlittableJsonReaderObject metadata) &&
             metadata.TryGet(Constants.Documents.Metadata.Id, out string id))
+        {
             return id;
+        }
         return string.Empty;
     }
 
