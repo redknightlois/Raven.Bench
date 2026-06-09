@@ -4,11 +4,10 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using RavenBench;
+using RavenBench.Core;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
-using RavenBench.Core;
 using RavenBench.Core.Workload;
 using Xunit;
 
@@ -30,62 +29,26 @@ public class ClosedLoopRampTests
             Warmup = TimeSpan.FromMilliseconds(50),
             Duration = TimeSpan.FromMilliseconds(100),
             Step = new StepPlan(2, 8, 2),
-            OutJson = null,
-            OutCsv = null,
             Profile = WorkloadProfile.Mixed
         };
 
-        var runner = new BenchmarkRunnerForTest(opts, new MixedProfileWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024));
-        var run = await runner.RunAsyncWithTransport(new TestTransport(baseLatencyMs: 1));
+        using var transport = new TestTransport(baseLatencyMs: 1);
+        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024);
+        using var serverTracker = new ServerMetricsTracker(transport, opts);
+        var executor = new BenchmarkExecutor(opts, transport, workload, new ProcessCpuTracker(), serverTracker);
+        var rng = new Random(42);
 
-        run.Steps.Count.Should().BeGreaterOrEqualTo(2);
-        run.Steps.All(s => s.Throughput >= 0).Should().BeTrue();
-        run.Steps.All(s => s.ErrorRate >= 0 && s.ErrorRate <= 1).Should().BeTrue();
-    }
+        var steps = new List<StepResult>();
+        for (int concurrency = 2; concurrency <= 8; concurrency *= 2)
+        {
+            var generator = new ClosedLoopLoadGenerator(transport, workload, concurrency, rng);
+            var (_, step) = await executor.ExecuteStepAsync(generator, steps.Count, concurrency, CancellationToken.None);
+            steps.Add(step);
+        }
 
-    private sealed class BenchmarkRunnerForTest : BenchmarkRunner
-    {
-        private readonly IWorkload _w;
-        private readonly RunOptions _opts;
-        public BenchmarkRunnerForTest(RunOptions opts, IWorkload w) : base(opts)
-        {
-            _w = w;
-            _opts = opts;
-        }
-        public async Task<BenchmarkRun> RunAsyncWithTransport(ITransport transport)
-        {
-            var steps = new List<StepResult>();
-            var concurrency = 2;
-            var tracker = new ProcessCpuTracker();
-            using var serverTracker = new ServerMetricsTracker(transport, _opts);
-            var context = new BenchmarkContext
-            {
-                Transport = transport,
-                Workload = _w,
-                CpuTracker = tracker,
-                ServerTracker = serverTracker,
-                Rng = new Random(42),
-                Options = _opts
-            };
-            
-            while (concurrency <= 8)
-            {
-                _ = await RunClosedLoopAsync(context, new StepParameters 
-                { 
-                    Concurrency = concurrency, 
-                    Duration = TimeSpan.FromMilliseconds(50), 
-                    Record = false 
-                });
-                var (res, _) = await RunClosedLoopAsync(context, new StepParameters 
-                { 
-                    Concurrency = concurrency, 
-                    Duration = TimeSpan.FromMilliseconds(100), 
-                    Record = true 
-                });
-                steps.Add(res);
-                concurrency *= 2;
-            }
-            return new BenchmarkRun { Steps = steps, MaxNetworkUtilization = 0, ClientCompression = "identity", EffectiveHttpVersion = "1.1", EffectiveDatabase = "test-db" };
-        }
+        steps.Count.Should().BeGreaterOrEqualTo(2);
+        steps.All(s => s.Throughput >= 0).Should().BeTrue();
+        steps.All(s => s.ErrorRate >= 0 && s.ErrorRate <= 1).Should().BeTrue();
+        steps.All(s => s.NetworkUtilization >= 0 && s.NetworkUtilization <= 1).Should().BeTrue();
     }
 }
