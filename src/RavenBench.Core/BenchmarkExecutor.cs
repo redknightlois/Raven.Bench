@@ -123,6 +123,21 @@ namespace RavenBench.Core
 
             var serverMetrics = _serverTracker?.Current ?? new ServerMetrics();
 
+            var query = metrics.Query;
+            var hasQueries = query is { HasQueries: true };
+            var topIndexes = hasQueries
+                ? query!.IndexUsage
+                    .OrderByDescending(kvp => kvp.Value)
+                    .Take(5)
+                    .Select(kvp => new IndexUsageSummary
+                    {
+                        IndexName = kvp.Key,
+                        UsageCount = kvp.Value,
+                        UsagePercent = (double)kvp.Value / query.QueryOperations * 100.0
+                    })
+                    .ToList()
+                : null;
+
             var result = new StepResult
             {
                 Concurrency = loadGenerator.Concurrency,
@@ -166,7 +181,16 @@ namespace RavenBench.Core
                 SnmpErrorsPerSec = serverMetrics.SnmpErrorsPerSec,
                 NetworkUtilization = LoadGeneratorExecution.Utilization(metrics.BytesOut, metrics.BytesIn, metrics.Duration, _options.LinkMbps),
                 Reason = metrics.Reason,
-                RollingRate = metrics.RollingRate
+                RollingRate = metrics.RollingRate,
+                QueryOperations = hasQueries ? query!.QueryOperations : null,
+                IndexUsage = hasQueries ? query!.IndexUsage : null,
+                TopIndexes = topIndexes,
+                MinResultCount = query?.MinResultCount,
+                MaxResultCount = query?.MaxResultCount,
+                AvgResultCount = query?.AvgResultCount,
+                TotalResults = hasQueries ? query!.TotalResults : null,
+                StaleQueryCount = hasQueries && query!.StaleQueries > 0 ? query.StaleQueries : null,
+                QueryProfile = _options.QueryProfile != QueryProfile.VoronEquality ? _options.QueryProfile : null
             };
 
             // Collect SNMP metrics if configured
@@ -224,6 +248,7 @@ namespace RavenBench.Core
         public TimeSpan Duration { get; init; }
         public string? Reason { get; init; }
         public RollingRateStats? RollingRate { get; init; }
+        public QueryStatsSnapshot? Query { get; init; }
         /// <summary>
         /// Number of operations scheduled (may exceed completed if queueing occurs).
         /// </summary>

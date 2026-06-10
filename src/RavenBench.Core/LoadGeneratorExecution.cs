@@ -40,6 +40,9 @@ public static class LoadGeneratorExecution
         long bytesOut = 0;
         long bytesIn = 0;
         long latencyMicros = 0;
+        string? indexName = null;
+        int? resultCount = null;
+        bool? isStale = null;
 
         try
         {
@@ -55,6 +58,9 @@ public static class LoadGeneratorExecution
             {
                 bytesOut = result.BytesOut;
                 bytesIn = result.BytesIn;
+                indexName = result.IndexName;
+                resultCount = result.ResultCount;
+                isStale = result.IsStale;
             }
         }
         catch (Exception ex)
@@ -90,7 +96,10 @@ public static class LoadGeneratorExecution
             ErrorDetails = errorDetails,
             BytesOut = bytesOut,
             BytesIn = bytesIn,
-            LatencyMicros = latencyMicros
+            LatencyMicros = latencyMicros,
+            IndexName = indexName,
+            ResultCount = resultCount,
+            IsStale = isStale
         };
     }
 
@@ -120,7 +129,8 @@ public static class LoadGeneratorExecution
             Reason = isWarmup ? "warmup" : null,
             ScheduledOperations = scheduledCount,
             OperationsCompleted = completed,
-            RollingRate = rollingRate
+            RollingRate = rollingRate,
+            Query = counters.QuerySnapshot()
         };
     }
 
@@ -147,10 +157,14 @@ public readonly struct WorkItemResult
     public long BytesOut { get; init; }
     public long BytesIn { get; init; }
     public long LatencyMicros { get; init; }
+    public string? IndexName { get; init; }
+    public int? ResultCount { get; init; }
+    public bool? IsStale { get; init; }
 }
 
 public sealed class LoadGeneratorCounters
 {
+    private readonly QueryStats _query = new();
     private long _operations;
     private long _errors;
     private long _bytesOut;
@@ -169,10 +183,13 @@ public sealed class LoadGeneratorCounters
             Interlocked.Add(ref _bytesOut, result.BytesOut);
         if (result.BytesIn != 0)
             Interlocked.Add(ref _bytesIn, result.BytesIn);
+
+        _query.Record(result.IndexName, result.ResultCount, result.IsStale);
     }
 
     public long OperationsCompleted => Volatile.Read(ref _operations);
     public long ErrorCount => Volatile.Read(ref _errors);
     public long BytesOut => Volatile.Read(ref _bytesOut);
     public long BytesIn => Volatile.Read(ref _bytesIn);
+    public QueryStatsSnapshot QuerySnapshot() => _query.Snapshot();
 }

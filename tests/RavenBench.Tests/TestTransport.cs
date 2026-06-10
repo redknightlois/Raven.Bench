@@ -20,10 +20,16 @@ public sealed class TestTransport : ITransport
 {
     private readonly int _baseLatencyMs;
     private readonly ServerMetrics _serverMetrics;
+    private readonly string? _indexName;
+    private readonly int? _resultCount;
+    private readonly bool? _isStale;
 
-    public TestTransport(int baseLatencyMs = 10)
+    public TestTransport(int baseLatencyMs = 10, string? indexName = null, int? resultCount = null, bool? isStale = null)
     {
         _baseLatencyMs = baseLatencyMs;
+        _indexName = indexName;
+        _resultCount = resultCount;
+        _isStale = isStale;
         _serverMetrics = new ServerMetrics
         {
             CpuUsagePercent = 25.0,
@@ -44,7 +50,7 @@ public sealed class TestTransport : ITransport
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
         await Task.Delay(_baseLatencyMs, ct);
-        return new TransportResult(bytesOut: 200, bytesIn: 150);
+        return new TransportResult(bytesOut: 200, bytesIn: 150, indexName: _indexName, resultCount: _resultCount, isStale: _isStale);
     }
 
     public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
