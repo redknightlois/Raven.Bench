@@ -12,35 +12,21 @@ namespace RavenBench.Dataset;
 /// <summary>
 /// Manages dataset download, caching, and import into RavenDB.
 /// </summary>
-public sealed class DatasetManager
+public sealed class DatasetManager : IDisposable
 {
     private readonly string _cacheDir;
     private readonly HttpClient _httpClient;
-    private readonly Dictionary<string, IDatasetProvider> _providers;
 
     public DatasetManager(string? cacheDir = null)
     {
         _cacheDir = cacheDir ?? Path.Combine(Path.GetTempPath(), "RavenBench", "datasets");
         Directory.CreateDirectory(_cacheDir);
         _httpClient = new HttpClient { Timeout = TimeSpan.FromHours(2) };
-
-        // Register known dataset providers
-        _providers = new Dictionary<string, IDatasetProvider>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "stackoverflow", new StackOverflowDatasetProvider() },
-            { "clinicalwords100d", new ClinicalWordsDatasetProvider(100) },
-            { "clinicalwords300d", new ClinicalWordsDatasetProvider(300) },
-            { "clinicalwords600d", new ClinicalWordsDatasetProvider(600) },
-            { "sphere", new SphereDatasetProvider() },
-        };
     }
 
-    /// <summary>
-    /// Gets a dataset provider by name, or null if not found.
-    /// </summary>
-    public IDatasetProvider? GetProvider(string datasetName)
+    public void Dispose()
     {
-        return _providers.TryGetValue(datasetName, out var provider) ? provider : null;
+        _httpClient.Dispose();
     }
 
     /// <summary>
@@ -50,7 +36,6 @@ public sealed class DatasetManager
     {
         var localPath = Path.Combine(_cacheDir, file.FileName);
 
-        // Check if already downloaded
         if (File.Exists(localPath))
         {
             Console.WriteLine($"[Dataset] Using cached {file.FileName}");
@@ -67,27 +52,29 @@ public sealed class DatasetManager
         var downloadedBytes = 0L;
 
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        await using var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, useAsync: true);
-
-        var buffer = new byte[8192];
-        int bytesRead;
-        var lastProgressReport = DateTime.UtcNow;
-
-        while ((bytesRead = await contentStream.ReadAsync(buffer, ct)) > 0)
+        var tempPath = localPath + ".downloading";
+        await using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, useAsync: true))
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
-            downloadedBytes += bytesRead;
+            var buffer = new byte[8192];
+            int bytesRead;
+            var lastProgressReport = DateTime.UtcNow;
 
-            // Report progress every 2 seconds
-            if (DateTime.UtcNow - lastProgressReport > TimeSpan.FromSeconds(2))
+            while ((bytesRead = await contentStream.ReadAsync(buffer, ct)) > 0)
             {
-                var progressPct = totalBytes > 0 ? (double)downloadedBytes / totalBytes * 100 : 0;
-                Console.WriteLine($"[Dataset] Downloaded {FormatBytes(downloadedBytes)} / {FormatBytes(totalBytes)} ({progressPct:F1}%)");
-                progress?.Report(progressPct);
-                lastProgressReport = DateTime.UtcNow;
+                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+                downloadedBytes += bytesRead;
+
+                if (DateTime.UtcNow - lastProgressReport > TimeSpan.FromSeconds(2))
+                {
+                    var progressPct = totalBytes > 0 ? (double)downloadedBytes / totalBytes * 100 : 0;
+                    Console.WriteLine($"[Dataset] Downloaded {FormatBytes(downloadedBytes)} / {FormatBytes(totalBytes)} ({progressPct:F1}%)");
+                    progress?.Report(progressPct);
+                    lastProgressReport = DateTime.UtcNow;
+                }
             }
         }
 
+        File.Move(tempPath, localPath);
         Console.WriteLine($"[Dataset] Download complete: {file.FileName}");
         return localPath;
     }
@@ -140,7 +127,6 @@ public sealed class DatasetManager
 
         Console.WriteLine($"[Dataset] Import operation started");
 
-        // Wait for operation to complete (Smuggler.ImportAsync returns Operation<SmugglerResult>)
         try
         {
             await operation.WaitForCompletionAsync();
@@ -163,10 +149,8 @@ public sealed class DatasetManager
 
         foreach (var file in dataset.Files)
         {
-            // Download
             var localPath = await DownloadAsync(file, progress: null, ct);
 
-            // Import
             await ImportDumpAsync(localPath, serverUrl, databaseName, httpVersion, ct);
         }
 
@@ -208,7 +192,6 @@ public sealed class DatasetManager
                 return false;
             }
 
-            // Verify it has the expected collections
             using var session = store.OpenAsyncSession(databaseName);
             var questionsExist = await session.Advanced.AsyncRawQuery<object>("from questions")
                 .Take(1)
@@ -231,15 +214,6 @@ public sealed class DatasetManager
         {
             Console.WriteLine($"[Dataset] Error checking if dataset exists: {ex.Message}");
             return false;
-        }
-    }
-
-    public void ClearCache()
-    {
-        if (Directory.Exists(_cacheDir))
-        {
-            Console.WriteLine($"[Dataset] Clearing cache directory: {_cacheDir}");
-            Directory.Delete(_cacheDir, recursive: true);
         }
     }
 

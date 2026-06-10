@@ -28,7 +28,7 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
         var runner = new BenchmarkRunner(opts);
         var run = await runner.RunAsync();
 
-        var knee = KneeFinder.FindKnee(run.Steps, opts.KneeThroughputDelta, opts.KneeP95Delta, opts.MaxErrorRate);
+        var knee = KneeFinder.FindKnee(run.Steps, opts.MaxErrorRate);
         var (snmpTimeSeries, snmpAggregations) = SnmpSummaryBuilder.Build(run.ServerMetricsHistory);
 
         var tempSummary = new BenchmarkSummary

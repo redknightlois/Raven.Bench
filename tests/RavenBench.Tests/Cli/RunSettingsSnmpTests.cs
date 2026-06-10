@@ -24,7 +24,7 @@ public class RunSettingsSnmpTests
     }
 
     [Fact]
-    public void ToRunOptions_MapsSnmpEnabledByDefault()
+    public void ToRunOptions_MapsSnmpDisabledByDefault()
     {
         var settings = new ClosedSettings
         {
@@ -35,7 +35,7 @@ public class RunSettingsSnmpTests
 
         var options = settings.ToRunOptions();
 
-        options.Snmp.Enabled.Should().BeTrue();
+        options.Snmp.Enabled.Should().BeFalse();
     }
 
     [Fact]

@@ -31,7 +31,7 @@ public static class HttpHelper
         "1.1" => HttpVersion.Version11,
         "2" => HttpVersion.Version20,
         "3" => HttpVersion.Version30,
-        _ => HttpVersion.Version11 // Fallback to HTTP/1.1
+        _ => throw new ArgumentException($"Unknown HTTP version: '{httpVersionString}'", nameof(httpVersionString))
     };
 
     /// <summary>
@@ -68,7 +68,7 @@ public static class HttpHelper
         "auto" => (HttpVersion.Version30, HttpVersionPolicy.RequestVersionOrLower),
         "1.1" => (HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact),
         "1.0" => (HttpVersion.Version10, HttpVersionPolicy.RequestVersionExact),
-        _ => (HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact)
+        _ => throw new ArgumentException($"Unknown HTTP version: '{requestedHttpVersion}'", nameof(requestedHttpVersion))
     };
 
     /// <summary>
@@ -131,7 +131,6 @@ public static class HttpHelper
     /// <param name="policy">The HTTP version policy (defaults to RequestVersionExact for strict protocol enforcement).</param>
     public static void ConfigureHttpVersion(DocumentStore store, Version httpVersion, HttpVersionPolicy policy = HttpVersionPolicy.RequestVersionExact)
     {
-        // Configure HTTP client with proper connection pooling for all versions
         store.Conventions.CreateHttpClient = (handler) =>
         {
             ConfigureHandlerForHighConcurrency(handler);

@@ -15,7 +15,7 @@ This README is written for engineers who don’t need all the internals — just
 - Workload mixes: `--reads/--writes/--updates` by weights or percents.
 - Key distributions: `uniform`, `zipfian`, `latest`.
 - Metrics per step: throughput, p50/p90/p95/p99 (raw and RTT-normalized), error rate, bytes in/out, client CPU, network utilization, and server metrics (when available).
-- Knee rule (default): Δthroughput < 5% AND Δp95 > 20% (or errors > 0.5%).
+- Knee detection: the knee is the last step before the quality score (throughput / p99.9 latency) degrades or stagnates once p50 enters the danger zone (≥100 ms), or before errors exceed `--max-errors`.
 - Structured outputs: JSON summary and per-step CSV.
 
 Note: v0 implements closed-loop only and very limited read scenarios (it was designed to study full writes bottlenecks).
@@ -65,7 +65,6 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
     - `--verbose`: aggregate and print a summary of top error messages.
 - Expert options
   - `--max-errors <percent>`: stop early if error rate exceeds this per step (default: `0.5%`).
-  - `--knee-rule dthr=<percent>,dp95=<percent>`: threshold deltas for knee detection (default: `5%,20%`).
   - `--latencies <normalized|raw|both>`: which latencies to print to console.
   - SNMP telemetry (opt-in server monitoring):
     - `--snmp-enabled`: enable SNMP collection (default: false)

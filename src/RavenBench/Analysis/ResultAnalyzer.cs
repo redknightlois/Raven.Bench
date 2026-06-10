@@ -26,8 +26,8 @@ public static class ResultAnalyzer
             Verdict = BuildVerdict(run, knee, opts)
         };
 
-        // Add reliability warnings
-        if (knee != null)
+        // "end-of-range" marks the fallback knee when the ramp ended without degradation
+        if (knee != null && knee.Reason != "end-of-range")
         {
             report.UnreliableBeyondKnee = true;
             report.Warnings.Add($"Stop trusting numbers past C={knee.Concurrency} (knee).");

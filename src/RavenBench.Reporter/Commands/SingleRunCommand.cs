@@ -19,7 +19,7 @@ public static class SingleRunCommand
         string absoluteOutputPath = Path.GetFullPath(outputPath);
 
         BenchmarkSummary summary = await SummaryLoader.LoadAsync(summaryPath);
-        string html = SingleRunReportHtmlBuilder.Build(summary, title, notes);
+        string html = TemplateHtmlBuilder.Build("single-run.html", "__SUMMARY_JSON__", summary, title, notes);
 
         (string htmlOutputPath, bool htmlOnly) = await ReportRenderUtilities.WriteHtmlAsync(html, absoluteOutputPath);
 

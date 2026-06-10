@@ -80,6 +80,44 @@ public enum LoadShape
     Rate
 }
 
+public enum TransportKind
+{
+    Raw,
+    Client
+}
+
+public enum KeyDistributionKind
+{
+    Uniform,
+    Zipfian,
+    Latest
+}
+
+public enum CompressionMode
+{
+    Identity,
+    Gzip,
+    Zstd,
+    Brotli,
+    Deflate
+}
+
+public static class CompressionModes
+{
+    /// <summary>
+    /// Maps a compression mode to its Accept-Encoding wire token.
+    /// </summary>
+    public static string ToWireFormat(this CompressionMode mode) => mode switch
+    {
+        CompressionMode.Identity => "identity",
+        CompressionMode.Gzip => "gzip",
+        CompressionMode.Zstd => "zstd",
+        CompressionMode.Brotli => "br",
+        CompressionMode.Deflate => "deflate",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
+    };
+}
+
 /// <summary>
 /// Configuration options for running a benchmark, including server settings,
 /// workload parameters, concurrency settings, and output options.
@@ -122,24 +160,21 @@ public sealed record RunOptions
     /// </summary>
     public int[]? VectorRecallEfSweep { get; init; }
 
-    public string Distribution { get; init; } = "uniform";
+    public KeyDistributionKind Distribution { get; init; } = KeyDistributionKind.Uniform;
     public int DocumentSizeBytes { get; init; } = 1024;
-    public string Transport { get; init; } = "raw";
-    public string Compression { get; init; } = "identity";
-    public string Mode { get; init; } = "closed";
+    public TransportKind Transport { get; init; } = TransportKind.Raw;
+    public CompressionMode Compression { get; init; } = CompressionMode.Identity;
     public int? RateWorkers { get; init; } // Max concurrent operations for rate mode (null = auto)
     public TimeSpan Warmup { get; init; } = TimeSpan.FromSeconds(20);
     public TimeSpan Duration { get; init; } = TimeSpan.FromSeconds(60);
     public double MaxErrorRate { get; init; } = 0.005; // 0.5%
-    public double KneeThroughputDelta { get; init; } = 0.05; // 5%
-    public double KneeP95Delta { get; init; } = 0.20; // 20%
     public string? OutJson { get; init; }
     public string? OutCsv { get; init; }
     public int Seed { get; init; } = 42;
     public int Preload { get; init; } = 0;
     public string? RawEndpoint { get; init; }
-    public int? ThreadPoolWorkers { get; init; } = 8192;
-    public int? ThreadPoolIOCP { get; init; } = 8192;
+    public int ThreadPoolWorkers { get; init; } = 8192;
+    public int ThreadPoolIOCP { get; init; } = 8192;
     public string? Notes { get; init; }
     public int? ExpectedCores { get; init; }
     public bool NetworkLimitedMode { get; init; } = false;

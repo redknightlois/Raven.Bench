@@ -67,8 +67,8 @@ namespace RavenBench.Cli
             new("Client Net %", _ => true, s => s.NetworkBytesMeasured ? FormatPercent(s.NetworkUtilization) : "n/a", TableScope.Both, c => c.RightAligned()),
 
             // Server Metrics (non-SNMP)
-            new("Server CPU %", summary => !summary.Options.SnmpEnabled, s => FormatNumber(s.ServerCpu), TableScope.Both, c => c.RightAligned()),
-            new("Server Mem MB", summary => !summary.Options.SnmpEnabled, s => FormatInt(s.ServerMemoryMB), TableScope.Both, c => c.RightAligned()),
+            new("Server CPU %", summary => summary.Options.SnmpEnabled == false, s => FormatNumber(s.ServerCpu), TableScope.Both, c => c.RightAligned()),
+            new("Server Mem MB", summary => summary.Options.SnmpEnabled == false, s => FormatInt(s.ServerMemoryMB), TableScope.Both, c => c.RightAligned()),
             
             // Server IO (non-SNMP)
             new("Server IO R", summary => summary.Steps.Any(s => s.ServerIoReadOps.HasValue), s => FormatInt(s.ServerIoReadOps), TableScope.Both, c => c.RightAligned()),

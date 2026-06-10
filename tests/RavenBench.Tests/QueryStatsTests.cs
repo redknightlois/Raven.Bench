@@ -51,9 +51,9 @@ public class QueryStatsTests
         {
             Url = "http://localhost:10101",
             Database = "so",
-            Distribution = "uniform",
-            Transport = "raw",
-            Compression = "identity",
+            Distribution = KeyDistributionKind.Uniform,
+            Transport = TransportKind.Raw,
+            Compression = CompressionMode.Identity,
             Warmup = TimeSpan.Zero,
             Duration = TimeSpan.FromMilliseconds(100),
             Profile = WorkloadProfile.Mixed

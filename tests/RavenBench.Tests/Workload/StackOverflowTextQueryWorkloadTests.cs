@@ -242,7 +242,7 @@ public class QuestionsByTitleSearchWorkloadTests
             QueryProfile = QueryProfile.TextPrefix
         };
 
-        Action act = () => BenchmarkRunner.BuildWorkload(opts, incompleteMetadata, usersMetadata: null, vectorMetadata: null);
+        Action act = () => WorkloadFactory.BuildWorkload(opts, incompleteMetadata, usersMetadata: null, vectorMetadata: null);
 
         act.Should().Throw<ArgumentException>("workloads require complete metadata without fallbacks");
     }

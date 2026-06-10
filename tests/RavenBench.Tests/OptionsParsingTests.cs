@@ -20,15 +20,12 @@ public class CliParsingTests
             Url = "http://localhost:10101",
             Database = "ycsb",
             Concurrency = "16..256x1.5",
-            KneeRule = "dthr=3%,dp95=30%",
             MaxErrors = "1%",
             Profile = "mixed"
         };
 
         var opts = settings.ToRunOptions();
 
-        opts.KneeThroughputDelta.Should().BeApproximately(0.03, 1e-9);
-        opts.KneeP95Delta.Should().BeApproximately(0.30, 1e-9);
         opts.MaxErrorRate.Should().BeApproximately(0.01, 1e-9);
         opts.Shape.Should().Be(LoadShape.Closed);
         opts.Step.Start.Should().Be(16);
@@ -218,6 +215,48 @@ public class CliParsingTests
         stepPlan.Start.Should().Be(16);
         stepPlan.End.Should().Be(256);
         stepPlan.Factor.Should().Be(2.0); // Default factor
+    }
+
+    [Fact]
+    public void Rejects_Step_Plan_With_Factor_Not_Greater_Than_One()
+    {
+        var act = () => CliParsing.ParseStepPlan("8..512x1");
+
+        act.Should().Throw<ArgumentException>().WithMessage("*factor*");
+    }
+
+    [Theory]
+    [InlineData("0.5%", 0.005)]
+    [InlineData("0.5", 0.5)]
+    [InlineData("5", 0.05)]
+    [InlineData("100", 1.0)]
+    public void ParsePercent_Normalizes_To_Fraction(string input, double expected)
+    {
+        CliParsing.ParsePercent(input).Should().BeApproximately(expected, 1e-9);
+    }
+
+    [Fact]
+    public void ParsePercent_Rejects_Values_Above_100()
+    {
+        var act = () => CliParsing.ParsePercent("150");
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Throws_On_Invalid_Search_Engine()
+    {
+        var settings = new ClosedSettings
+        {
+            Url = "http://localhost:8080",
+            Database = "test",
+            Profile = "mixed",
+            SearchEngine = "sphinx"
+        };
+
+        var act = () => settings.ToRunOptions();
+
+        act.Should().Throw<ArgumentException>().WithMessage("*search engine*");
     }
 
     [Fact]

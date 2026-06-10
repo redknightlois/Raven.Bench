@@ -59,7 +59,6 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             return -1;
         }
 
-        // Parse recall Ks
         var recallKs = CliParsing.ParseRecallKsRaw(settings.VectorRecallKs ?? "1,5,10");
         if (recallKs.Length == 0)
         {
@@ -68,10 +67,9 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
         }
 
         int[]? efSweep = null;
-        if (!string.IsNullOrWhiteSpace(settings.VectorRecallEfSweep))
+        if (string.IsNullOrWhiteSpace(settings.VectorRecallEfSweep) == false)
             efSweep = CliParsing.ParseEfSweepRaw(settings.VectorRecallEfSweep);
 
-        // Load vector metadata (query vectors)
         var metadata = await LoadVectorMetadataAsync(settings);
         if (metadata == null)
         {
@@ -94,7 +92,6 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
                 settings.VectorQuantization,
                 settings.SearchEngine);
 
-            // Render sweep table
             var table = new Table().Border(TableBorder.Rounded).Title("[blue]Recall@K by efSearch[/]");
             table.AddColumn("efSearch");
             var ks = sweep.Values.First().RecallAtK.Keys.OrderBy(k => k).ToList();
@@ -145,7 +142,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
 
     private static async Task<VectorWorkloadMetadata?> LoadVectorMetadataAsync(RecallSettings settings)
     {
-        var engineSuffix = settings.SearchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
+        var engineSuffix = VectorIndexMapping.GetEngineSuffix(settings.SearchEngine);
 
         if (settings.Dataset?.StartsWith("sphere", StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -153,7 +150,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             var provider = new SphereDatasetProvider(profile);
             var dbName = provider.GetDatabaseName(profile);
             var metadata = await provider.GenerateQueryVectorsAsync(settings.Url, dbName, count: 1000);
-            metadata.IndexName = !string.IsNullOrWhiteSpace(settings.IndexNameOverride)
+            metadata.IndexName = string.IsNullOrWhiteSpace(settings.IndexNameOverride) == false
                 ? settings.IndexNameOverride
                 : VectorIndexNaming.GetIndexName(SphereDatasetProvider.CollectionName, settings.VectorQuantization, engineSuffix);
             metadata.CollectionName = SphereDatasetProvider.CollectionName;

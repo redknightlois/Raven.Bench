@@ -46,13 +46,13 @@ new("Concurrency", _ => true, s => s.Concurrency),
             new("NetworkUtilization", _ => true, s => s.NetworkUtilization),
             
             // Server metrics
-            new("ServerCpu", summary => !summary.Options.SnmpEnabled, s => s.ServerCpu),
-            new("ServerMemoryMB", summary => !summary.Options.SnmpEnabled, s => s.ServerMemoryMB),
-            new("ServerRequestsPerSec", summary => !summary.Options.SnmpEnabled, s => s.ServerRequestsPerSec),
-            new("ServerIoReadOps", summary => !summary.Options.SnmpEnabled, s => s.ServerIoReadOps),
-            new("ServerIoWriteOps", summary => !summary.Options.SnmpEnabled, s => s.ServerIoWriteOps),
-            new("ServerIoReadKb", summary => !summary.Options.SnmpEnabled, s => s.ServerIoReadKb),
-            new("ServerIoWriteKb", summary => !summary.Options.SnmpEnabled, s => s.ServerIoWriteKb),
+            new("ServerCpu", summary => summary.Options.SnmpEnabled == false, s => s.ServerCpu),
+            new("ServerMemoryMB", summary => summary.Options.SnmpEnabled == false, s => s.ServerMemoryMB),
+            new("ServerRequestsPerSec", summary => summary.Options.SnmpEnabled == false, s => s.ServerRequestsPerSec),
+            new("ServerIoReadOps", summary => summary.Options.SnmpEnabled == false, s => s.ServerIoReadOps),
+            new("ServerIoWriteOps", summary => summary.Options.SnmpEnabled == false, s => s.ServerIoWriteOps),
+            new("ServerIoReadKb", summary => summary.Options.SnmpEnabled == false, s => s.ServerIoReadKb),
+            new("ServerIoWriteKb", summary => summary.Options.SnmpEnabled == false, s => s.ServerIoWriteKb),
 
             // SNMP metrics
             new("MachineCpu", summary => summary.Options.SnmpEnabled, s => s.MachineCpu),

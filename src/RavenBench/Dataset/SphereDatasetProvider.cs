@@ -33,7 +33,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
     private static readonly Dictionary<string, SphereProfile> Profiles = new(StringComparer.OrdinalIgnoreCase)
     {
-        { "10k", new(10_000, "Sphere-10K") },
         { "100k", new(100_000, "Sphere-100K") },
         { "1m", new(1_000_000, "Sphere-1M") },
         { "10m", new(10_000_000, "Sphere-10M") },
@@ -169,7 +168,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
             HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
 
-        // Create database if needed
         var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName));
         if (dbRecord == null)
         {
@@ -179,7 +177,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
         var profile = ResolveProfile(null);
 
-        // Check existing document count
         var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
         bool documentsExist = stats.CountOfDocuments >= profile.TargetDocCount;
 
@@ -188,14 +185,12 @@ public sealed class SphereDatasetProvider : IDatasetProvider
 
         if (documentsExist == false)
         {
-            // Load resume checkpoint
             var checkpoint = await LoadCheckpointAsync(store);
             long skipLines = checkpoint?.LinesImported ?? 0;
 
             if (skipLines > 0)
                 Console.WriteLine($"[Sphere] Resuming from line {skipLines:N0} (checkpoint: {checkpoint!.LastSha})");
 
-            // Resolve data source files
             var files = ResolveSourceFiles(dataSourcePath, _profile);
             Console.WriteLine($"[Sphere] Importing from {files.Count} file(s) into {databaseName} (target: {profile.TargetDocCount:N0} docs)");
 
@@ -218,7 +213,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                             continue;
                         }
 
-                        if (imported >= profile.TargetDocCount)
+                        if (skipLines + imported >= profile.TargetDocCount)
                             break;
 
                         var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url);
@@ -246,7 +241,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                         }
                     }
 
-                    if (imported >= profile.TargetDocCount)
+                    if (skipLines + imported >= profile.TargetDocCount)
                         break;
                 }
             }
@@ -254,7 +249,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
             Console.WriteLine($"\n[Sphere] Import complete: {imported:N0} documents in {importSw.Elapsed}");
             totalImported = imported;
 
-            if (imported >= profile.TargetDocCount)
+            if (skipLines + imported >= profile.TargetDocCount)
                 await ClearCheckpointAsync(store);
         }
         else
@@ -266,7 +261,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         importSw.Stop();
         var importDuration = importSw.Elapsed;
 
-        // Create vector index and measure indexing time
         var indexingSw = Stopwatch.StartNew();
         await CreateVectorIndexAsync(store, quantization, exactSearch, searchEngine, numberOfEdges, numberOfCandidatesForIndexing);
         indexingSw.Stop();
@@ -382,7 +376,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
                     return [profileFile];
             }
 
-            // Profile file not found locally — download it
             var targetDir = searchDirs.Count > 0 ? searchDirs[0]
                 : Path.Combine(Directory.GetCurrentDirectory(), "datasets", "sphere");
             var downloaded = DownloadSphereFileAsync(profile, targetDir).GetAwaiter().GetResult();
@@ -498,7 +491,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
     {
         await using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read,
             FileShare.Read, bufferSize: 81920, useAsync: true);
-        await using var gzipStream = new GZipStream(fileStream, CompressionMode.Decompress);
+        await using var gzipStream = new GZipStream(fileStream, System.IO.Compression.CompressionMode.Decompress);
 
         if (filePath.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
         {
@@ -524,7 +517,6 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         }
         else
         {
-            // Plain .jsonl.gz
             using var reader = new StreamReader(gzipStream);
             while (await reader.ReadLineAsync(ct) is { } line)
             {
@@ -549,23 +541,13 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         int? numberOfCandidatesForIndexing = null)
     {
         var engineName = searchEngine == IndexingEngine.Lucene ? "Lucene" : "Corax";
-        var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
+        var engineSuffix = VectorIndexMapping.GetEngineSuffix(searchEngine);
 
         var indexName = VectorIndexNaming.GetIndexName(CollectionName, quantization, engineSuffix, numberOfEdges, numberOfCandidatesForIndexing);
 
         Console.WriteLine($"[Sphere] Creating vector index '{indexName}' (quantization: {quantization}, exact: {exactSearch}, engine: {engineName})...");
 
-        var (sourceType, destType) = quantization switch
-        {
-            VectorQuantization.Int8 => (VectorEmbeddingType.Single, VectorEmbeddingType.Int8),
-            VectorQuantization.Binary => (VectorEmbeddingType.Single, VectorEmbeddingType.Binary),
-            // Int2=4, Int3=5, Int4=6 in the turboquant VectorEmbeddingType enum — cast directly
-            // since the NuGet client library doesn't define these values yet.
-            VectorQuantization.Int4 => (VectorEmbeddingType.Single, (VectorEmbeddingType)6),
-            VectorQuantization.Int3 => (VectorEmbeddingType.Single, (VectorEmbeddingType)5),
-            VectorQuantization.Int2 => (VectorEmbeddingType.Single, (VectorEmbeddingType)4),
-            _ => (VectorEmbeddingType.Single, VectorEmbeddingType.Single)
-        };
+        var (sourceType, destType) = VectorIndexMapping.GetEmbeddingTypes(quantization);
 
         var index = new IndexDefinition
         {

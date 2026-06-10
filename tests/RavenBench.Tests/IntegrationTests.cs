@@ -168,37 +168,37 @@ public class IntegrationTests
 
         // Test Users VoronEquality workload
         var usersVoronEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.VoronEquality };
-        var usersVoronEqualityWorkload = BenchmarkRunner.BuildWorkload(usersVoronEqualityOpts, stackOverflowMetadata, usersMetadata, null);
+        var usersVoronEqualityWorkload = WorkloadFactory.BuildWorkload(usersVoronEqualityOpts, stackOverflowMetadata, usersMetadata, null);
         usersVoronEqualityWorkload.Should().BeOfType<StackOverflowUsersByNameQueryWorkload>();
 
         // Test Users IndexEquality workload
         var usersIndexEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.IndexEquality };
-        var usersIndexEqualityWorkload = BenchmarkRunner.BuildWorkload(usersIndexEqualityOpts, stackOverflowMetadata, usersMetadata, null);
+        var usersIndexEqualityWorkload = WorkloadFactory.BuildWorkload(usersIndexEqualityOpts, stackOverflowMetadata, usersMetadata, null);
         usersIndexEqualityWorkload.Should().BeOfType<StackOverflowUsersByNameQueryWorkload>();
 
         // Test Users range workload
         var usersRangeOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.Range };
-        var usersRangeWorkload = BenchmarkRunner.BuildWorkload(usersRangeOpts, stackOverflowMetadata, usersMetadata, null);
+        var usersRangeWorkload = WorkloadFactory.BuildWorkload(usersRangeOpts, stackOverflowMetadata, usersMetadata, null);
         usersRangeWorkload.Should().BeOfType<StackOverflowUsersRangeQueryWorkload>();
 
         // Test StackOverflow VoronEquality workload (direct Voron lookup via id())
         var soVoronEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowTextSearch, QueryProfile = QueryProfile.VoronEquality };
-        var soVoronEqualityWorkload = BenchmarkRunner.BuildWorkload(soVoronEqualityOpts, stackOverflowMetadata, usersMetadata, null);
+        var soVoronEqualityWorkload = WorkloadFactory.BuildWorkload(soVoronEqualityOpts, stackOverflowMetadata, usersMetadata, null);
         soVoronEqualityWorkload.Should().BeOfType<StackOverflowQueryWorkload>();
 
         // Test StackOverflow IndexEquality workload (index-based lookup)
         var soIndexEqualityOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowTextSearch, QueryProfile = QueryProfile.IndexEquality };
-        var soIndexEqualityWorkload = BenchmarkRunner.BuildWorkload(soIndexEqualityOpts, stackOverflowMetadata, usersMetadata, null);
+        var soIndexEqualityWorkload = WorkloadFactory.BuildWorkload(soIndexEqualityOpts, stackOverflowMetadata, usersMetadata, null);
         soIndexEqualityWorkload.Should().BeOfType<StackOverflowQueryWorkload>();
 
         // Test StackOverflow text prefix workload
         var soPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowTextSearch, QueryProfile = QueryProfile.TextPrefix };
-        var soPrefixWorkload = BenchmarkRunner.BuildWorkload(soPrefixOpts, stackOverflowMetadata, usersMetadata, null);
+        var soPrefixWorkload = WorkloadFactory.BuildWorkload(soPrefixOpts, stackOverflowMetadata, usersMetadata, null);
         soPrefixWorkload.Should().BeOfType<QuestionsByTitlePrefixWorkload>();
 
         // Test StackOverflow text search workload
         var soSearchOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowTextSearch, QueryProfile = QueryProfile.TextSearch };
-        var soSearchWorkload = BenchmarkRunner.BuildWorkload(soSearchOpts, stackOverflowMetadata, usersMetadata, null);
+        var soSearchWorkload = WorkloadFactory.BuildWorkload(soSearchOpts, stackOverflowMetadata, usersMetadata, null);
         soSearchWorkload.Should().BeOfType<QuestionsByTitleSearchWorkload>();
     }
 
@@ -282,19 +282,19 @@ public class IntegrationTests
 
         // StackOverflow queries do not support range queries
         var soRangeOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowTextSearch, QueryProfile = QueryProfile.Range };
-        var act1 = () => BenchmarkRunner.BuildWorkload(soRangeOpts, null, null, null);
+        var act1 = () => WorkloadFactory.BuildWorkload(soRangeOpts, null, null, null);
         act1.Should().Throw<NotSupportedException>()
             .WithMessage("Query profile 'Range' is not supported for StackOverflow queries. Supported profiles: voron-equality, index-equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
 
         // StackOverflow queries do not support text-prefix for users profile
         var usersPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextPrefix };
-        var act2 = () => BenchmarkRunner.BuildWorkload(usersPrefixOpts, null, null, null);
+        var act2 = () => WorkloadFactory.BuildWorkload(usersPrefixOpts, null, null, null);
         act2.Should().Throw<NotSupportedException>()
             .WithMessage("Query profile 'TextPrefix' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range");
 
         // StackOverflow queries do not support text-search for users profile
         var usersSearchOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextSearch };
-        var act3 = () => BenchmarkRunner.BuildWorkload(usersSearchOpts, null, null, null);
+        var act3 = () => WorkloadFactory.BuildWorkload(usersSearchOpts, null, null, null);
         act3.Should().Throw<NotSupportedException>()
             .WithMessage("Query profile 'TextSearch' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range");
 
@@ -313,7 +313,7 @@ public class IntegrationTests
             TitleIndexName = "Questions/ByTitle-corax",
             TitleSearchIndexName = "Questions/ByTitleSearch-corax"
         };
-        var workload = BenchmarkRunner.BuildWorkload(soTextPrefixOpts, validMetadata, null, null);
+        var workload = WorkloadFactory.BuildWorkload(soTextPrefixOpts, validMetadata, null, null);
         workload.Should().BeOfType<QuestionsByTitlePrefixWorkload>();
     }
     
@@ -322,8 +322,8 @@ public class IntegrationTests
         Url = "http://localhost:8080",
         Database = "test", 
         Writes = 100,
-        Distribution = "uniform",
-        Compression = "identity",
+        Distribution = KeyDistributionKind.Uniform,
+        Compression = CompressionMode.Identity,
         DocumentSizeBytes = 1024,
         Warmup = TimeSpan.FromMilliseconds(25),
         Duration = TimeSpan.FromMilliseconds(50),

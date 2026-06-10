@@ -24,7 +24,6 @@ public static class CalibrationHelper
         CancellationToken ct = default,
         Version? fallbackHttpVersion = null)
     {
-        // Use provided fallback version that should respect command-line HTTP version requirements
         // If none provided, default to HTTP/1.1 as last resort
         var httpVersionFallback = fallbackHttpVersion ?? HttpVersion.Version11;
 
@@ -61,24 +60,21 @@ public static class CalibrationHelper
     }
 
     /// <summary>
-    /// Measures response content size, handling both Content-Length header and stream reading.
+    /// Drains the response body so TotalMs covers the full transfer; Content-Length, when present,
+    /// is preferred as the byte count.
     /// </summary>
     private static async Task<long> MeasureResponseSizeAsync(HttpResponseMessage response, CancellationToken ct)
     {
-        if (response.Content.Headers.ContentLength.HasValue)
-        {
-            return response.Content.Headers.ContentLength.Value;
-        }
-
         await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         var buffer = new byte[64 * 1024];
 
-        int totalRead = 0;
+        long totalRead = 0;
         int bytesRead;
         while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
         {
             totalRead += bytesRead;
         }
-        return totalRead;
+
+        return response.Content.Headers.ContentLength ?? totalRead;
     }
 }

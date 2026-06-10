@@ -9,7 +9,8 @@ public static class JsonResultsWriter
     private static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter() }
     };
 
     public static void Write(string path, BenchmarkSummary summary)

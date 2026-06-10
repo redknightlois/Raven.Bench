@@ -113,7 +113,7 @@ public abstract class BaseRunSettings : CommandSettings
     public string? DatasetSource { get; init; }
 
     [CommandOption("--distribution")]
-    [Description("Key distribution: uniform, zipfian (default: uniform)")]
+    [Description("Key distribution: uniform, zipfian, latest (default: uniform)")]
     public string Distribution { get; init; } = "uniform";
 
     [CommandOption("--doc-size")]
@@ -141,12 +141,8 @@ public abstract class BaseRunSettings : CommandSettings
     public string Duration { get; init; } = "60s";
 
     [CommandOption("--max-errors")]
-    [Description("Maximum error rate before stopping (e.g., 0.5%, 100) (default: 0.5%)")]
+    [Description("Maximum error rate before stopping (e.g., 0.5%, 0.005, 5) (default: 0.5%)")]
     public string MaxErrors { get; init; } = "0.5%";
-
-    [CommandOption("--knee-rule")]
-    [Description("Knee detection rule: dthr=X%,dp95=Y% (default: dthr=5%,dp95=20%)")]
-    public string KneeRule { get; init; } = "dthr=5%,dp95=20%";
 
     [CommandOption("--output-prefix")]
     [Description("Output path prefix for all artifacts (creates: {prefix}.json, {prefix}.csv, {prefix}-step-cXXXX.hlog)")]
@@ -174,11 +170,11 @@ public abstract class BaseRunSettings : CommandSettings
 
     [CommandOption("--tp-workers")]
     [Description("ThreadPool worker threads (default: 8192)")]
-    public int? TpWorkers { get; init; } = 8192;
+    public int TpWorkers { get; init; } = 8192;
 
     [CommandOption("--tp-iocp")]
     [Description("ThreadPool IOCP threads (default: 8192)")]
-    public int? TpIOCP { get; init; } = 8192;
+    public int TpIOCP { get; init; } = 8192;
 
     [CommandOption("--notes")]
     [Description("Custom notes to include in output")]
@@ -213,9 +209,8 @@ public abstract class BaseRunSettings : CommandSettings
     public string Latencies { get; init; } = "normalized";
 
     [CommandOption("--snmp-enabled")]
-    [Description("Enable SNMP monitoring (default: true)")]
-    public bool SnmpEnabled { get; init; } = true;
-
+    [Description("Enable SNMP monitoring (default: false)")]
+    public bool SnmpEnabled { get; init; }
 
     [CommandOption("--snmp-port")]
     [Description("SNMP port (default: 161)")]

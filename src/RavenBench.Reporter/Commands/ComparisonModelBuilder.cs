@@ -35,12 +35,13 @@ public static class ComparisonModelBuilder
         var baseline = runs[baselineIndex];
         var contenders = runs.Where((_, i) => i != baselineIndex).ToList();
 
-        var alignedSteps = BuildAlignedSteps(runs);
+        bool isRateBased = runs.Any(r => r.Summary.Steps.Any(s => s.TargetThroughput.HasValue));
+        var alignedSteps = BuildAlignedSteps(runs, isRateBased);
         var latencyContrasts = BuildLatencyContrasts(baseline, contenders);
         var throughputContrasts = BuildThroughputContrasts(baseline, contenders);
         var errorRateContrasts = BuildErrorRateContrasts(baseline, contenders);
         var resourceContrasts = BuildResourceContrasts(baseline, contenders);
-        var keyTakeaways = GenerateKeyTakeaways(latencyContrasts, throughputContrasts, errorRateContrasts, resourceContrasts, baseline, contenders);
+        var keyTakeaways = GenerateKeyTakeaways(latencyContrasts, throughputContrasts, errorRateContrasts, baseline, contenders);
 
         return new ComparisonModel
         {
@@ -51,7 +52,8 @@ public static class ComparisonModelBuilder
             ThroughputContrasts = throughputContrasts,
             ErrorRateContrasts = errorRateContrasts,
             ResourceContrasts = resourceContrasts,
-            KeyTakeaways = keyTakeaways
+            KeyTakeaways = keyTakeaways,
+            AxisLabel = isRateBased ? "Target RPS" : "Concurrency"
         };
     }
 
@@ -113,7 +115,7 @@ public static class ComparisonModelBuilder
                     "P99 Latency (ms)",
                     baseline.BestStep.Raw.P99, contender.BestStep.Raw.P99,
                     baseline.BestStep.Concurrency, contender.BestStep.Concurrency,
-                    "Best vs Best"));
+                    ContrastContext.BestVsBest));
             }
 
             // Best vs Second-Best (P99)
@@ -124,7 +126,7 @@ public static class ComparisonModelBuilder
                     "P99 Latency (ms)",
                     baseline.BestStep.Raw.P99, contender.SecondBestStep.Raw.P99,
                     baseline.BestStep.Concurrency, contender.SecondBestStep.Concurrency,
-                    "Best vs Second-Best"));
+                    ContrastContext.BestVsSecondBest));
             }
 
             // Second-Best vs Best (P99)
@@ -135,7 +137,7 @@ public static class ComparisonModelBuilder
                     "P99 Latency (ms)",
                     baseline.SecondBestStep.Raw.P99, contender.BestStep.Raw.P99,
                     baseline.SecondBestStep.Concurrency, contender.BestStep.Concurrency,
-                    "Second-Best vs Best"));
+                    ContrastContext.SecondBestVsBest));
             }
         }
 
@@ -158,7 +160,7 @@ public static class ComparisonModelBuilder
                     "Throughput (ops/s)",
                     baseline.BestStep.Throughput, contender.BestStep.Throughput,
                     baseline.BestStep.Concurrency, contender.BestStep.Concurrency,
-                    "Best vs Best"));
+                    ContrastContext.BestVsBest));
             }
         }
 
@@ -181,7 +183,7 @@ public static class ComparisonModelBuilder
                     "Error Rate (%)",
                     baseline.BestStep.ErrorRate * 100, contender.BestStep.ErrorRate * 100,
                     baseline.BestStep.Concurrency, contender.BestStep.Concurrency,
-                    "Best vs Best"));
+                    ContrastContext.BestVsBest));
             }
         }
 
@@ -207,7 +209,7 @@ public static class ComparisonModelBuilder
                         "Server CPU (%)",
                         baseline.BestStep.ServerCpu.Value, contender.BestStep.ServerCpu.Value,
                         baseline.BestStep.Concurrency, contender.BestStep.Concurrency,
-                        "Best vs Best"));
+                        ContrastContext.BestVsBest));
                 }
 
                 // Server Memory contrast
@@ -218,7 +220,7 @@ public static class ComparisonModelBuilder
                         "Server Memory (MB)",
                         baseline.BestStep.ServerMemoryMB.Value, contender.BestStep.ServerMemoryMB.Value,
                         baseline.BestStep.Concurrency, contender.BestStep.Concurrency,
-                        "Best vs Best"));
+                        ContrastContext.BestVsBest));
                 }
             }
         }
@@ -228,21 +230,17 @@ public static class ComparisonModelBuilder
 
     /// <summary>
     /// Creates a single cross-run contrast with delta calculations.
+    /// Percentage delta is null when the baseline value is zero.
     /// </summary>
-    /// <remarks>
-    /// Percentage delta is calculated as: ((contender - baseline) / baseline) * 100
-    /// When baseline is zero, percentage delta is set to zero to avoid division by zero.
-    /// This can happen in edge cases where metrics are not available or invalid.
-    /// </remarks>
     private static CrossRunContrast CreateContrast(
         string baselineLabel, string contenderLabel,
         string metricName,
         double baselineValue, double contenderValue,
         int? baselineConcurrency, int? contenderConcurrency,
-        string? context)
+        ContrastContext context)
     {
         double absoluteDelta = contenderValue - baselineValue;
-        double percentageDelta = baselineValue != 0 ? (absoluteDelta / baselineValue) * 100 : 0;
+        double? percentageDelta = baselineValue != 0 ? (absoluteDelta / baselineValue) * 100 : null;
 
         return new CrossRunContrast
         {
@@ -260,163 +258,98 @@ public static class ComparisonModelBuilder
     }
 
     /// <summary>
-    /// Builds aligned concurrency snapshots across all runs.
-    /// Each snapshot contains metrics from all runs at a specific load level.
-    /// For rate-based benchmarks, aligns by target throughput; for closed-loop, aligns by concurrency.
+    /// Builds aligned snapshots across all runs, one per load level.
+    /// Rate-based runs align by target throughput; closed-loop runs align by concurrency.
     /// </summary>
-    private static List<ConcurrencySnapshot> BuildAlignedSteps(List<RunComparison> runs)
+    private static List<ConcurrencySnapshot> BuildAlignedSteps(List<RunComparison> runs, bool isRateBased)
     {
-        // Determine if this is rate-based (target throughput) or closed-loop (concurrency) benchmarking
-        bool isRateBased = runs.Any(r => r.Summary.Steps.Any(s => s.TargetThroughput.HasValue));
+        Func<StepResult, double?> keySelector = isRateBased
+            ? s => s.TargetThroughput
+            : s => s.Concurrency;
 
-        if (isRateBased)
+        var keys = runs
+            .SelectMany(r => r.Summary.Steps.Select(keySelector))
+            .Where(k => k.HasValue)
+            .Select(k => k!.Value)
+            .Distinct()
+            .OrderBy(k => k)
+            .ToList();
+
+        var snapshots = new List<ConcurrencySnapshot>();
+        foreach (double key in keys)
         {
-            // For rate-based benchmarks, align by target throughput
-            var allTargets = runs
-                .SelectMany(r => r.Summary.Steps.Where(s => s.TargetThroughput.HasValue).Select(s => s.TargetThroughput!.Value))
-                .Distinct()
-                .OrderBy(t => t)
-                .ToList();
-
-            var snapshots = new List<ConcurrencySnapshot>();
-            foreach (double targetThroughput in allTargets)
+            var runMetrics = new List<StepMetrics?>();
+            foreach (var run in runs)
             {
-                var runMetrics = new List<StepMetrics?>();
-                foreach (var run in runs)
-                {
-                    var step = run.Summary.Steps.FirstOrDefault(s =>
-                        s.TargetThroughput.HasValue && Math.Abs(s.TargetThroughput.Value - targetThroughput) < 0.01);
-                if (step == null)
-                {
-                    runMetrics.Add(null);
-                }
-                else
-                {
-                    runMetrics.Add(new StepMetrics
-                    {
-                        Throughput = step.Throughput,
-                        P95 = step.Raw.P95,
-                        P99 = step.Raw.P99,
-                        P999 = step.Raw.P999,
-                        ErrorRate = step.ErrorRate,
-                        ClientCpu = step.ClientCpu,
-                        ServerCpu = step.ServerCpu,
-                        ServerMemoryMB = step.ServerMemoryMB
-                    });
-                }
+                var step = run.Summary.Steps.FirstOrDefault(s =>
+                    keySelector(s) is double k && Math.Abs(k - key) < 0.01);
+                runMetrics.Add(step == null ? null : ToStepMetrics(step));
             }
 
             snapshots.Add(new ConcurrencySnapshot
             {
-                Concurrency = (int)targetThroughput, // Use target throughput as the alignment key
+                Concurrency = key,
                 RunMetrics = runMetrics
             });
         }
 
         return snapshots;
-        }
-        else
+    }
+
+    private static StepMetrics ToStepMetrics(StepResult step)
+    {
+        return new StepMetrics
         {
-            // For closed-loop benchmarks, align by concurrency (worker count)
-            var allConcurrencies = runs
-                .SelectMany(r => r.Summary.Steps.Select(s => s.Concurrency))
-                .Distinct()
-                .OrderBy(c => c)
-                .ToList();
-
-            var snapshots = new List<ConcurrencySnapshot>();
-            foreach (int concurrency in allConcurrencies)
-            {
-                var runMetrics = new List<StepMetrics?>();
-                foreach (var run in runs)
-                {
-                    var step = run.Summary.Steps.FirstOrDefault(s => s.Concurrency == concurrency);
-                if (step == null)
-                {
-                    runMetrics.Add(null);
-                }
-                else
-                {
-                    runMetrics.Add(new StepMetrics
-                    {
-                        Throughput = step.Throughput,
-                        P95 = step.Raw.P95,
-                        P99 = step.Raw.P99,
-                        P999 = step.Raw.P999,
-                        ErrorRate = step.ErrorRate,
-                        ClientCpu = step.ClientCpu,
-                        ServerCpu = step.ServerCpu,
-                        ServerMemoryMB = step.ServerMemoryMB
-                    });
-                }
-            }
-
-            snapshots.Add(new ConcurrencySnapshot
-            {
-                Concurrency = concurrency,
-                RunMetrics = runMetrics
-            });
-        }
-
-        return snapshots;
-        }
+            Throughput = step.Throughput,
+            P95 = step.Raw.P95,
+            P99 = step.Raw.P99,
+            P999 = step.Raw.P999,
+            ErrorRate = step.ErrorRate,
+            ClientCpu = step.ClientCpu,
+            ServerCpu = step.ServerCpu,
+            ServerMemoryMB = step.ServerMemoryMB
+        };
     }
 
     /// <summary>
     /// Generates key takeaways from cross-run contrasts.
-    /// Highlights biggest improvements/regressions in throughput, latency, error rate, and knee concurrency.
+    /// Highlights biggest changes in throughput, latency, error rate, and best-quality concurrency.
     /// </summary>
     private static List<string> GenerateKeyTakeaways(
         List<CrossRunContrast> latencyContrasts,
         List<CrossRunContrast> throughputContrasts,
         List<CrossRunContrast> errorRateContrasts,
-        List<CrossRunContrast> resourceContrasts,
         RunComparison baseline,
         List<RunComparison> contenders)
     {
         var takeaways = new List<string>();
 
-        // Find biggest throughput improvement/regression
-        var throughputChanges = throughputContrasts
-            .Where(c => c.PercentageDelta != 0)
-            .OrderByDescending(c => Math.Abs(c.PercentageDelta))
-            .ToList();
-
-        if (throughputChanges.Any())
+        var biggestThroughput = BiggestChange(throughputContrasts);
+        if (biggestThroughput != null)
         {
-            var biggest = throughputChanges.First();
-            string direction = biggest.PercentageDelta > 0 ? "improvement" : "regression";
-            takeaways.Add($"Biggest throughput {direction}: {Math.Abs(biggest.PercentageDelta):F1}% ({biggest.ContenderLabel} vs {biggest.BaselineLabel})");
+            string direction = biggestThroughput.AbsoluteDelta > 0 ? "improvement" : "regression";
+            takeaways.Add($"Biggest throughput {direction}: {FormatMagnitude(biggestThroughput)} ({biggestThroughput.ContenderLabel} vs {biggestThroughput.BaselineLabel})");
         }
 
-        // Find biggest latency improvement/regression (lower is better, so sign is inverted)
-        var latencyChanges = latencyContrasts
-            .Where(c => c.PercentageDelta != 0 && c.Context == "Best vs Best") // Focus on best-vs-best for main takeaway
-            .OrderByDescending(c => Math.Abs(c.PercentageDelta))
-            .ToList();
-
-        if (latencyChanges.Any())
+        var biggestLatency = BiggestChange(latencyContrasts.Where(c => c.Context == ContrastContext.BestVsBest));
+        if (biggestLatency != null)
         {
-            var biggest = latencyChanges.First();
-            string direction = biggest.PercentageDelta < 0 ? "improvement" : "regression"; // Lower latency is better
-            takeaways.Add($"Biggest latency {direction}: {Math.Abs(biggest.PercentageDelta):F1}% ({biggest.ContenderLabel} vs {biggest.BaselineLabel})");
+            string direction = biggestLatency.AbsoluteDelta < 0 ? "improvement" : "regression";
+            takeaways.Add($"Biggest latency {direction}: {FormatMagnitude(biggestLatency)} ({biggestLatency.ContenderLabel} vs {biggestLatency.BaselineLabel})");
         }
 
-        // Error rate changes
-        var errorChanges = errorRateContrasts
+        var biggestError = errorRateContrasts
             .Where(c => c.AbsoluteDelta != 0)
             .OrderByDescending(c => Math.Abs(c.AbsoluteDelta))
-            .ToList();
+            .FirstOrDefault();
 
-        if (errorChanges.Any())
+        if (biggestError != null)
         {
-            var biggest = errorChanges.First();
-            string direction = biggest.AbsoluteDelta < 0 ? "decrease" : "increase";
-            takeaways.Add($"Error rate {direction}: {Math.Abs(biggest.AbsoluteDelta):F3}% ({biggest.ContenderLabel} vs {biggest.BaselineLabel})");
+            string direction = biggestError.AbsoluteDelta < 0 ? "decrease" : "increase";
+            takeaways.Add($"Error rate {direction}: {Math.Abs(biggestError.AbsoluteDelta):F3}% ({biggestError.ContenderLabel} vs {biggestError.BaselineLabel})");
         }
 
-        // Knee concurrency differences
-        var kneeDifferences = contenders
+        var bestConcurrencyDifferences = contenders
             .Where(c => baseline.BestStep != null && c.BestStep != null)
             .Select(c => new
             {
@@ -427,14 +360,31 @@ public static class ComparisonModelBuilder
             .OrderByDescending(d => Math.Abs(d.Difference))
             .ToList();
 
-        if (kneeDifferences.Any())
+        if (bestConcurrencyDifferences.Any())
         {
-            var biggest = kneeDifferences.First();
+            var biggest = bestConcurrencyDifferences.First();
             string direction = biggest.Difference > 0 ? "higher" : "lower";
-            takeaways.Add($"Knee concurrency {direction} by {Math.Abs(biggest.Difference)} ({biggest.Label} vs {baseline.Label})");
+            takeaways.Add($"Best-quality concurrency {direction} by {Math.Abs(biggest.Difference)} ({biggest.Label} vs {baseline.Label})");
         }
 
-        // Limit to top 3-5 takeaways
-        return takeaways.Take(5).ToList();
+        return takeaways;
+    }
+
+    /// <summary>
+    /// Picks the contrast with the largest relative change; a null percentage delta (zero baseline) ranks highest.
+    /// </summary>
+    private static CrossRunContrast? BiggestChange(IEnumerable<CrossRunContrast> contrasts)
+    {
+        return contrasts
+            .Where(c => c.AbsoluteDelta != 0)
+            .OrderByDescending(c => c.PercentageDelta.HasValue ? Math.Abs(c.PercentageDelta.Value) : double.PositiveInfinity)
+            .FirstOrDefault();
+    }
+
+    private static string FormatMagnitude(CrossRunContrast contrast)
+    {
+        return contrast.PercentageDelta.HasValue
+            ? $"{Math.Abs(contrast.PercentageDelta.Value):F1}%"
+            : $"{Math.Abs(contrast.AbsoluteDelta):F1} from a zero baseline";
     }
 }

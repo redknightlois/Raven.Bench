@@ -50,6 +50,11 @@ public sealed class ComparisonModel
     /// Auto-generated takeaways based on delta thresholds.
     /// </summary>
     public required List<string> KeyTakeaways { get; init; }
+
+    /// <summary>
+    /// X-axis title for aligned-step charts ("Concurrency" or "Target RPS").
+    /// </summary>
+    public required string AxisLabel { get; init; }
 }
 
 /// <summary>
@@ -90,9 +95,9 @@ public sealed class RunComparison
 public sealed class ConcurrencySnapshot
 {
     /// <summary>
-    /// The concurrency level for this snapshot.
+    /// Alignment key for this snapshot: concurrency for closed-loop runs, target RPS for rate-based runs.
     /// </summary>
-    public required int Concurrency { get; init; }
+    public required double Concurrency { get; init; }
 
     /// <summary>
     /// Metrics from each run at this concurrency (indexed same as Baseline + Contenders).
@@ -153,9 +158,9 @@ public sealed class CrossRunContrast
     public required double AbsoluteDelta { get; init; }
 
     /// <summary>
-    /// Percentage delta ((contender - baseline) / baseline * 100).
+    /// Percentage delta ((contender - baseline) / baseline * 100). Null when the baseline value is zero.
     /// </summary>
-    public required double PercentageDelta { get; init; }
+    public required double? PercentageDelta { get; init; }
 
     /// <summary>
     /// Concurrency level where baseline value was observed.
@@ -168,7 +173,17 @@ public sealed class CrossRunContrast
     public int? ContenderConcurrency { get; init; }
 
     /// <summary>
-    /// Additional context (e.g., "Best vs Best", "Best vs Second-Best").
+    /// Which step pairing this contrast compares.
     /// </summary>
-    public string? Context { get; init; }
+    public required ContrastContext Context { get; init; }
+}
+
+/// <summary>
+/// Step pairing used in a cross-run contrast.
+/// </summary>
+public enum ContrastContext
+{
+    BestVsBest,
+    BestVsSecondBest,
+    SecondBestVsBest
 }

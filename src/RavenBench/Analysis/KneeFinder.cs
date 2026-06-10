@@ -13,7 +13,7 @@ public static class KneeFinder
     /// - Confirmation: if the next step still recovers quality >3% vs prev, defer knee
     /// - Always stop on excessive errors
     /// </summary>
-    public static StepResult? FindKnee(IReadOnlyList<StepResult> steps, double dThr, double dP95, double maxErr)
+    public static StepResult? FindKnee(IReadOnlyList<StepResult> steps, double maxErr)
     {
         const double P50DangerMs = 100.0;
         const double NextRecoveryThreshold = 0.03; // 3%
@@ -35,7 +35,6 @@ public static class KneeFinder
             var prev = steps[i - 1];
             var cur = steps[i];
 
-            // Respect error ceiling immediately
             if (cur.ErrorRate > maxErr)
             {
                 prev.Reason = $"errors>{maxErr:P1}";
@@ -66,7 +65,6 @@ public static class KneeFinder
                 return prev;
             }
 
-            // Smoothing with previous deltas if possible
             if (i >= 2)
             {
                 var p2 = steps[i - 2];

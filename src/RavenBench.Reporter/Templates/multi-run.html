@@ -163,6 +163,14 @@
         const context = JSON.parse(contextElement.textContent || '{}');
         const model = JSON.parse(modelElement.textContent || '{}');
 
+        function esc(value) {
+          return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+        }
+
         window.__reportRendered = false;
 
         // Set title and notes
@@ -200,6 +208,7 @@
         // Aligned steps - needed by multiple functions
         const alignedSteps = model.alignedSteps || [];
         const concurrencies = alignedSteps.map(s => s.concurrency);
+        const axisLabel = model.axisLabel || 'Concurrency';
 
         // Chart references
         let throughputChart = null;
@@ -242,7 +251,7 @@
           const titleSuffix = isBaseline ? '(Baseline)' : '';
 
           card.innerHTML = `
-            <div class="run-card-title">${run.label} ${titleSuffix}</div>
+            <div class="run-card-title">${esc(run.label)} ${titleSuffix}</div>
             <div class="run-card-metrics">
               <div class="metric">
                 <span class="metric-label">Best Throughput</span>
@@ -390,7 +399,7 @@
               const qualityScore = metrics.throughput / (1 + metrics.p99);
 
               card.innerHTML = `
-                <div style="font-weight: 600; color: ${borderColor}; margin-bottom: 8px;">${run.label}</div>
+                <div style="font-weight: 600; color: ${borderColor}; margin-bottom: 8px;">${esc(run.label)}</div>
                 <div style="font-size: 13px; color: #64748b;">
                   <div><strong>${metrics.p99.toFixed(2)}</strong> ms P99</div>
                   <div><strong>${metrics.throughput.toFixed(0)}</strong> ops/s</div>
@@ -423,7 +432,7 @@
               const qualityScore = run.bestQualityScore;
 
               card.innerHTML = `
-                <div style="font-weight: 600; color: ${borderColor}; margin-bottom: 8px;">${run.label} @ C=${bestStep.concurrency}</div>
+                <div style="font-weight: 600; color: ${borderColor}; margin-bottom: 8px;">${esc(run.label)} @ C=${bestStep.concurrency}</div>
                 <div style="font-size: 13px; color: #64748b;">
                   <div><strong>${p99.toFixed(2)}</strong> ms P99</div>
                   <div><strong>${bestStep.throughput.toFixed(0)}</strong> ops/s</div>
@@ -543,7 +552,7 @@
             animation: false,
             maintainAspectRatio: false,
             scales: {
-              x: { title: { display: true, text: 'Concurrency' } },
+              x: { title: { display: true, text: axisLabel } },
               y: { title: { display: true, text: 'Throughput (ops/s)' }, beginAtZero: true }
             },
             plugins: { legend: { position: 'top' } }
@@ -570,7 +579,7 @@
             animation: false,
             maintainAspectRatio: false,
             scales: {
-              x: { title: { display: true, text: 'Concurrency' } },
+              x: { title: { display: true, text: axisLabel } },
               y: { title: { display: true, text: 'P99 Latency (ms)' }, beginAtZero: true }
             },
             plugins: { legend: { position: 'top' } }
@@ -745,7 +754,7 @@
             animation: false,
             maintainAspectRatio: false,
             scales: {
-              x: { title: { display: true, text: 'Concurrency' } },
+              x: { title: { display: true, text: axisLabel } },
               y: { title: { display: true, text: 'CPU %' }, beginAtZero: true, suggestedMax: 100 }
             },
             plugins: { legend: { position: 'top' } }
@@ -775,7 +784,7 @@
             animation: false,
             maintainAspectRatio: false,
             scales: {
-              x: { title: { display: true, text: 'Concurrency' } },
+              x: { title: { display: true, text: axisLabel } },
               y: { title: { display: true, text: 'Memory (MB)' }, beginAtZero: true }
             },
             plugins: { legend: { position: 'top' } }

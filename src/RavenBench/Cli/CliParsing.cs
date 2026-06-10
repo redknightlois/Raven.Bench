@@ -11,31 +11,25 @@ internal static class CliParsing
 {
     public static RunOptions ToRunOptions(this ClosedSettings s)
     {
-        var stepString = s.Step ?? s.Concurrency ?? "8..512x2";
-        var stepPlan = ParseStepPlan(stepString);
-        return BuildRunOptions(s, LoadShape.Closed, stepPlan, modeOverride: "closed");
+        var stepPlan = ParseStepPlan(s.Step ?? s.Concurrency);
+        return BuildRunOptions(s, LoadShape.Closed, stepPlan);
     }
 
     public static RunOptions ToRunOptions(this RateSettings s)
     {
         var stepPlan = ParseStepPlan(s.Step ?? "200..20000x1.5");
-        return BuildRunOptions(s, LoadShape.Rate, stepPlan, rateWorkers: s.RateWorkers, modeOverride: "rate");
+        return BuildRunOptions(s, LoadShape.Rate, stepPlan, rateWorkers: s.RateWorkers);
     }
 
     private static RunOptions BuildRunOptions(
         BaseRunSettings settings,
         LoadShape shape,
         StepPlan stepPlan,
-        int? rateWorkers = null,
-        string modeOverride = null)
+        int? rateWorkers = null)
     {
-        var (kneeThroughputDelta, kneeP95Delta) = ParseKneeRule(settings.KneeRule);
-
         var database = string.IsNullOrEmpty(settings.DatasetProfile) == false || string.IsNullOrEmpty(settings.Dataset) == false
             ? (settings.Database ?? "temp-placeholder")
             : RequiredString(settings.Database!, "--database");
-
-        var mode = modeOverride ?? shape.ToString().ToLowerInvariant();
 
         return new RunOptions
         {
@@ -63,14 +57,11 @@ internal static class CliParsing
             Warmup = ParseDuration(settings.Warmup),
             Duration = ParseDuration(settings.Duration),
             MaxErrorRate = ParsePercent(settings.MaxErrors),
-            KneeThroughputDelta = kneeThroughputDelta,
-            KneeP95Delta = kneeP95Delta,
             ThreadPoolWorkers = settings.TpWorkers,
             ThreadPoolIOCP = settings.TpIOCP,
-            Distribution = settings.Distribution,
-            Transport = settings.Transport,
-            Compression = settings.Compression,
-            Mode = mode,
+            Distribution = ParseDistribution(settings.Distribution),
+            Transport = ParseTransport(settings.Transport),
+            Compression = ParseCompression(settings.Compression),
             OutJson = settings.OutJson,
             OutCsv = settings.OutCsv,
             Seed = settings.Seed,
@@ -157,6 +148,40 @@ internal static class CliParsing
         };
     }
 
+    private static TransportKind ParseTransport(string transport)
+    {
+        return transport.Trim().ToLowerInvariant() switch
+        {
+            "raw" => TransportKind.Raw,
+            "client" => TransportKind.Client,
+            _ => throw new ArgumentException($"Invalid transport: {transport}. Valid options: raw, client")
+        };
+    }
+
+    private static KeyDistributionKind ParseDistribution(string distribution)
+    {
+        return distribution.Trim().ToLowerInvariant() switch
+        {
+            "uniform" => KeyDistributionKind.Uniform,
+            "zipfian" => KeyDistributionKind.Zipfian,
+            "latest" => KeyDistributionKind.Latest,
+            _ => throw new ArgumentException($"Invalid distribution: {distribution}. Valid options: uniform, zipfian, latest")
+        };
+    }
+
+    private static CompressionMode ParseCompression(string compression)
+    {
+        return compression.Trim().ToLowerInvariant() switch
+        {
+            "identity" => CompressionMode.Identity,
+            "gzip" => CompressionMode.Gzip,
+            "zstd" => CompressionMode.Zstd,
+            "br" or "brotli" => CompressionMode.Brotli,
+            "deflate" => CompressionMode.Deflate,
+            _ => throw new ArgumentException($"Invalid compression: {compression}. Valid options: identity, gzip, zstd, br, deflate")
+        };
+    }
+
     private static SnmpProfile ParseSnmpProfile(string profile)
     {
         return profile.ToLowerInvariant() switch
@@ -187,19 +212,9 @@ internal static class CliParsing
         var x = right.IndexOf('x');
         var end = x >= 0 ? int.Parse(right.Substring(0, x), CultureInfo.InvariantCulture) : int.Parse(right, CultureInfo.InvariantCulture);
         var factor = x >= 0 ? double.Parse(right.Substring(x + 1), CultureInfo.InvariantCulture) : 2.0;
+        if (factor <= 1.0)
+            throw new ArgumentException($"Invalid step plan '{s}': factor must be greater than 1, got {factor}");
         return new StepPlan(start, end, factor);
-    }
-
-    public static (double, double) ParseKneeRule(string s)
-    {
-        var parts = s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        double dthr = 0.05, dp95 = 0.20;
-        foreach (var p in parts)
-        {
-            if (p.StartsWith("dthr=")) dthr = ParsePercent(p.Substring(5));
-            else if (p.StartsWith("dp95=")) dp95 = ParsePercent(p.Substring(5));
-        }
-        return (dthr, dp95);
     }
 
     public static int ParseSize(string s)
@@ -215,13 +230,10 @@ internal static class CliParsing
     {
         s = s.Trim();
 
-        // Try to parse as a full TimeSpan string (e.g., "00:16:21.7371071" or "1.02:30:00")
-        // Only attempt if the string contains a colon to avoid ambiguity with plain numbers
-        // (which TimeSpan.TryParse would interpret as days)
+        // Full TimeSpan strings require a ':' — TimeSpan.TryParse would interpret a plain number as days
         if (s.Contains(':') && TimeSpan.TryParse(s, CultureInfo.InvariantCulture, out var timeSpan))
             return timeSpan;
 
-        // Fall back to custom format parsing
         s = s.ToLowerInvariant();
         if (s.EndsWith("ms")) return TimeSpan.FromMilliseconds(double.Parse(s[..^2], CultureInfo.InvariantCulture));
         if (s.EndsWith("s")) return TimeSpan.FromSeconds(double.Parse(s[..^1], CultureInfo.InvariantCulture));
@@ -234,7 +246,13 @@ internal static class CliParsing
         s = s.Trim();
         if (s.EndsWith("%"))
             return double.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture) / 100.0;
-        return double.Parse(s, CultureInfo.InvariantCulture);
+
+        var value = double.Parse(s, CultureInfo.InvariantCulture);
+        if (value <= 1.0)
+            return value;
+        if (value > 100.0)
+            throw new ArgumentException($"Invalid percentage: {s}. Use a fraction (0.05), a percent (5%), or a bare number up to 100.");
+        return value / 100.0;
     }
 
     public static double ParseWeight(string s)
@@ -329,7 +347,7 @@ internal static class CliParsing
         {
             "lucene" => IndexingEngine.Lucene,
             "corax" => IndexingEngine.Corax,
-            _ => IndexingEngine.Corax // Default to Corax for unknown values
+            _ => throw new ArgumentException($"Invalid search engine: {value}. Valid options: corax, lucene")
         };
     }
 
@@ -358,12 +376,5 @@ internal static class CliParsing
         }
 
         return opts;
-    }
-
-    private static string ExtractHostFromUrl(string url)
-    {
-        if (Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
-            return uri.Host;
-        return url; // fallback
     }
 }

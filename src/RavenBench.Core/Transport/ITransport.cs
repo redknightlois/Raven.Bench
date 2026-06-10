@@ -18,6 +18,14 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     public bool IsSuccess => ErrorDetails == null;
 
     /// <summary>
+    /// True when the operation was aborted by external cancellation (end of run).
+    /// Cancelled results must not be recorded as successes, errors, or latency samples.
+    /// </summary>
+    public bool Cancelled { get; init; }
+
+    public static TransportResult CancelledResult { get; } = new TransportResult(0, 0) { Cancelled = true };
+
+    /// <summary>
     /// Index name used by the query (populated for query operations).
     /// </summary>
     public string? IndexName { get; } = indexName;

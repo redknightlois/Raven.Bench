@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using System.Diagnostics;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
@@ -7,62 +5,9 @@ using RavenBench.Core.Diagnostics;
 using RavenBench.Core;
 using RavenBench.Core.Reporting;
 using Spectre.Console;
-using Raven.Client.Documents;
-using Raven.Client.Documents.Operations;
 using RavenBench.Dataset;
 
-
 namespace RavenBench;
-
-/// <summary>
-/// Simple error deduplication for verbose logging to prevent spam.
-/// </summary>
-internal static class VerboseErrorTracker
-{
-    private static readonly ConcurrentDictionary<string, int> ErrorCounts = new();
-
-    public static void LogError(string errorMessage, bool verbose)
-    {
-        if (string.IsNullOrEmpty(errorMessage))
-            return;
-
-        var newCount = ErrorCounts.AddOrUpdate(errorMessage, 1, (_, v) => v + 1);
-
-        // Always print the first occurrence of each unique error so failures are visible without --verbose
-        if (newCount == 1)
-            Console.WriteLine($"[Raven.Bench] Error (first occurrence): {errorMessage}");
-    }
-
-    public static void Reset()
-    {
-        ErrorCounts.Clear();
-    }
-
-    public static void PrintSummary()
-    {
-        if (ErrorCounts.IsEmpty)
-            return;
-
-        Console.WriteLine("[Raven.Bench] Verbose Error Summary:");
-        var sortedErrors = ErrorCounts.OrderByDescending(kvp => kvp.Value).Take(10);
-        foreach (var (error, count) in sortedErrors)
-        {
-            Console.WriteLine($"[Raven.Bench]   {count}× {error}");
-        }
-
-        var totalErrors = ErrorCounts.Values.Sum();
-        var errorTypes = ErrorCounts.Count;
-        if (errorTypes > 10)
-        {
-            var moreTypes = errorTypes - 10;
-            Console.WriteLine($"[Raven.Bench]   ... and {moreTypes} more error type{(moreTypes == 1 ? "" : "s")} (total: {totalErrors} errors)");
-        }
-        else if (totalErrors > 0)
-        {
-            Console.WriteLine($"[Raven.Bench]   Total: {totalErrors} error{(totalErrors == 1 ? "" : "s")} across {errorTypes} type{(errorTypes == 1 ? "" : "s")}");
-        }
-    }
-}
 
 public class BenchmarkRunner(RunOptions opts)
 {
@@ -70,12 +15,10 @@ public class BenchmarkRunner(RunOptions opts)
 
     public async Task<BenchmarkRun> RunAsync()
     {
-        // Reset error tracking for this benchmark run
         VerboseErrorTracker.Reset();
         LoadGeneratorExecution.ResetErrorTracking();
         LoadGeneratorExecution.OnFirstError = msg => Console.WriteLine($"[Raven.Bench] Error (first occurrence): {msg}");
 
-        // Validate search engine compatibility with profile
         if (WorkloadProfiles.SupportsEngine(opts.Profile, opts.SearchEngine) == false)
         {
             var supported = string.Join(", ", WorkloadProfiles.GetSupportedEngines(opts.Profile).Select(e => e.ToString().ToLowerInvariant()));
@@ -84,14 +27,12 @@ public class BenchmarkRunner(RunOptions opts)
                 $"Supported engines: {supported}.");
         }
 
-        // Set ThreadPool minimum threads based on command-line parameters
-        var workers = opts.ThreadPoolWorkers ?? 8192;
-        var iocp = opts.ThreadPoolIOCP ?? 8192;
-        
+        int workers = opts.ThreadPoolWorkers;
+        int iocp = opts.ThreadPoolIOCP;
+
         Console.WriteLine($"[Raven.Bench] Setting ThreadPool: workers={workers}, iocp={iocp}");
         ThreadPool.SetMinThreads(workers, iocp);
 
-        // Negotiate HTTP version before creating transport
         Console.WriteLine("[Raven.Bench] Negotiating HTTP version...");
         var negotiatedHttpVersion = await HttpVersionNegotiator.NegotiateVersionAsync(
             opts.Url,
@@ -99,26 +40,26 @@ public class BenchmarkRunner(RunOptions opts)
             opts.StrictHttpVersion);
         Console.WriteLine($"[Raven.Bench] Using HTTP/{HttpHelper.FormatHttpVersion(negotiatedHttpVersion)}");
 
-        // Import dataset if specified - this may override the database name
+        // Dataset import may override the database name
         string? datasetDatabase = null;
         bool datasetWasImported = false;
         if (string.IsNullOrEmpty(opts.Dataset) == false)
         {
             if (opts.Dataset.StartsWith("clinicalwords", StringComparison.OrdinalIgnoreCase))
             {
-                var (database, imported) = await ImportClinicalWordsDatasetAsync(opts, negotiatedHttpVersion);
+                var (database, imported) = await DatasetImportCoordinator.ImportClinicalWordsDatasetAsync(opts, negotiatedHttpVersion);
                 datasetDatabase = database;
                 datasetWasImported = imported;
             }
             else if (opts.Dataset.StartsWith("sphere", StringComparison.OrdinalIgnoreCase))
             {
-                var (database, imported) = await ImportSphereDatasetAsync(opts, negotiatedHttpVersion);
+                var (database, imported) = await DatasetImportCoordinator.ImportSphereDatasetAsync(opts, negotiatedHttpVersion);
                 datasetDatabase = database;
                 datasetWasImported = imported;
             }
             else
             {
-                datasetDatabase = await ImportDatasetAsync(opts);
+                datasetDatabase = await DatasetImportCoordinator.ImportDatasetAsync(opts);
                 datasetWasImported = true;
             }
 
@@ -128,23 +69,19 @@ public class BenchmarkRunner(RunOptions opts)
             }
         }
 
-        // Use dataset database if different from opts.Database
         var effectiveDatabase = datasetDatabase ?? opts.Database;
 
         using var transport = BuildTransport(opts, negotiatedHttpVersion, effectiveDatabase);
 
-        // Ensure database exists before preload or benchmark
         Console.WriteLine($"[Raven.Bench] Ensuring database '{effectiveDatabase}' exists...");
         await transport.EnsureDatabaseExistsAsync(effectiveDatabase);
 
-        // Wait for indexes to be non-stale ONLY if we actually imported
         if (datasetWasImported)
         {
-            await WaitForNonStaleIndexesAsync(opts.Url, effectiveDatabase, negotiatedHttpVersion);
+            await DatasetImportCoordinator.WaitForNonStaleIndexesAsync(opts.Url, effectiveDatabase, negotiatedHttpVersion);
         }
 
-        // Create static indexes for StackOverflow/Users workloads (replaces auto-indexes)
-        // This must happen before metadata discovery so we can set the index names
+        // Static indexes must exist before metadata discovery so index names can be set on the metadata
         StackOverflowDatasetProvider.StaticIndexNames? staticIndexNames = null;
         var needsStaticIndexes = opts.Profile == WorkloadProfile.StackOverflowRandomReads ||
                                   opts.Profile == WorkloadProfile.StackOverflowTextSearch ||
@@ -159,7 +96,6 @@ public class BenchmarkRunner(RunOptions opts)
                 negotiatedHttpVersion);
         }
 
-        // Discover workload metadata for StackOverflow profiles (after dataset import and index wait)
         StackOverflowWorkloadMetadata? stackOverflowMetadata = null;
         if (opts.Profile == WorkloadProfile.StackOverflowRandomReads || opts.Profile == WorkloadProfile.StackOverflowTextSearch)
         {
@@ -173,7 +109,6 @@ public class BenchmarkRunner(RunOptions opts)
                 throw new InvalidOperationException("StackOverflow metadata not available. Ensure dataset is imported and indexes are not stale.");
             }
 
-            // Set static index names on metadata for workloads to use
             if (staticIndexNames != null)
             {
                 stackOverflowMetadata.TitleIndexName = staticIndexNames.QuestionsTitleIndex;
@@ -181,7 +116,6 @@ public class BenchmarkRunner(RunOptions opts)
             }
         }
 
-        // Discover workload metadata for QueryUsersByName profile (after dataset import and index wait)
         StackOverflowUsersWorkloadMetadata? usersMetadata = null;
         if (opts.Profile == WorkloadProfile.QueryUsersByName)
         {
@@ -195,7 +129,6 @@ public class BenchmarkRunner(RunOptions opts)
                 throw new InvalidOperationException("Users metadata not available. Ensure StackOverflow dataset is imported and indexes are not stale.");
             }
 
-            // Set static index names on metadata for workloads to use
             if (staticIndexNames != null)
             {
                 usersMetadata.DisplayNameIndexName = staticIndexNames.UsersDisplayNameIndex;
@@ -203,28 +136,25 @@ public class BenchmarkRunner(RunOptions opts)
             }
         }
 
-        // Discover workload metadata for vector search profiles
         VectorWorkloadMetadata? vectorMetadata = null;
-        if (IsVectorSearchProfile(opts.Profile))
+        if (WorkloadFactory.IsVectorSearchProfile(opts.Profile))
         {
-            vectorMetadata = await LoadVectorMetadataAsync(opts, effectiveDatabase);
+            vectorMetadata = await DatasetImportCoordinator.LoadVectorMetadataAsync(opts);
             if (vectorMetadata == null)
             {
                 throw new InvalidOperationException("Vector metadata not available. Ensure vector dataset is imported or specify --dataset-cache-dir with query vectors.");
             }
         }
 
-        // Pre-flight: verify the vector index exists before starting benchmark steps
         if (vectorMetadata?.IndexName != null)
         {
-            await EnsureVectorIndexExistsAsync(transport, opts, vectorMetadata, effectiveDatabase);
+            await DatasetImportCoordinator.EnsureVectorIndexExistsAsync(transport, opts, vectorMetadata, effectiveDatabase);
         }
 
-        var workload = BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
+        var workload = WorkloadFactory.BuildWorkload(opts, stackOverflowMetadata, usersMetadata, vectorMetadata);
 
-        // Only preload for profiles that actually use bench/ prefix documents
-        if (opts.Preload > 0 && ProfileRequiresPreload(opts.Profile))
-            await PreloadAsync(transport, opts, opts.Preload, _rng, opts.DocumentSizeBytes);
+        if (opts.Preload > 0 && WorkloadFactory.ProfileRequiresPreload(opts.Profile))
+            await PreloadAsync(transport, opts, opts.Preload, opts.DocumentSizeBytes);
         else if (opts.Preload > 0)
             Console.WriteLine($"[Raven.Bench] Skipping preload - profile '{opts.Profile}' uses imported dataset");
 
@@ -245,7 +175,6 @@ public class BenchmarkRunner(RunOptions opts)
             RawHttpTransport raw => raw.EffectiveCompressionMode,
             _ => "unknown"
         };
-        // Use the negotiated HTTP version directly
         string httpVersion = HttpHelper.FormatHttpVersion(negotiatedHttpVersion);
 
         await ValidateClientAsync(transport);
@@ -256,7 +185,6 @@ public class BenchmarkRunner(RunOptions opts)
         {
             Console.WriteLine("[Raven.Bench] Running startup calibration...");
 
-            // Show progress bar during calibration
             startupCalibration = await AnsiConsole.Progress()
                 .StartAsync(async ctx =>
                 {
@@ -268,7 +196,7 @@ public class BenchmarkRunner(RunOptions opts)
                         progress => task.Value = progress).ConfigureAwait(false);
                     return new StartupCalibration { Endpoints = endpointData, Diagnostics = diagnostics };
                 }).ConfigureAwait(false);
-            
+
             if (startupCalibration.Endpoints.Count > 0)
             {
                 Console.WriteLine("[Raven.Bench] Startup calibration completed:");
@@ -285,7 +213,7 @@ public class BenchmarkRunner(RunOptions opts)
                 {
                     var diag = startupCalibration.Diagnostics;
                     Console.WriteLine($"[Raven.Bench]   Server: {opts.Url}");
-                    Console.WriteLine($"[Raven.Bench]   Database: {opts.Database}");
+                    Console.WriteLine($"[Raven.Bench]   Database: {effectiveDatabase}");
                     Console.WriteLine($"[Raven.Bench]   Total attempts: {diag.TotalAttempts} ({diag.SuccessfulAttempts} succeeded, {diag.FailedAttempts} failed)");
                     Console.WriteLine($"[Raven.Bench]   Endpoints tested: {diag.TotalEndpoints}");
 
@@ -305,7 +233,6 @@ public class BenchmarkRunner(RunOptions opts)
                                 var errorMessage = errorGroup.Key;
                                 var countSuffix = errorGroup.Count() == 1 ? "" : $" (×{errorGroup.Count()})";
 
-                                // Add helpful context for common errors
                                 if (errorMessage.Contains("invalid request URI") || errorMessage.Contains("BaseAddress"))
                                 {
                                     Console.WriteLine($"[Raven.Bench]     - URL construction error: {errorMessage}{countSuffix}");
@@ -346,39 +273,28 @@ public class BenchmarkRunner(RunOptions opts)
             startupCalibration = null;
         }
 
-        // Create core context for executor
-        // Create benchmark executor with all dependencies
-        var executor = new BenchmarkExecutor(
-            opts,
-            transport,
-            workload,
-            cpuTracker,
-            serverTracker,
-            opts.Snmp.Enabled ? opts.Snmp : null);
+        var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker);
 
-	        double? observedServiceTimeSeconds = null;
-	        int? previousAutoRateWorkers = null;
+        double? observedServiceTimeSeconds = null;
+        int? previousAutoRateWorkers = null;
 
         while (currentValue <= endValue)
         {
-            // Calculate baseline latency for coordinated omission correction
+            // Baseline latency for coordinated omission correction, in µs
             var baselineLatencyMicros = startupCalibration?.Endpoints.Count > 0
-                ? (long)(startupCalibration.Endpoints.Min(e => e.ObservedMs) * 1000) // Convert ms to µs
+                ? (long)(startupCalibration.Endpoints.Min(e => e.ObservedMs) * 1000)
                 : 0L;
 
-	            // Calculate worker fan-out for rate mode using either the override or baseline-derived heuristic
-	            var rateWorkerCount = opts.Shape == LoadShape.Rate
-	                ? ResolveRateWorkerCount(opts, (int)currentValue, baselineLatencyMicros, observedServiceTimeSeconds)
-	                : 0;
+            var rateWorkerCount = opts.Shape == LoadShape.Rate
+                ? RateWorkerPlanner.ResolveRateWorkerCount(opts, (int)currentValue, baselineLatencyMicros, observedServiceTimeSeconds)
+                : 0;
 
-	            if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false && previousAutoRateWorkers.HasValue)
-	            {
-	                // Avoid sudden worker explosions from transient tail-latency spikes.
-	                // Doubling the target RPS should not require >2x workers in one step under normal conditions.
-	                rateWorkerCount = Math.Min(rateWorkerCount, previousAutoRateWorkers.Value * 2);
-	            }
+            if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false && previousAutoRateWorkers.HasValue)
+            {
+                // Auto worker growth is capped at 2x per step to absorb transient tail-latency spikes.
+                rateWorkerCount = Math.Min(rateWorkerCount, previousAutoRateWorkers.Value * 2);
+            }
 
-            // Create appropriate load generator based on load shape
             ILoadGenerator loadGenerator = opts.Shape switch
             {
                 LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, _rng),
@@ -388,30 +304,26 @@ public class BenchmarkRunner(RunOptions opts)
 
             LogStepStart(opts.Shape, steps.Count + 1, (int)currentValue, rateWorkerCount, opts);
 
-            // Execute step using the executor
-	            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
+            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
 
-            // Take histogram snapshot for this step
-	            var snapshot = latencyRecorder.Snapshot();
+            var snapshot = latencyRecorder.Snapshot();
 
-	            if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false)
-	            {
-	                // In rate mode, baseline RTT can be much lower than the end-to-end request service time.
-	                // Use a high percentile from the *measured* latency distribution to size workers for the next step.
-	                // This avoids under-driving the client when per-op CPU/serialization dominates the RTT.
-	                var p99ServiceTimeSeconds = Math.Max(1e-6, snapshot.GetPercentile(99) / 1_000_000.0);
-	                var throughputImpliedServiceTimeSeconds = stepResult.Throughput > 0
-	                    ? stepResult.Concurrency / stepResult.Throughput
-	                    : 0;
-	                var estimatedServiceTimeSeconds = Math.Max(p99ServiceTimeSeconds, throughputImpliedServiceTimeSeconds);
-	                observedServiceTimeSeconds = observedServiceTimeSeconds.HasValue
-	                    ? Math.Max(observedServiceTimeSeconds.Value, estimatedServiceTimeSeconds)
-	                    : estimatedServiceTimeSeconds;
+            if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false)
+            {
+                // Workers for the next step are sized from measured service time, not baseline RTT,
+                // which under-drives the client when per-op CPU/serialization dominates.
+                var p99ServiceTimeSeconds = Math.Max(1e-6, snapshot.GetPercentile(99) / 1_000_000.0);
+                var throughputImpliedServiceTimeSeconds = stepResult.Throughput > 0
+                    ? stepResult.Concurrency / stepResult.Throughput
+                    : 0;
+                var estimatedServiceTimeSeconds = Math.Max(p99ServiceTimeSeconds, throughputImpliedServiceTimeSeconds);
+                observedServiceTimeSeconds = observedServiceTimeSeconds.HasValue
+                    ? Math.Max(observedServiceTimeSeconds.Value, estimatedServiceTimeSeconds)
+                    : estimatedServiceTimeSeconds;
 
-	                previousAutoRateWorkers = stepResult.Concurrency;
-	            }
+                previousAutoRateWorkers = stepResult.Concurrency;
+            }
 
-            // Calculate percentiles from snapshot
             int[] percentiles = { 50, 75, 90, 95, 99, 999 };
             var rawValues = new double[6];
             for (int i = 0; i < percentiles.Length; i++)
@@ -419,42 +331,34 @@ public class BenchmarkRunner(RunOptions opts)
                 rawValues[i] = snapshot.GetPercentile(percentiles[i]) / 1000.0;
             }
 
-            // Calculate high-percentile tail metrics (p99.9, p99.99, max)
-            // These capture extreme outliers that standard percentiles may miss
-            var p9999 = snapshot.GetPercentile(99.99) / 1000.0;  // p99.99 in milliseconds
-            var pMax = snapshot.MaxMicros / 1000.0;  // Maximum latency in milliseconds
+            var p9999 = snapshot.GetPercentile(99.99) / 1000.0;
+            var pMax = snapshot.MaxMicros / 1000.0;
 
             var rawPercentiles = new Percentiles(rawValues[0], rawValues[1], rawValues[2], rawValues[3], rawValues[4], rawValues[5]);
 
-            // Apply RTT-based normalization using baseline latency from calibration
+            // Normalized = raw minus baseline RTT (additional latency due to load); raw when calibration is unavailable
             Percentiles normalizedPercentiles;
             if (startupCalibration?.Endpoints.Count > 0)
             {
-                // Use minimum observed latency from calibration as baseline RTT
                 var baselineRttMs = startupCalibration.Endpoints.Min(e => e.ObservedMs);
                 var normalizedValues = new double[6];
                 for (int i = 0; i < rawValues.Length; i++)
                 {
-                    // Subtract baseline RTT to get normalized latency (additional latency due to load)
                     normalizedValues[i] = Math.Max(0, rawValues[i] - baselineRttMs);
                 }
                 normalizedPercentiles = new Percentiles(normalizedValues[0], normalizedValues[1], normalizedValues[2], normalizedValues[3], normalizedValues[4], normalizedValues[5]);
             }
             else
             {
-                // Fallback when calibration is unavailable
                 normalizedPercentiles = rawPercentiles;
             }
-            
-            // Update step result with percentile data
+
             stepResult.Raw = rawPercentiles;
             stepResult.Normalized = normalizedPercentiles;
             stepResult.P9999 = p9999;
             stepResult.PMax = pMax;
             stepResult.CorrectedCount = snapshot.TotalCount;
 
-            // Apply same baseline normalization to tail metrics as we do for percentiles
-            // This ensures normalized view shows additional latency due to load consistently
             if (startupCalibration?.Endpoints.Count > 0)
             {
                 var baselineRttMs = startupCalibration.Endpoints.Min(e => e.ObservedMs);
@@ -463,13 +367,11 @@ public class BenchmarkRunner(RunOptions opts)
             }
             else
             {
-                // No calibration available - normalized = raw
                 stepResult.NormalizedP9999 = p9999;
                 stepResult.NormalizedPMax = pMax;
             }
 
-            // Always build histogram data for JSON output
-            var artifact = BuildHistogramArtifact(snapshot, stepResult.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
+            var artifact = HistogramExporter.BuildHistogramArtifact(snapshot, stepResult.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
             if (artifact != null)
             {
                 histogramArtifacts.Add(artifact);
@@ -479,34 +381,29 @@ public class BenchmarkRunner(RunOptions opts)
             LogStepResult(steps.Count, stepResult);
             maxNetUtil = Math.Max(maxNetUtil, stepResult.NetworkUtilization);
 
-            // knee stop if error rate exceeds bound significantly
             if (stepResult.ErrorRate > Math.Max(opts.MaxErrorRate, 0.05))
             {
                 Console.WriteLine("[Raven.Bench] High error rate; stopping ramp.");
                 break;
             }
 
-            // Early stop for rate-based benchmarks when server cannot keep up
             if (opts.Shape == LoadShape.Rate && stepResult.TargetThroughput.HasValue)
             {
                 var target = stepResult.TargetThroughput.Value;
                 var actual = stepResult.Throughput;
                 var deltaPct = (actual - target) / target * 100.0;
 
-                // Stop if throughput is significantly below target (server saturated)
                 if (deltaPct < -30.0)
                 {
                     Console.WriteLine($"[Raven.Bench] Throughput is {Math.Abs(deltaPct):F1}% below target ({actual:F0} vs {target:F0}). Server appears saturated; stopping ramp.");
                     break;
                 }
 
-                // Stop if throughput is degrading compared to previous step (performance regression)
                 if (steps.Count >= 2)
                 {
                     var prevStep = steps[steps.Count - 2];
                     var throughputDrop = (stepResult.Throughput - prevStep.Throughput) / prevStep.Throughput * 100.0;
 
-                    // If throughput drops by >30% between steps, server is overloaded
                     if (throughputDrop < -30.0)
                     {
                         Console.WriteLine($"[Raven.Bench] Throughput degraded by {Math.Abs(throughputDrop):F1}% from previous step ({stepResult.Throughput:F0} vs {prevStep.Throughput:F0}). Server appears overloaded; stopping ramp.");
@@ -515,9 +412,7 @@ public class BenchmarkRunner(RunOptions opts)
                 }
             }
 
-            // Stop if latencies indicate extreme server degradation (applies to all load shapes)
-            // p99.9 > 30 seconds suggests the server is severely overloaded and continuing is pointless
-            if (stepResult.P9999 > 30_000.0) // 30 seconds in milliseconds
+            if (stepResult.P9999 > 30_000.0)
             {
                 Console.WriteLine($"[Raven.Bench] Extreme latencies detected (p99.9={stepResult.P9999:F0}ms). Server severely degraded; stopping ramp.");
                 break;
@@ -526,13 +421,11 @@ public class BenchmarkRunner(RunOptions opts)
             currentValue = stepPlan.Next(currentValue);
         }
 
-        // Print verbose error summary if there were any errors
         if (opts.Verbose)
         {
             VerboseErrorTracker.PrintSummary();
         }
 
-        // Get SNMP metrics history before disposing the tracker
         var serverMetricsHistory = serverTracker.GetHistory();
 
         return new BenchmarkRun
@@ -546,130 +439,6 @@ public class BenchmarkRunner(RunOptions opts)
             HistogramArtifacts = histogramArtifacts.Count > 0 ? histogramArtifacts : null,
             VectorMetadata = vectorMetadata,
             EffectiveDatabase = effectiveDatabase
-        };
-    }
-
-    /// <summary>
-    /// Build histogram data for JSON. Always creates the full percentile distribution.
-    /// Optionally writes hlog/csv files if outputPrefix is specified.
-    /// </summary>
-    private static HistogramArtifact? BuildHistogramArtifact(
-        HistogramSnapshot snapshot,
-        int concurrency,
-        string? outputPrefix,
-        HistogramExportFormat format)
-    {
-        var histogram = snapshot.GetHistogram();
-        if (histogram == null || histogram.TotalCount == 0)
-            return null;
-
-        string? hlogPath = null;
-        string? csvPath = null;
-
-        // Only export files if output prefix is specified
-        if (string.IsNullOrEmpty(outputPrefix) == false)
-        {
-            // Ensure output directory exists (in case prefix includes a directory path)
-            var outputDir = Path.GetDirectoryName(outputPrefix);
-            if (string.IsNullOrEmpty(outputDir) == false)
-            {
-                Directory.CreateDirectory(outputDir);
-            }
-
-            // Optional: write hlog file if requested
-            if (format == HistogramExportFormat.Hlog || format == HistogramExportFormat.Both)
-            {
-                hlogPath = $"{outputPrefix}-step-c{concurrency:D4}.hlog";
-
-                try
-                {
-                    using var fs = File.Create(hlogPath);
-                    using var writer = new StreamWriter(fs);
-
-                    writer.WriteLine("# HdrHistogram Percentile Distribution");
-                    writer.WriteLine($"# Concurrency: {concurrency}");
-                    writer.WriteLine($"# TotalCount: {histogram.TotalCount}");
-                    writer.WriteLine($"# MaxValueMicros: {snapshot.MaxMicros}");
-                    writer.WriteLine("# Percentile,LatencyMicros,LatencyMs");
-
-                    foreach (var p in HistogramArtifact.StandardPercentiles)
-                    {
-                        var valueMicros = histogram.GetValueAtPercentile(p);
-                        var valueMs = valueMicros / 1000.0;
-                        writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Raven.Bench] Warning: Failed to export hlog for concurrency {concurrency}: {ex.Message}");
-                    hlogPath = null;
-                }
-            }
-
-            // Optional: write CSV file if requested
-            if (format == HistogramExportFormat.Csv || format == HistogramExportFormat.Both)
-            {
-                csvPath = $"{outputPrefix}-step-c{concurrency:D4}.csv";
-
-                try
-                {
-                    using var fs = File.Create(csvPath);
-                    using var writer = new StreamWriter(fs);
-
-                    writer.WriteLine("Percentile,LatencyMicros,LatencyMs");
-
-                    // Simpler CSV - just the key percentiles most people care about
-                    var csvPercentiles = new[] { 0.0, 50.0, 75.0, 90.0, 95.0, 99.0, 99.9, 99.99, 99.999, 100.0 };
-                    foreach (var p in csvPercentiles)
-                    {
-                        var valueMicros = histogram.GetValueAtPercentile(p);
-                        var valueMs = valueMicros / 1000.0;
-                        writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Raven.Bench] Warning: Failed to export CSV for concurrency {concurrency}: {ex.Message}");
-                    csvPath = null;
-                }
-            }
-        }  // End of file export block
-
-        // Build the full percentile distribution for JSON
-        var percentiles = HistogramArtifact.StandardPercentiles.ToArray();
-        var latencyInMicroseconds = new long[percentiles.Length];
-        var latencyInMilliseconds = new double[percentiles.Length];
-
-        for (int i = 0; i < percentiles.Length; i++)
-        {
-            var valueMicros = histogram.GetValueAtPercentile(percentiles[i]);
-            latencyInMicroseconds[i] = valueMicros;
-            latencyInMilliseconds[i] = Math.Round(valueMicros / 1000.0, 4);
-        }
-
-        // Extract histogram bin data for reconstructing the distribution
-        // RecordedValues() returns (value, count) pairs for all non-zero bins
-        var binEdgesList = new List<long>();
-        var binCountsList = new List<long>();
-
-        foreach (var bucket in histogram.RecordedValues())
-        {
-            binEdgesList.Add(bucket.ValueIteratedTo);
-            binCountsList.Add(bucket.CountAddedInThisIterationStep);
-        }
-
-        return new HistogramArtifact
-        {
-            Concurrency = concurrency,
-            TotalCount = histogram.TotalCount,
-            MaxValueInMicroseconds = snapshot.MaxMicros,
-            Percentiles = percentiles,
-            LatencyInMicroseconds = latencyInMicroseconds,
-            LatencyInMilliseconds = latencyInMilliseconds,
-            BinEdges = binEdgesList.ToArray(),
-            BinCounts = binCountsList.ToArray(),
-            HlogPath = hlogPath,
-            CsvPath = csvPath
         };
     }
 
@@ -727,327 +496,25 @@ public class BenchmarkRunner(RunOptions opts)
         }
     }
 
-    internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros)
-    {
-        return ResolveRateWorkerCount(opts, targetRps, baselineLatencyMicros, observedServiceTimeSeconds: null);
-    }
-
-    internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros, double? observedServiceTimeSeconds)
-    {
-        if (opts == null)
-            throw new ArgumentNullException(nameof(opts));
-
-        if (targetRps <= 0)
-            return Math.Max(1, opts.RateWorkers ?? 32);
-
-        if (opts.RateWorkers.HasValue)
-            return Math.Max(1, opts.RateWorkers.Value);
-
-        const double fallbackBaselineSeconds = 0.002; // Assume 2 ms RTT when calibration is unavailable
-        var baselineSeconds = baselineLatencyMicros > 0
-            ? Math.Max(baselineLatencyMicros / 1_000_000.0, 1e-6)
-            : fallbackBaselineSeconds;
-
-        // Little's Law: concurrency ~= throughput * latency. Add 1.5x headroom to absorb jitter.
-        var effectiveSeconds = observedServiceTimeSeconds.HasValue && observedServiceTimeSeconds.Value > 0
-            ? Math.Max(observedServiceTimeSeconds.Value, baselineSeconds)
-            : baselineSeconds;
-
-        var estimatedConcurrency = targetRps * effectiveSeconds;
-        var plannedWorkers = (int)Math.Ceiling(Math.Max(estimatedConcurrency * 1.5, 1));
-
-        const int minWorkers = 32;
-        const int maxWorkers = 16384;
-
-        if (plannedWorkers < minWorkers)
-            return minWorkers;
-
-        if (plannedWorkers > maxWorkers)
-            return maxWorkers;
-
-        return plannedWorkers;
-    }
-
-
-
-    internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, StackOverflowUsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)
-    {
-        if (opts.Profile == WorkloadProfile.Unspecified)
-            throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id|query-users-by-name.");
-
-        if (opts.Profile != WorkloadProfile.Mixed)
-        {
-            if (opts.Reads.HasValue || opts.Writes.HasValue || opts.Updates.HasValue)
-            {
-                throw new InvalidOperationException("--reads/--writes/--updates are only supported with --profile mixed.");
-            }
-        }
-
-        IKeyDistribution CreateDistribution()
-        {
-            return opts.Distribution.ToLowerInvariant() switch
-            {
-                "uniform" => new UniformDistribution(),
-                "zipfian" => new ZipfianDistribution(),
-                "latest" => new LatestDistribution(),
-                _ => throw new NotImplementedException($"Distribution '{opts.Distribution}' is not implemented. Supported distributions: uniform, zipfian, latest")
-            };
-        }
-
-        return opts.Profile switch
-        {
-            WorkloadProfile.Mixed => BuildMixedWorkload(opts, CreateDistribution()),
-            WorkloadProfile.Writes => new WriteWorkload(opts.DocumentSizeBytes, startingKey: opts.Preload),
-            WorkloadProfile.Reads => BuildReadWorkload(opts, CreateDistribution()),
-            WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
-            WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, startingKey: opts.Preload),
-            WorkloadProfile.StackOverflowRandomReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
-            WorkloadProfile.StackOverflowTextSearch => BuildStackOverflowQueryWorkload(opts, stackOverflowMetadata!),
-            WorkloadProfile.QueryUsersByName => BuildUsersQueryWorkload(opts, usersMetadata!),
-            WorkloadProfile.VectorSearch => BuildVectorSearchWorkload(opts, vectorMetadata!),
-            WorkloadProfile.VectorSearchExact => BuildVectorSearchWorkload(opts, vectorMetadata!, exactSearch: true),
-            _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
-        };
-    }
-
-    private static IWorkload BuildMixedWorkload(RunOptions opts, IKeyDistribution distribution)
-    {
-        if (opts.Preload <= 0)
-            throw new InvalidOperationException("Mixed profile requires preloaded documents. Use --preload to seed data.");
-
-        // Default: 75% reads, 25% updates (no writes - operate on existing data)
-        var reads = opts.Reads ?? 75.0;
-        var writes = opts.Writes ?? 0.0;
-        var updates = opts.Updates ?? 25.0;
-        var mix = WorkloadMix.FromWeights(reads, writes, updates);
-        return new MixedProfileWorkload(mix, distribution, opts.DocumentSizeBytes, initialKeyspace: opts.Preload);
-    }
-
-    private static IWorkload BuildReadWorkload(RunOptions opts, IKeyDistribution distribution)
-    {
-        if (opts.Preload <= 0)
-            throw new InvalidOperationException("Read profile requires --preload to seed the keyspace before the run.");
-        return new ReadWorkload(distribution, opts.Preload);
-    }
-
-    private static IWorkload BuildQueryWorkload(RunOptions opts, IKeyDistribution distribution)
-    {
-        if (opts.Preload <= 0)
-            throw new InvalidOperationException("Query profile requires --preload to seed the keyspace before the run.");
-        return new QueryWorkload(distribution, opts.Preload);
-    }
-
-    private static IWorkload BuildStackOverflowQueryWorkload(RunOptions opts, StackOverflowWorkloadMetadata metadata)
-    {
-        return opts.QueryProfile switch
-        {
-            QueryProfile.VoronEquality => new StackOverflowQueryWorkload(metadata, useVoronPath: true), // direct Voron lookup via id()
-            QueryProfile.IndexEquality => new StackOverflowQueryWorkload(metadata, useVoronPath: false), // index-based lookup
-            QueryProfile.TextPrefix => new QuestionsByTitlePrefixWorkload(metadata),
-            QueryProfile.TextSearch => new QuestionsByTitleSearchWorkload(metadata, 0.3), // 30% rare, 70% common
-            QueryProfile.TextSearchRare => new QuestionsByTitleSearchWorkload(metadata, 1.0), // 100% rare
-            QueryProfile.TextSearchCommon => new QuestionsByTitleSearchWorkload(metadata, 0.0), // 100% common
-            QueryProfile.TextSearchMixed => new QuestionsByTitleSearchWorkload(metadata, 0.5), // 50% rare, 50% common
-            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for StackOverflow queries. Supported profiles: voron-equality, index-equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
-        };
-    }
-
-    private static IWorkload BuildUsersQueryWorkload(RunOptions opts, StackOverflowUsersWorkloadMetadata metadata)
-    {
-        return opts.QueryProfile switch
-        {
-            QueryProfile.VoronEquality or QueryProfile.IndexEquality => new StackOverflowUsersByNameQueryWorkload(metadata),
-            QueryProfile.Range => new StackOverflowUsersRangeQueryWorkload(metadata),
-            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range")
-        };
-    }
-
-    private static bool IsVectorSearchProfile(WorkloadProfile profile)
-    {
-        return profile == WorkloadProfile.VectorSearch ||
-               profile == WorkloadProfile.VectorSearchExact;
-    }
-
-    /// <summary>
-    /// Determines if a profile requires preloaded bench/ documents.
-    /// Dataset-based profiles (StackOverflow, Users, Vector) use their own imported data.
-    /// </summary>
-    private static bool ProfileRequiresPreload(WorkloadProfile profile)
-    {
-        return profile switch
-        {
-            WorkloadProfile.Mixed => true,
-            WorkloadProfile.Reads => true,
-            WorkloadProfile.QueryById => true,
-            // All other profiles either generate data on-the-fly or use imported datasets
-            _ => false
-        };
-    }
-
-    private static async Task<VectorWorkloadMetadata?> LoadVectorMetadataAsync(RunOptions opts, string database)
-    {
-        // For vector workloads, we need to load query vectors from the dataset
-        var datasetCacheDir = opts.DatasetCacheDir ?? Path.Combine(Path.GetTempPath(), "raven-bench-datasets");
-        
-        // Determine dataset name from profile or explicit --dataset option
-        var datasetName = opts.Dataset ?? GetDefaultDatasetForProfile(opts.Profile);
-        
-        if (string.IsNullOrEmpty(datasetName))
-        {
-            throw new InvalidOperationException("Vector search profiles require --dataset option. Supported: clinicalwords100d, clinicalwords300d, clinicalwords600d, sphere");
-        }
-
-        var engineSuffix = opts.SearchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
-
-        // For clinicalwords datasets, generate query vectors directly from the provider
-        if (datasetName.StartsWith("clinicalwords", StringComparison.OrdinalIgnoreCase))
-        {
-            int dimensions = 100;
-            if (datasetName.Contains("300d")) dimensions = 300;
-            else if (datasetName.Contains("600d")) dimensions = 600;
-
-            var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
-            var metadata = await provider.GenerateQueryVectorsAsync(count: 1000);
-            metadata.IndexName = VectorIndexNaming.GetIndexName("Words", opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
-            metadata.CollectionName = "WordDocuments";
-            return metadata;
-        }
-
-        // For sphere datasets, generate query vectors from the imported data
-        if (datasetName.StartsWith("sphere", StringComparison.OrdinalIgnoreCase))
-        {
-            var profile = opts.DatasetProfile ?? "100k";
-            var provider = new Dataset.SphereDatasetProvider(profile);
-            var dbName = provider.GetDatabaseName(profile);
-            var metadata = await provider.GenerateQueryVectorsAsync(opts.Url, dbName, count: 1000);
-            metadata.IndexName = VectorIndexNaming.GetIndexName(Dataset.SphereDatasetProvider.CollectionName, opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
-            metadata.CollectionName = Dataset.SphereDatasetProvider.CollectionName;
-            metadata.IndexedFieldName = "Vector";
-            metadata.EnsureIndexExists = async (storeObj, indexName) =>
-            {
-                var s = (IDocumentStore)storeObj;
-                await Dataset.SphereDatasetProvider.CreateVectorIndexAsync(
-                    s, opts.VectorQuantization, opts.VectorExactSearch, opts.SearchEngine,
-                    opts.VectorEdges, opts.VectorCandidates);
-            };
-            return metadata;
-        }
-
-        // Construct path to query vectors file for other datasets
-        var queryFilePath = Path.Combine(datasetCacheDir, GetQueryFileName(datasetName));
-        
-        if (File.Exists(queryFilePath) == false)
-        {
-            Console.WriteLine($"[Raven.Bench] Query vectors file not found: {queryFilePath}");
-            Console.WriteLine($"[Raven.Bench] Please download dataset using --dataset {datasetName} or manually place query vectors in cache directory.");
-            return null;
-        }
-
-        // Fallback or error for unknown datasets
-        throw new NotSupportedException($"Dataset '{datasetName}' is not supported for vector search queries.");
-    }
-
-    private static string? GetDefaultDatasetForProfile(WorkloadProfile profile)
-    {
-        // Dataset is now specified via --dataset parameter, not inferred from profile
-        return null;
-    }
-
-    private static string GetQueryFileName(string datasetName)
-    {
-        var name = datasetName.ToLowerInvariant();
-        if (name.StartsWith("clinicalwords"))
-            return $"{name}_queries.json";
-        throw new NotSupportedException($"Unknown dataset: {datasetName}");
-    }
-
-    private static async Task EnsureVectorIndexExistsAsync(
-        ITransport transport,
-        RunOptions opts,
-        VectorWorkloadMetadata metadata,
-        string effectiveDatabase)
-    {
-        var indexName = metadata.IndexName!;
-        Console.WriteLine($"[Raven.Bench] Verifying vector index '{indexName}' exists...");
-
-        using var store = new Raven.Client.Documents.DocumentStore
-        {
-            Urls = [opts.Url],
-            Database = effectiveDatabase
-        };
-        var httpVersion = opts.HttpVersion != "auto"
-            ? HttpHelper.ParseHttpVersion(HttpHelper.NormalizeHttpVersion(opts.HttpVersion))
-            : null;
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
-
-        var indexes = await store.Maintenance.SendAsync(
-            new Raven.Client.Documents.Operations.Indexes.GetIndexNamesOperation(0, int.MaxValue));
-
-        if (indexes.Contains(indexName) == false)
-        {
-            Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' not found — creating...");
-            if (metadata.EnsureIndexExists != null)
-                await metadata.EnsureIndexExists(store, indexName);
-            else
-                throw new InvalidOperationException(
-                    $"Vector index '{indexName}' does not exist and cannot be auto-created. " +
-                    "Ensure the dataset was imported with the correct HNSW parameters.");
-        }
-
-        // Wait for the index to be non-stale before starting benchmark steps
-        Console.WriteLine($"[Raven.Bench] Waiting for vector index '{indexName}' to be non-stale...");
-        using var session = store.OpenAsyncSession();
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-        await session.Query<object>(indexName)
-            .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
-            .Take(0)
-            .ToListAsync();
-        Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' is ready");
-    }
-
-    private static IWorkload BuildVectorSearchWorkload(
-        RunOptions opts, 
-        VectorWorkloadMetadata metadata, 
-        bool exactSearch = false,
-        VectorQuantization? quantization = null)
-    {
-        var effectiveQuantization = quantization ?? opts.VectorQuantization;
-        var effectiveExactSearch = exactSearch || opts.VectorExactSearch;
-        
-        return new VectorSearchWorkload(
-            metadata,
-            topK: opts.VectorTopK,
-            minimumSimilarity: opts.VectorMinSimilarity,
-            useExactSearch: effectiveExactSearch,
-            quantization: effectiveQuantization,
-            efSearch: opts.VectorSearchEf);
-    }
-
     private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion, string? databaseOverride = null)
     {
         var database = databaseOverride ?? opts.Database;
 
-        if (opts.Transport == "raw")
+        switch (opts.Transport)
         {
-            Console.WriteLine($"[Raven.Bench] Transport: Raw HTTP with {opts.Compression} compression");
-            return new RawHttpTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint);
+            case TransportKind.Raw:
+                Console.WriteLine($"[Raven.Bench] Transport: Raw HTTP with {opts.Compression} compression");
+                return new RawHttpTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint);
+            case TransportKind.Client:
+                Console.WriteLine($"[Raven.Bench] Transport: RavenDB Client with {opts.Compression} compression");
+                return new RavenClientTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion);
+            default:
+                throw new ArgumentOutOfRangeException(nameof(opts.Transport), opts.Transport, null);
         }
-
-        if (opts.Transport == "client")
-        {
-            Console.WriteLine($"[Raven.Bench] Transport: RavenDB Client with {opts.Compression} compression");
-            return new RavenClientTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion);
-        }
-
-        Console.WriteLine("[Raven.Bench] Transport: Raw HTTP with identity compression (default)");
-        return new RawHttpTransport(opts.Url, database, "identity", negotiatedHttpVersion);
     }
 
-    private static async Task PreloadAsync(ITransport transport, RunOptions opts, int count, Random rng, int docSize)
+    private static async Task PreloadAsync(ITransport transport, RunOptions opts, int count, int docSize)
     {
-        // Check if documents already exist
         var existingCount = await transport.GetDocumentCountAsync("bench/");
 
         if (existingCount >= count)
@@ -1063,6 +530,7 @@ public class BenchmarkRunner(RunOptions opts)
             MaxDegreeOfParallelism = 32
         };
 
+        var failures = 0;
         await Parallel.ForEachAsync(
             Enumerable.Range(1, count),
             options,
@@ -1070,196 +538,22 @@ public class BenchmarkRunner(RunOptions opts)
             {
                 try
                 {
-                    var id = IdFor(i);
+                    var id = BenchIds.IdFor(i);
+                    var rng = new Random(opts.Seed + i);
                     await transport.PutAsync(id, PayloadGenerator.Generate(docSize, rng));
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // ignore individual preload failures
+                    Interlocked.Increment(ref failures);
+                    VerboseErrorTracker.LogError(ex.Message, opts.Verbose);
                 }
             });
 
+        if (failures > 0)
+            throw new InvalidOperationException($"Preload failed: {failures} of {count} document writes failed.");
+
         Console.WriteLine("[Raven.Bench] Preload complete.");
     }
-
-    private static async Task WaitForNonStaleIndexesAsync(string serverUrl, string databaseName, Version httpVersion)
-    {
-        Console.WriteLine("[Raven.Bench] Waiting for indexes to become non-stale...");
-
-        using var store = new DocumentStore
-        {
-            Urls = new[] { serverUrl },
-            Database = databaseName
-        };
-        HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
-
-        var maxWait = TimeSpan.FromMinutes(10);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        while (sw.Elapsed < maxWait)
-        {
-            var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
-            var staleIndexes = stats.Indexes.Where(i => i.IsStale).ToList();
-
-            if (staleIndexes.Count == 0)
-            {
-                Console.WriteLine($"[Raven.Bench] All indexes are non-stale (waited {sw.Elapsed.TotalSeconds:F1}s)");
-                return;
-            }
-
-            Console.WriteLine($"[Raven.Bench] {staleIndexes.Count} stale index(es), waiting... ({sw.Elapsed.TotalSeconds:F0}s elapsed)");
-            await Task.Delay(2000);
-        }
-
-        Console.WriteLine($"[Raven.Bench] WARNING: Indexes still stale after {maxWait.TotalMinutes} minutes");
-    }
-
-    private static async Task<string> ImportDatasetAsync(RunOptions opts)
-    {
-        Console.WriteLine($"[Raven.Bench] Dataset import requested: {opts.Dataset}");
-
-        var datasetManager = new Dataset.DatasetManager(opts.DatasetCacheDir);
-
-        // Determine database name and dataset size based on profile or custom size
-        string targetDatabase;
-        int datasetSize;
-
-        if (string.IsNullOrEmpty(opts.DatasetProfile) == false)
-        {
-            // Use predefined profile
-            var profile = Enum.Parse<Dataset.DatasetProfile>(opts.DatasetProfile, ignoreCase: true);
-            targetDatabase = Dataset.KnownDatasets.GetDatabaseName(profile);
-            datasetSize = Dataset.KnownDatasets.GetDatasetSize(profile);
-            Console.WriteLine($"[Raven.Bench] Using dataset profile '{opts.DatasetProfile}': {targetDatabase} (~{(datasetSize == 0 ? 50 : datasetSize + 2)}GB)");
-        }
-        else if (opts.DatasetSize > 0 || opts.DatasetSize == 0)
-        {
-            // Use custom size - generate database name based on size
-            targetDatabase = Dataset.KnownDatasets.GetDatabaseNameForSize(opts.DatasetSize);
-            datasetSize = opts.DatasetSize;
-            Console.WriteLine($"[Raven.Bench] Using custom dataset size: {targetDatabase} (~{(datasetSize == 0 ? 50 : datasetSize + 2)}GB)");
-        }
-        else
-        {
-            // Fallback to user-specified database name
-            targetDatabase = opts.Database;
-            datasetSize = 0;
-        }
-
-        // Check if dataset already exists
-        if (opts.DatasetSkipIfExists)
-        {
-            var exists = await datasetManager.IsStackOverflowDatasetImportedAsync(opts.Url, targetDatabase, opts.HttpVersion, expectedMinDocuments: 10000);
-            if (exists)
-            {
-                Console.WriteLine($"[Raven.Bench] Dataset appears to already exist in database '{targetDatabase}'. Skipping import.");
-                Console.WriteLine($"[Raven.Bench] Use --dataset-skip-if-exists=false to force re-import.");
-                return targetDatabase; // Return database name even if skipping import
-            }
-        }
-
-        // Get dataset info
-        Dataset.DatasetInfo? dataset;
-        if (datasetSize > 0)
-        {
-            // Partial dataset
-            Console.WriteLine($"[Raven.Bench] Importing partial dataset with {datasetSize} post dump files to '{targetDatabase}'");
-            dataset = Dataset.KnownDatasets.StackOverflowPartial(datasetSize);
-        }
-        else
-        {
-            // Full dataset
-            Console.WriteLine($"[Raven.Bench] Importing full dataset to '{targetDatabase}'");
-            dataset = Dataset.KnownDatasets.GetByName(opts.Dataset!);
-        }
-
-        if (dataset == null)
-        {
-            throw new ArgumentException($"Unknown dataset: {opts.Dataset}. Supported: stackoverflow, clinicalwords100d, clinicalwords300d, clinicalwords600d");
-        }
-
-        // Download and import to the target database
-        await datasetManager.ImportDatasetAsync(dataset, opts.Url, targetDatabase, opts.HttpVersion);
-
-        // Return the target database name so the runner can use it
-        return targetDatabase;
-    }
-
-    private static async Task<(string database, bool imported)> ImportClinicalWordsDatasetAsync(RunOptions opts, Version httpVersion)
-    {
-        // Parse dimensions from dataset name (e.g., "clinicalwords100d" -> 100)
-        var datasetName = opts.Dataset!.ToLowerInvariant();
-        int dimensions = 100; // default
-        if (datasetName.Contains("300d")) dimensions = 300;
-        else if (datasetName.Contains("600d")) dimensions = 600;
-
-        var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
-        var targetDatabase = provider.GetDatabaseName();
-
-        Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D dataset -> '{targetDatabase}'");
-
-        // Check if data already imported to database
-        if (opts.DatasetSkipIfExists)
-        {
-            Console.WriteLine($"[Raven.Bench] Checking if data already imported...");
-            var exists = await provider.IsDatasetImportedAsync(opts.Url, targetDatabase, expectedMinDocuments: Dataset.ClinicalWordsDatasetProvider.MinExpectedDocuments, httpVersion: httpVersion);
-            if (exists)
-            {
-                Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D already imported. Ready to use.");
-                return (targetDatabase, imported: false);
-            }
-            Console.WriteLine($"[Raven.Bench] Data not found or incomplete, will import.");
-        }
-
-        // Import words as documents with embeddings
-        Console.WriteLine($"[Raven.Bench] Importing clinical word embeddings to RavenDB (engine: {opts.SearchEngine})...");
-        var exactSearch = opts.Profile == WorkloadProfile.VectorSearchExact || opts.VectorExactSearch;
-        await provider.ImportWordsAsync(opts.Url, targetDatabase, opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine);
-
-        Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D import complete.");
-
-        return (targetDatabase, imported: true);
-    }
-
-    private static async Task<(string database, bool imported)> ImportSphereDatasetAsync(RunOptions opts, Version httpVersion)
-    {
-        var profile = opts.DatasetProfile ?? "100k";
-        var provider = new Dataset.SphereDatasetProvider(profile);
-        var targetDatabase = provider.GetDatabaseName(profile);
-
-        Console.WriteLine($"[Raven.Bench] SPHERE {profile} dataset -> '{targetDatabase}'");
-
-        if (opts.DatasetSkipIfExists)
-        {
-            Console.WriteLine($"[Raven.Bench] Checking if data already imported...");
-            var expectedMin = (int)Math.Min(Dataset.SphereDatasetProvider.GetProfile(profile).TargetDocCount, int.MaxValue);
-            var exists = await provider.IsDatasetImportedAsync(opts.Url, targetDatabase, expectedMinDocuments: expectedMin, httpVersion: httpVersion);
-            if (exists)
-            {
-                Console.WriteLine($"[Raven.Bench] SPHERE {profile} already imported. Ready to use.");
-                return (targetDatabase, imported: false);
-            }
-            Console.WriteLine($"[Raven.Bench] Data not found or incomplete, will import.");
-        }
-
-        // Resolve data source
-        var dataSourcePath = opts.DatasetSource
-            ?? opts.DatasetCacheDir
-            ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets", "sphere");
-
-        Console.WriteLine($"[Raven.Bench] Importing SPHERE dataset from '{dataSourcePath}' (engine: {opts.SearchEngine})...");
-        var exactSearch = opts.Profile == WorkloadProfile.VectorSearchExact || opts.VectorExactSearch;
-        await provider.ImportAsync(opts.Url, targetDatabase, dataSourcePath,
-            opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine,
-            numberOfEdges: opts.VectorEdges, numberOfCandidatesForIndexing: opts.VectorCandidates);
-
-        Console.WriteLine($"[Raven.Bench] SPHERE {profile} import complete.");
-
-        return (targetDatabase, imported: true);
-    }
-
-    private static string IdFor(int i) => $"bench/{i:D8}";
 
     /// <summary>
     /// Validates client can connect to the server and rejects invalid clients.
@@ -1269,14 +563,7 @@ public class BenchmarkRunner(RunOptions opts)
     {
         try
         {
-            if (transport is RawHttpTransport rawTransport)
-            {
-                await rawTransport.ValidateClientAsync(opts.StrictHttpVersion);
-            }
-            else
-            {
-                await transport.ValidateClientAsync();
-            }
+            await transport.ValidateClientAsync();
             Console.WriteLine("[Raven.Bench] Client validation successful");
         }
         catch (Exception ex)
@@ -1287,13 +574,11 @@ public class BenchmarkRunner(RunOptions opts)
 
     /// <summary>
     /// Validates server configuration matches expectations to catch environment issues early.
-    /// Checks server core limits to ensure benchmark runs in expected conditions.
     /// </summary>
     private async Task ValidateServerSanityAsync(ITransport transport)
     {
         try
-        { 
-            // Display RavenDB server version and license type
+        {
             var serverVersion = await transport.GetServerVersionAsync();
             var licenseType = await transport.GetServerLicenseTypeAsync();
             var maxCores = await transport.GetServerMaxCoresAsync();
@@ -1301,12 +586,11 @@ public class BenchmarkRunner(RunOptions opts)
             Console.WriteLine($"[Raven.Bench] License Type: {licenseType}");
             Console.WriteLine($"[Raven.Bench] Max CPU Cores: {(maxCores?.ToString() ?? "unlimited")}");
 
-            // Display effective HTTP version
             if (transport is RawHttpTransport rawTransport)
             {
                 Console.WriteLine($"[Raven.Bench] HTTP Version: {rawTransport.EffectiveHttpVersion}");
             }
-            
+
             if (opts.ExpectedCores.HasValue)
             {
                 if (maxCores.HasValue && maxCores.Value != opts.ExpectedCores.Value)
@@ -1317,14 +601,14 @@ public class BenchmarkRunner(RunOptions opts)
         }
         catch (Exception ex)
         {
-            // non-fatal - continue with benchmark
+            // non-fatal
             Console.WriteLine($"[Raven.Bench] Warning: Server validation failed: {ex.Message}");
         }
     }
 
     /// <summary>
     /// Validates SNMP connectivity if SNMP is enabled in options.
-    /// Throws exception if SNMP is enabled but fails to retrieve metrics - SNMP must work when explicitly enabled.
+    /// SNMP must work when explicitly enabled; failure aborts the benchmark.
     /// </summary>
     private async Task ValidateSnmpAsync(ITransport transport)
     {
@@ -1366,7 +650,6 @@ public class BenchmarkRunner(RunOptions opts)
         }
         catch (InvalidOperationException)
         {
-            // Re-throw validation failures
             throw;
         }
         catch (Exception ex)

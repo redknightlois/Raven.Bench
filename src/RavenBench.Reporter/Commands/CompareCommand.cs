@@ -48,7 +48,6 @@ public static class CompareCommand
 
         string absoluteOutputPath = Path.GetFullPath(outputPath);
 
-        // Load summaries
         var summaries = new List<BenchmarkSummary>();
         foreach (var path in summaryPaths)
         {
@@ -56,11 +55,9 @@ public static class CompareCommand
             summaries.Add(summary);
         }
 
-        // Build comparison model
         ComparisonModel model = ComparisonModelBuilder.Build(summaries, effectiveLabels, baselineIndex);
 
-        // Generate HTML
-        string html = ComparisonReportHtmlBuilder.Build(model, title, notes);
+        string html = TemplateHtmlBuilder.Build("multi-run.html", "__COMPARISON_MODEL__", model, title, notes);
 
         (string htmlOutputPath, bool htmlOnly) = await ReportRenderUtilities.WriteHtmlAsync(html, absoluteOutputPath);
 

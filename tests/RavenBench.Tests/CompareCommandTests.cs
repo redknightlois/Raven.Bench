@@ -11,6 +11,8 @@ namespace RavenBench.Tests;
 
 public class CompareCommandTests
 {
+    private static readonly Random Rng = new(42);
+
     [Fact]
     public void ComparisonModelBuilder_Build_WithTwoSummaries_Succeeds()
     {
@@ -62,8 +64,8 @@ public class CompareCommandTests
     {
         // INVARIANT: Different transports (client vs raw) should be comparable
         // as long as the workload profile and dataset are the same.
-        var summary1 = CreateSummaryWithTransport(WorkloadProfile.Writes, "raw");
-        var summary2 = CreateSummaryWithTransport(WorkloadProfile.Writes, "client");
+        var summary1 = CreateSummaryWithTransport(WorkloadProfile.Writes, TransportKind.Raw);
+        var summary2 = CreateSummaryWithTransport(WorkloadProfile.Writes, TransportKind.Client);
         var summaries = new List<BenchmarkSummary> { summary1, summary2 };
         var labels = new List<string> { "Raw", "Client" };
 
@@ -205,7 +207,7 @@ public class CompareCommandTests
 
         // Find throughput contrast (best vs best)
         var throughputContrast = model.ThroughputContrasts
-            .FirstOrDefault(c => c.Context == "Best vs Best");
+            .FirstOrDefault(c => c.Context == ContrastContext.BestVsBest);
         Assert.NotNull(throughputContrast);
 
         // Throughput: 1000 -> 1200 = +200 absolute, +20% relative
@@ -216,7 +218,7 @@ public class CompareCommandTests
 
         // Find latency contrast (best vs best)
         var latencyContrast = model.LatencyContrasts
-            .FirstOrDefault(c => c.Context == "Best vs Best");
+            .FirstOrDefault(c => c.Context == ContrastContext.BestVsBest);
         Assert.NotNull(latencyContrast);
 
         // P99: 10 -> 8 = -2 absolute, -20% relative (lower latency is better)
@@ -227,7 +229,7 @@ public class CompareCommandTests
 
         // Find error rate contrast
         var errorRateContrast = model.ErrorRateContrasts
-            .FirstOrDefault(c => c.Context == "Best vs Best");
+            .FirstOrDefault(c => c.Context == ContrastContext.BestVsBest);
         Assert.NotNull(errorRateContrast);
 
         // Error rate: 1% -> 0.5% = -0.5 absolute, -50% relative
@@ -335,7 +337,7 @@ public class CompareCommandTests
 
         // Find error rate contrast
         var errorRateContrast = model.ErrorRateContrasts
-            .FirstOrDefault(c => c.Context == "Best vs Best");
+            .FirstOrDefault(c => c.Context == ContrastContext.BestVsBest);
         Assert.NotNull(errorRateContrast);
 
         // Baseline error rate is 0%, contender is 1%
@@ -343,9 +345,11 @@ public class CompareCommandTests
         Assert.Equal(1.0, errorRateContrast.ContenderValue);
         Assert.Equal(1.0, errorRateContrast.AbsoluteDelta);
 
-        // Percentage delta should be 0 when baseline is 0 (to avoid division by zero)
-        // This is the defensive behavior - an alternative would be to use infinity or a special sentinel
-        Assert.Equal(0, errorRateContrast.PercentageDelta);
+        // Zero baseline makes the relative change undefined
+        Assert.Null(errorRateContrast.PercentageDelta);
+
+        // The contrast still surfaces in takeaways via its absolute delta
+        Assert.Contains(model.KeyTakeaways, t => t.Contains("Error rate increase") && t.Contains("1.000%"));
     }
 
     private static List<BenchmarkSummary> CreateCompatibleSummaries(int count)
@@ -368,20 +372,20 @@ public class CompareCommandTests
                 Database = "test",
                 Profile = profile,
                 Dataset = "test",
-                Transport = "raw",
+                Transport = TransportKind.Raw,
                 QueryProfile = QueryProfile.VoronEquality
             },
             EffectiveHttpVersion = "1.1",
             Steps = new List<StepResult>
             {
-                CreateStepResult(16, 1000 + Random.Shared.Next(100), p99: 10 + Random.Shared.Next(5), p999: 10 + Random.Shared.Next(5))
+                CreateStepResult(16, 1000 + Rng.Next(100), p99: 10 + Rng.Next(5), p999: 10 + Rng.Next(5))
             },
             Verdict = "Passed",
             ClientCompression = "identity"
         };
     }
 
-    private static BenchmarkSummary CreateSummaryWithTransport(WorkloadProfile profile, string transport)
+    private static BenchmarkSummary CreateSummaryWithTransport(WorkloadProfile profile, TransportKind transport)
     {
         return new BenchmarkSummary
         {
@@ -414,7 +418,7 @@ public class CompareCommandTests
                 Database = "test",
                 Profile = profile,
                 Dataset = "test",
-                Transport = "client",
+                Transport = TransportKind.Client,
                 QueryProfile = QueryProfile.VoronEquality
             },
             EffectiveHttpVersion = httpVersion,
@@ -437,7 +441,7 @@ public class CompareCommandTests
                 Database = "test",
                 Profile = WorkloadProfile.Reads,
                 Dataset = "test",
-                Transport = "raw",
+                Transport = TransportKind.Raw,
                 QueryProfile = QueryProfile.VoronEquality
             },
             EffectiveHttpVersion = "1.1",

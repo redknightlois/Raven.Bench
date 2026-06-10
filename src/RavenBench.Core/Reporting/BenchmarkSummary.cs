@@ -6,6 +6,7 @@ namespace RavenBench.Core.Reporting;
 
 public sealed class BenchmarkSummary
 {
+    public int SchemaVersion { get; init; } = 1;
     public required RunOptions Options { get; init; }
     public required List<StepResult> Steps { get; init; }
     public StepResult? Knee { get; init; }

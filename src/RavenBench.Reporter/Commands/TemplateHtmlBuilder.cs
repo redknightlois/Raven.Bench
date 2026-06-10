@@ -1,54 +1,51 @@
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Reflection;
-using RavenBench.Reporter.Models;
 
 namespace RavenBench.Reporter.Commands;
 
 /// <summary>
-/// Loads the multi-run HTML template and injects the comparison model payload.
+/// Loads an embedded HTML template and injects a JSON payload plus the report context.
 /// </summary>
-internal static class ComparisonReportHtmlBuilder
+public static class TemplateHtmlBuilder
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        WriteIndented = false
+        WriteIndented = false,
+        Converters = { new JsonStringEnumConverter() }
     };
 
-    private const string EmbeddedResourceName = "RavenBench.Reporter.Templates.multi-run.html";
-    private const string ModelPlaceholder = "__COMPARISON_MODEL__";
     private const string ContextPlaceholder = "__REPORT_CONTEXT__";
 
-    public static string Build(ComparisonModel model, string? title, string? notes)
+    public static string Build(string templateName, string payloadPlaceholder, object payload, string? title, string? notes)
     {
-        string template = LoadTemplateFromEmbeddedResource();
+        string template = LoadTemplateFromEmbeddedResource($"RavenBench.Reporter.Templates.{templateName}");
 
-        string modelJson = JsonSerializer.Serialize(model, JsonOptions);
+        string payloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         string contextJson = JsonSerializer.Serialize(new ReportContext(title, notes, ResolveReporterVersion()), JsonOptions);
 
-        modelJson = modelJson.Replace("</script>", "<\\/script>", StringComparison.OrdinalIgnoreCase);
+        payloadJson = payloadJson.Replace("</script>", "<\\/script>", StringComparison.OrdinalIgnoreCase);
         contextJson = contextJson.Replace("</script>", "<\\/script>", StringComparison.OrdinalIgnoreCase);
 
-        string populated = template
-            .Replace(ModelPlaceholder, modelJson, StringComparison.Ordinal)
+        return template
+            .Replace(payloadPlaceholder, payloadJson, StringComparison.Ordinal)
             .Replace(ContextPlaceholder, contextJson, StringComparison.Ordinal);
-
-        return populated;
     }
 
-    private static string LoadTemplateFromEmbeddedResource()
+    private static string LoadTemplateFromEmbeddedResource(string resourceName)
     {
         Assembly assembly = Assembly.GetExecutingAssembly();
-        using Stream? stream = assembly.GetManifestResourceStream(EmbeddedResourceName);
+        using Stream? stream = assembly.GetManifestResourceStream(resourceName);
 
         if (stream == null)
         {
             string availableResources = string.Join(", ", assembly.GetManifestResourceNames());
             throw new InvalidOperationException(
-                $"Embedded resource '{EmbeddedResourceName}' not found. Available resources: {availableResources}");
+                $"Embedded resource '{resourceName}' not found. Available resources: {availableResources}");
         }
 
         using StreamReader reader = new(stream, Encoding.UTF8);

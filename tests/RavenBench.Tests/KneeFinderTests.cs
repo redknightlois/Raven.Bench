@@ -22,7 +22,7 @@ public class KneeFinderTests
             new() { Concurrency = 8, Throughput = 9084, Raw = new(500, 600, 700, 800, 1188.9, 1188.9), Normalized = new(495, 595, 695, 795, 1183.9, 1183.9) },
         };
 
-        var knee = KneeFinder.FindKnee(steps, dThr: 0.05, dP95: 0.20, maxErr: 0.005)!;
+        var knee = KneeFinder.FindKnee(steps, maxErr: 0.005)!;
         knee.Concurrency.Should().Be(64); // Quality degrades after C=64
         knee.Reason.Should().Contain("Quality");
     }
@@ -41,7 +41,7 @@ public class KneeFinderTests
             new() { Concurrency = 32, Throughput = 1800, Raw = new(140, 142, 144, 146, 150, 155), Normalized = new(135, 137, 139, 141, 145, 150) },
         };
 
-        var knee = KneeFinder.FindKnee(steps, dThr: 0.05, dP95: 0.20, maxErr: 0.005)!;
+        var knee = KneeFinder.FindKnee(steps, maxErr: 0.005)!;
         knee.Concurrency.Should().Be(16); // Quality peaks at C=16
         knee.Reason.Should().Contain("Quality");
     }
