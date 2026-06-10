@@ -45,6 +45,8 @@ public sealed class TestTransport : ITransport
         };
     }
 
+    public bool ReportsWireBytes => true;
+
     public void Dispose() { }
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)

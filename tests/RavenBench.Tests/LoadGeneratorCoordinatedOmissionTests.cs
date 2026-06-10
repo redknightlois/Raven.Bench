@@ -15,7 +15,7 @@ namespace RavenBench.Tests;
 public sealed class LoadGeneratorCoordinatedOmissionTests
 {
     [Fact]
-    public async Task ClosedLoop_UsesWarmupMedianForCoordinatedOmission()
+    public async Task ClosedLoop_UsesWarmupBaselineForCoordinatedOmission()
     {
         var transport = new VariableLatencyTransport(latencyMs: 2);
         var workload = new SingleOperationWorkload();
@@ -39,17 +39,14 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
     }
 
     [Fact]
-    public async Task RateGenerator_UsesTargetRpsForCoordinatedOmission()
+    public async Task RateGenerator_IncludesQueueWaitUnderSaturation()
     {
-        // Use a low warmup latency to establish a fast baseline
         var transport = new VariableLatencyTransport(latencyMs: 5);
         var workload = new SingleOperationWorkload();
-        // Target 100 RPS means 10ms expected interval between requests
+        // 8 workers at 100ms each cap throughput near 80 rps, well below the 100 rps target: saturation.
         var generator = new RateLoadGenerator(transport, workload, targetRps: 100, maxConcurrency: 8, new Random(42));
 
         await generator.ExecuteWarmupAsync(TimeSpan.FromMilliseconds(200), CancellationToken.None);
-
-        // Increase latency to 10x the expected interval to ensure CO correction triggers
         transport.LatencyMs = 100;
 
         var (recorder, metrics) = await generator.ExecuteMeasurementAsync(
@@ -57,9 +54,9 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
 
         metrics.OperationsCompleted.Should().BeGreaterThan(0);
         var snapshot = recorder.Snapshot();
-        // With 100ms latency vs 10ms expected interval, coordinated omission correction
-        // should add synthetic samples, making TotalCount > OperationsCompleted
-        snapshot.TotalCount.Should().BeGreaterThanOrEqualTo(metrics.OperationsCompleted);
+        // Latency is measured against each request's scheduled time, so the backlog accumulated while
+        // all workers were busy surfaces as latency beyond the 100ms service time instead of being omitted.
+        snapshot.MaxMicros.Should().BeGreaterThan(100_000);
     }
 
     private sealed class SingleOperationWorkload : IWorkload
@@ -81,6 +78,8 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
         {
             _latencyMs = Math.Max(0, latencyMs);
         }
+
+        public bool ReportsWireBytes => true;
 
         public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
         {

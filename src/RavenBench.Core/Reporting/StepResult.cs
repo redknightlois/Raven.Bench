@@ -48,6 +48,8 @@ public sealed class StepResult
 
     public double ClientCpu { get; init; }
     public double NetworkUtilization { get; init; }
+    /// <summary>True when NetworkUtilization is derived from measured wire bytes; false when estimated.</summary>
+    public bool NetworkBytesMeasured { get; init; }
     public RollingRateStats? RollingRate { get; init; }
 
     // Server-side metrics from RavenDB

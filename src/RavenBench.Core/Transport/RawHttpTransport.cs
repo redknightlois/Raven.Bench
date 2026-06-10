@@ -26,6 +26,11 @@ public sealed class RawHttpTransport : ITransport
     public string EffectiveCompressionMode { get; } = "identity";
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
+    // Wire-accurate only without transparent decompression; gzip/brotli/deflate are measured post-inflate.
+    public bool ReportsWireBytes =>
+        _acceptEncoding.Equals("identity", StringComparison.OrdinalIgnoreCase) ||
+        _acceptEncoding.Equals("zstd", StringComparison.OrdinalIgnoreCase);
+
 
     public RawHttpTransport(string url, string database, string compressionMode, Version httpVersion, string? endpoint = null)
     {

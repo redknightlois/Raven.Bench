@@ -111,11 +111,12 @@ public static class LoadGeneratorExecution
         RollingRateStats? rollingRate = null)
     {
         var completed = counters.OperationsCompleted;
-        var throughput = duration.TotalSeconds > 0
-            ? completed / duration.TotalSeconds
-            : 0;
         var errorCount = counters.ErrorCount;
         var errorRate = completed > 0 ? (double)errorCount / completed : 0.0;
+        // Goodput: successful operations only. Failed requests (often rejected fast) must not inflate throughput.
+        var throughput = duration.TotalSeconds > 0
+            ? (completed - errorCount) / duration.TotalSeconds
+            : 0;
         var bytesOut = counters.BytesOut;
         var bytesIn = counters.BytesIn;
 

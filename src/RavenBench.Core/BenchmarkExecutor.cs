@@ -180,6 +180,7 @@ namespace RavenBench.Core
                 ServerSnmpRequestsPerSec = serverMetrics.ServerSnmpRequestsPerSec,
                 SnmpErrorsPerSec = serverMetrics.SnmpErrorsPerSec,
                 NetworkUtilization = LoadGeneratorExecution.Utilization(metrics.BytesOut, metrics.BytesIn, metrics.Duration, _options.LinkMbps),
+                NetworkBytesMeasured = _transport.ReportsWireBytes,
                 Reason = metrics.Reason,
                 RollingRate = metrics.RollingRate,
                 QueryOperations = hasQueries ? query!.QueryOperations : null,

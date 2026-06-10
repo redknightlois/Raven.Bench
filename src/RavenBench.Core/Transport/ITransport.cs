@@ -51,6 +51,13 @@ public readonly struct CalibrationResult(double ttfbMs, double totalMs, long byt
 
 public interface ITransport : IDisposable
 {
+    /// <summary>
+    /// True when reported byte counts are actual on-the-wire sizes. False when they are estimated
+    /// (e.g. the client library hides the socket, or transparent decompression obscures wire size),
+    /// in which case network-utilization figures derived from them must not be trusted.
+    /// </summary>
+    bool ReportsWireBytes { get; }
+
     Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct);
     Task PutAsync<T>(string id, T document);
     Task EnsureDatabaseExistsAsync(string databaseName);

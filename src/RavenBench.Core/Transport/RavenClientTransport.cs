@@ -43,6 +43,9 @@ public sealed class RavenClientTransport : ITransport
     public string EffectiveCompressionMode => _compressionMode;
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
+    // The client library abstracts the socket, so byte counts are estimated, not measured on the wire.
+    public bool ReportsWireBytes => false;
+
 
     public RavenClientTransport(string url, string database, string compressionMode, Version httpVersion)
     {

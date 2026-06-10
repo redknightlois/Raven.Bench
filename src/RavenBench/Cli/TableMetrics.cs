@@ -64,7 +64,7 @@ namespace RavenBench.Cli
             
             // Client Metrics
             new("Client CPU %", _ => true, s => FormatPercent(s.ClientCpu), TableScope.Both, c => c.RightAligned()),
-            new("Client Net %", _ => true, s => FormatPercent(s.NetworkUtilization), TableScope.Both, c => c.RightAligned()),
+            new("Client Net %", _ => true, s => s.NetworkBytesMeasured ? FormatPercent(s.NetworkUtilization) : "n/a", TableScope.Both, c => c.RightAligned()),
 
             // Server Metrics (non-SNMP)
             new("Server CPU %", summary => !summary.Options.SnmpEnabled, s => FormatNumber(s.ServerCpu), TableScope.Both, c => c.RightAligned()),
