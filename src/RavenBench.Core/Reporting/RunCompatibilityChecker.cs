@@ -43,7 +43,6 @@ public static class RunCompatibilityChecker
         if (AreComparable(summaries))
             return;
 
-        // Provide detailed error message about what's incompatible
         var baseline = summaries[0];
         var incompatibilities = new List<string>();
 
@@ -74,7 +73,6 @@ public static class RunCompatibilityChecker
     private static bool IsCompatible(BenchmarkSummary baseline, BenchmarkSummary other)
     {
         // Only enforce matching workload characteristics, not transport/protocol config
-        // The whole point of comparison is to see how different transports/HTTP versions perform!
         return baseline.Options.Profile == other.Options.Profile &&
                baseline.Options.Dataset == other.Options.Dataset &&
                baseline.Options.QueryProfile == other.Options.QueryProfile;

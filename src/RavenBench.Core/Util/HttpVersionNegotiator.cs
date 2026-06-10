@@ -104,7 +104,6 @@ public static class HttpVersionNegotiator
                 Timeout = TimeSpan.FromSeconds(10)
             };
 
-            // Test with a lightweight endpoint
             var testUrl = $"{serverUrl.TrimEnd('/')}/build/version";
             using var request = new HttpRequestMessage(HttpMethod.Get, testUrl)
             {

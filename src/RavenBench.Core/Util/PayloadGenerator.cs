@@ -42,10 +42,8 @@ public static class PayloadGenerator
 
         var document = new YcsbDocument();
 
-        // Ensure we have enough space for the JSON structure
         if (sizeBytes <= jsonOverhead)
         {
-            // For very small sizes, create minimal document with empty or very short fields
             for (int i = 0; i < 10; i++)
             {
                 document.SetField(i, "x"); // 1 character per field
@@ -57,11 +55,9 @@ public static class PayloadGenerator
             var fieldsToFill = Math.Min(10, Math.Max(1, availableContentSize / 10));
             var fieldSize = availableContentSize / fieldsToFill;
 
-            // Fill the calculated number of fields
             for (int i = 0; i < fieldsToFill; i++)
             {
                 var currentFieldSize = fieldSize;
-                // For the last field, use any remaining space
                 if (i == fieldsToFill - 1)
                 {
                     var usedContent = i * fieldSize;
@@ -71,14 +67,12 @@ public static class PayloadGenerator
                 document.SetField(i, GenerateRandomString(Math.Max(1, currentFieldSize), rng));
             }
 
-            // Fill remaining fields with minimal content if needed
             for (int i = fieldsToFill; i < 10; i++)
             {
                 document.SetField(i, "");
             }
         }
 
-        // Serialize to JSON string
         return JsonSerializer.Serialize(document, new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase

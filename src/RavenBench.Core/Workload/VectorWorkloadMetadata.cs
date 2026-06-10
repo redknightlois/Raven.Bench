@@ -39,15 +39,15 @@ public sealed class VectorWorkloadMetadata
     public Dictionary<int, string[]>? GroundTruth { get; init; }
 
     /// <summary>
-    /// The index name used for vector search queries (e.g., "SpherePassages/ByEmbedding-corax").
-    /// Set by the dataset provider that created the index.
-    /// </summary>
-    /// <summary>
     /// The field name as it appears in the index (e.g., "Vector" when the index map is "Vector = CreateVector(p.Embedding)").
     /// Defaults to FieldName if not set. Used for building vector.search() queries.
     /// </summary>
     public string? IndexedFieldName { get; set; }
 
+    /// <summary>
+    /// The index name used for vector search queries (e.g., "SpherePassages/ByEmbedding-corax").
+    /// Set by the dataset provider that created the index.
+    /// </summary>
     public string? IndexName { get; set; }
 
     /// <summary>
