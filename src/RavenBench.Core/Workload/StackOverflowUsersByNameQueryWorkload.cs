@@ -20,8 +20,7 @@ public sealed class StackOverflowUsersWorkloadMetadata
     public int MinReputation { get; set; }
     public int MaxReputation { get; set; }
 
-    // Static index names (set by BenchmarkRunner after index creation)
-    // These are populated at runtime with the actual index names including engine suffix
+    // Static index names, populated at runtime (include the engine suffix)
     public string? DisplayNameIndexName { get; set; }
     public string? ReputationIndexName { get; set; }
 }
@@ -84,16 +83,13 @@ public static class StackOverflowUsersWorkloadHelper
                 "Ensure the StackOverflow dataset is imported before running benchmarks.");
         }
 
-        // Get actual total count of Users documents
         var totalUserCount = await GetTotalUserCountAsync(store);
 
-        // Discover reputation histogram for range queries
         var (reputationBuckets, minReputation, maxReputation) = await DiscoverReputationHistogramAsync(store, seed);
 
         Console.WriteLine($"[Workload] Sampled {sampleNames.Count} unique user names from {totalUserCount} total users");
         Console.WriteLine($"[Workload] Discovered reputation range: {minReputation} to {maxReputation} across {reputationBuckets.Length} buckets");
 
-        // Store metadata for future use
         var metadata = new StackOverflowUsersWorkloadMetadata
         {
             SampleNames = sampleNames.ToArray(),
@@ -134,25 +130,21 @@ public static class StackOverflowUsersWorkloadHelper
 
         while (await stream.MoveNextAsync())
         {
-            // The result is the Name field
             var result = stream.Current.Document;
             string? name = null;
 
-            // Handle both direct string values and objects with Name property
             if (result is string nameString)
             {
                 name = nameString;
             }
             else if (result != null)
             {
-                // Try to get Name property dynamically
                 try
                 {
                     name = (result as dynamic)?.DisplayName;
                 }
                 catch
                 {
-                    // Fallback: skip this entry
                 }
             }
 
@@ -172,15 +164,10 @@ public static class StackOverflowUsersWorkloadHelper
     {
         using var session = store.OpenAsyncSession();
 
-        // Use simple streaming count - efficient for any collection size
-        var count = 0L;
-        await using var stream = await session.Advanced.StreamAsync<object>(startsWith: "users/");
-        while (await stream.MoveNextAsync())
-        {
-            count++;
-        }
+        var query = session.Advanced.AsyncRawQuery<dynamic>("from Users").Statistics(out var stats).Take(0);
+        await query.ToListAsync();
 
-        return count;
+        return stats.TotalResults;
     }
 
     /// <summary>
@@ -194,7 +181,6 @@ public static class StackOverflowUsersWorkloadHelper
     {
         using var session = store.OpenAsyncSession();
 
-        // Sample reputation values using deterministic random ordering
         const int sampleSize = 10000;
         var samplingSeed = $"ravenbench-reputation-{seed}";
         var query = session.Advanced.AsyncRawQuery<dynamic>(
@@ -208,7 +194,6 @@ public static class StackOverflowUsersWorkloadHelper
             var result = stream.Current.Document;
             int? reputation = null;
 
-            // Extract Reputation value (handle different response formats)
             if (result is int repInt)
             {
                 reputation = repInt;
@@ -225,7 +210,6 @@ public static class StackOverflowUsersWorkloadHelper
                 }
                 catch
                 {
-                    // Skip entries where we can't extract reputation
                 }
             }
 
@@ -237,7 +221,6 @@ public static class StackOverflowUsersWorkloadHelper
 
         if (reputationSamples.Count == 0)
         {
-            // Fallback: create default buckets if we can't sample
             return (new[]
             {
                 new ReputationBucket { MinReputation = 1, MaxReputation = 100, EstimatedDocCount = 1000 },
@@ -246,7 +229,6 @@ public static class StackOverflowUsersWorkloadHelper
             }, 1, 10000);
         }
 
-        // Sort samples to compute percentiles
         reputationSamples.Sort();
         var minRep = reputationSamples[0];
         var maxRep = reputationSamples[^1];
@@ -261,7 +243,6 @@ public static class StackOverflowUsersWorkloadHelper
         var p75 = reputationSamples[(int)(reputationSamples.Count * 0.75)];
         var p90 = reputationSamples[(int)(reputationSamples.Count * 0.90)];
 
-        // Create buckets with estimated doc counts based on percentile ranges
         buckets.Add(new ReputationBucket
         {
             MinReputation = minRep,
@@ -367,7 +348,6 @@ public sealed class StackOverflowUsersRangeQueryWorkload : IWorkload
 
     public OperationBase NextOperation(Random rng)
     {
-        // Randomly select a bucket to query (buckets provide baseline selectivity)
         var bucket = _buckets[rng.Next(_buckets.Length)];
 
         // Optionally narrow the range within the bucket for more varied selectivity.
@@ -377,7 +357,6 @@ public sealed class StackOverflowUsersRangeQueryWorkload : IWorkload
 
         if (useFullBucket || bucket.MaxReputation - bucket.MinReputation < 10)
         {
-            // Use full bucket range for broader queries
             minRep = bucket.MinReputation;
             maxRep = bucket.MaxReputation;
         }

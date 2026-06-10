@@ -1,17 +1,12 @@
 namespace RavenBench.Core.Reporting;
 
 /// <summary>
-/// Full histogram data for a concurrency step. We embed the complete percentile distribution
-/// directly in JSON so you don't need to mess around with separate hlog/csv files.
-/// Data stored as parallel arrays for compact representation.
+/// Full histogram data for a concurrency step, embedded in JSON as parallel arrays.
 /// </summary>
 public sealed class HistogramArtifact
 {
     /// <summary>
-    /// Standard percentile points we export. Gets progressively more granular in the tail
-    /// because that's where the interesting stuff happens in latency distributions.
-    /// Goes from coarse (10% increments) to very fine (0.001% in extreme tail).
-    /// Total of 46 points covering P0 through P100.
+    /// Percentile points exported for each histogram; resolution increases toward the tail.
     /// </summary>
     public static ReadOnlySpan<double> StandardPercentiles => new[]
     {
@@ -41,17 +36,16 @@ public sealed class HistogramArtifact
     public required long TotalCount { get; init; }
     public required long MaxValueInMicroseconds { get; init; }
 
-    // These three arrays are aligned - same index = same percentile point
+    // Parallel arrays: same index = same percentile point.
     public required double[] Percentiles { get; init; }
     public required long[] LatencyInMicroseconds { get; init; }
     public required double[] LatencyInMilliseconds { get; init; }
 
-    // Histogram bin data for reconstructing the full distribution
-    // Parallel arrays: BinEdges[i] is the lower bound (in microseconds) and BinCounts[i] is the frequency
+    // Parallel arrays: BinEdges[i] is the lower bound in microseconds, BinCounts[i] the frequency.
     public long[] BinEdges { get; init; } = Array.Empty<long>();
     public long[] BinCounts { get; init; } = Array.Empty<long>();
 
-    // File paths are optional - only populated if you enabled file export
+    // Populated only when file export is enabled.
     public string? HlogPath { get; init; }
     public string? CsvPath { get; init; }
 }

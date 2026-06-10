@@ -22,6 +22,7 @@ public static class SnmpSummaryBuilder
                 ManagedMemoryMb = sample.ManagedMemoryMb,
                 UnmanagedMemoryMb = sample.UnmanagedMemoryMb,
                 DirtyMemoryMb = sample.DirtyMemoryMb,
+                Load1Min = sample.Load1Min,
                 ServerSnmpRequestsPerSec = sample.ServerSnmpRequestsPerSec,
                 SnmpIoReadOpsPerSec = sample.SnmpIoReadOpsPerSec,
                 SnmpIoWriteOpsPerSec = sample.SnmpIoWriteOpsPerSec,
@@ -30,23 +31,53 @@ public static class SnmpSummaryBuilder
             });
         }
 
-        var (totalReadOps, countReadOps) = history.SumAndCount(h => h.SnmpIoReadOpsPerSec);
-        var (totalWriteOps, countWriteOps) = history.SumAndCount(h => h.SnmpIoWriteOpsPerSec);
-        var (totalReadBytes, countReadBytes) = history.SumAndCount(h => h.SnmpIoReadBytesPerSec);
-        var (totalWriteBytes, countWriteBytes) = history.SumAndCount(h => h.SnmpIoWriteBytesPerSec);
+        var (totalReadOps, averageReadOps) = IntegrateAndAverage(history, h => h.SnmpIoReadOpsPerSec);
+        var (totalWriteOps, averageWriteOps) = IntegrateAndAverage(history, h => h.SnmpIoWriteOpsPerSec);
+        var (totalReadBytes, averageReadBytes) = IntegrateAndAverage(history, h => h.SnmpIoReadBytesPerSec);
+        var (totalWriteBytes, averageWriteBytes) = IntegrateAndAverage(history, h => h.SnmpIoWriteBytesPerSec);
 
         var aggregations = new SnmpAggregations
         {
-            TotalSnmpIoReadOps = countReadOps > 0 ? totalReadOps : null,
-            AverageSnmpIoReadOpsPerSec = countReadOps > 0 ? totalReadOps / countReadOps : null,
-            TotalSnmpIoWriteOps = countWriteOps > 0 ? totalWriteOps : null,
-            AverageSnmpIoWriteOpsPerSec = countWriteOps > 0 ? totalWriteOps / countWriteOps : null,
-            TotalSnmpIoReadBytes = countReadBytes > 0 ? totalReadBytes : null,
-            AverageSnmpIoReadBytesPerSec = countReadBytes > 0 ? totalReadBytes / countReadBytes : null,
-            TotalSnmpIoWriteBytes = countWriteBytes > 0 ? totalWriteBytes : null,
-            AverageSnmpIoWriteBytesPerSec = countWriteBytes > 0 ? totalWriteBytes / countWriteBytes : null
+            TotalSnmpIoReadOps = totalReadOps,
+            AverageSnmpIoReadOpsPerSec = averageReadOps,
+            TotalSnmpIoWriteOps = totalWriteOps,
+            AverageSnmpIoWriteOpsPerSec = averageWriteOps,
+            TotalSnmpIoReadBytes = totalReadBytes,
+            AverageSnmpIoReadBytesPerSec = averageReadBytes,
+            TotalSnmpIoWriteBytes = totalWriteBytes,
+            AverageSnmpIoWriteBytesPerSec = averageWriteBytes
         };
 
         return (timeSeries, aggregations);
+    }
+
+    private static (double? Total, double? Average) IntegrateAndAverage(List<ServerMetrics> history, Func<ServerMetrics, double?> selector)
+    {
+        double total = 0;
+        double sum = 0;
+        int count = 0;
+        bool integrated = false;
+
+        for (int i = 0; i < history.Count; i++)
+        {
+            var value = selector(history[i]);
+            if (value == null)
+                continue;
+
+            sum += value.Value;
+            count++;
+
+            if (i == 0)
+                continue;
+
+            double elapsedSeconds = (history[i].Timestamp - history[i - 1].Timestamp).TotalSeconds;
+            if (elapsedSeconds > 0)
+            {
+                total += value.Value * elapsedSeconds;
+                integrated = true;
+            }
+        }
+
+        return (integrated ? total : null, count > 0 ? sum / count : null);
     }
 }

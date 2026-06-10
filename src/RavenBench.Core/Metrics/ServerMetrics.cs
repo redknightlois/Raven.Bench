@@ -1,14 +1,10 @@
-using System.Text.Json;
 using RavenBench.Core;
 using RavenBench.Core.Metrics.Snmp;
-using RavenBench.Core.Transport;
-using Lextm.SharpSnmpLib;
 
 namespace RavenBench.Core.Metrics;
 
 /// <summary>
 /// Represents server-side metrics collected from RavenDB endpoints.
-/// Complements client-side metrics with server perspective on performance.
 /// </summary>
 public sealed class ServerMetrics
 {
@@ -48,7 +44,6 @@ public sealed class ServerMetrics
 
 /// <summary>
 /// Polls server-side metrics from RavenDB endpoints during benchmark execution.
-/// Follows ProcessCpuTracker pattern - provides synchronous access to metrics without async complexity.
 /// </summary>
 public sealed class ServerMetricsTracker : IDisposable
 {
@@ -74,8 +69,7 @@ public sealed class ServerMetricsTracker : IDisposable
         lock (_lock)
         {
             _isRunning = true;
-            var intervalMs = (int)_options.Snmp.PollInterval.TotalMilliseconds;
-            _timer.Change(0, intervalMs);
+            _timer.Change(0, Timeout.Infinite);
         }
     }
 
@@ -99,10 +93,9 @@ public sealed class ServerMetricsTracker : IDisposable
         }
     }
 
+    // One-shot timer: rescheduled after each poll completes, so polls never overlap.
     private async void PollMetrics(object? state)
     {
-        if (_isRunning == false) return;
-
         try
         {
             var metrics = await _transport.GetServerMetricsAsync();
@@ -112,52 +105,49 @@ public sealed class ServerMetricsTracker : IDisposable
                 var snmpSample = await _transport.GetSnmpMetricsAsync(_options.Snmp, _options.Database);
                 var snmpRates = _counterCache.ComputeRates(snmpSample);
 
-                // If we have rates (not the first sample), merge them into metrics
-                if (snmpRates != null)
+                metrics = new ServerMetrics
                 {
-                    metrics = new ServerMetrics
-                    {
-                        CpuUsagePercent = metrics.CpuUsagePercent,
-                        MemoryUsageMB = metrics.MemoryUsageMB,
-                        ActiveConnections = metrics.ActiveConnections,
-                        RequestsPerSecond = metrics.RequestsPerSecond,
-                        QueuedRequests = metrics.QueuedRequests,
-                        IoReadOperations = metrics.IoReadOperations,
-                        IoWriteOperations = metrics.IoWriteOperations,
-                        ReadThroughputKb = metrics.ReadThroughputKb,
-                        WriteThroughputKb = metrics.WriteThroughputKb,
-                        QueueLength = metrics.QueueLength,
+                    CpuUsagePercent = metrics.CpuUsagePercent,
+                    MemoryUsageMB = metrics.MemoryUsageMB,
+                    ActiveConnections = metrics.ActiveConnections,
+                    RequestsPerSecond = metrics.RequestsPerSecond,
+                    QueuedRequests = metrics.QueuedRequests,
+                    IoReadOperations = metrics.IoReadOperations,
+                    IoWriteOperations = metrics.IoWriteOperations,
+                    ReadThroughputKb = metrics.ReadThroughputKb,
+                    WriteThroughputKb = metrics.WriteThroughputKb,
+                    QueueLength = metrics.QueueLength,
 
-                        // SNMP gauge metrics
-                        MachineCpu = snmpRates.MachineCpu,
-                        ProcessCpu = snmpRates.ProcessCpu,
-                        ManagedMemoryMb = snmpRates.ManagedMemoryMb,
-                        UnmanagedMemoryMb = snmpRates.UnmanagedMemoryMb,
-                        DirtyMemoryMb = snmpRates.DirtyMemoryMb,
-                        Load1Min = snmpRates.Load1Min,
-                        Load5Min = snmpRates.Load5Min,
-                        Load15Min = snmpRates.Load15Min,
+                    MachineCpu = snmpSample.MachineCpu,
+                    ProcessCpu = snmpSample.ProcessCpu,
+                    ManagedMemoryMb = snmpSample.ManagedMemoryMb,
+                    UnmanagedMemoryMb = snmpSample.UnmanagedMemoryMb,
+                    DirtyMemoryMb = snmpSample.DirtyMemoryMb,
+                    Load1Min = snmpSample.Load1Min,
+                    Load5Min = snmpSample.Load5Min,
+                    Load15Min = snmpSample.Load15Min,
 
-                        // SNMP rate metrics
-                        SnmpIoReadOpsPerSec = snmpRates.IoReadOpsPerSec,
-                        SnmpIoWriteOpsPerSec = snmpRates.IoWriteOpsPerSec,
-                        SnmpIoReadBytesPerSec = snmpRates.IoReadBytesPerSec,
-                        SnmpIoWriteBytesPerSec = snmpRates.IoWriteBytesPerSec,
-                        ServerSnmpRequestsPerSec = snmpRates.ServerRequestsPerSec,
-                        SnmpErrorsPerSec = snmpRates.ErrorsPerSec,
+                    // Counter-derived rates are null until a baseline sample exists.
+                    SnmpIoReadOpsPerSec = snmpRates?.IoReadOpsPerSec,
+                    SnmpIoWriteOpsPerSec = snmpRates?.IoWriteOpsPerSec,
+                    SnmpIoReadBytesPerSec = snmpRates?.IoReadBytesPerSec,
+                    SnmpIoWriteBytesPerSec = snmpRates?.IoWriteBytesPerSec,
+                    ServerSnmpRequestsPerSec = snmpRates?.ServerRequestsPerSec,
+                    SnmpErrorsPerSec = snmpRates?.ErrorsPerSec,
 
-                        Timestamp = metrics.Timestamp,
-                        IsValid = metrics.IsValid,
-                        ErrorMessage = metrics.ErrorMessage
-                    };
-                }
+                    Timestamp = metrics.Timestamp,
+                    IsValid = metrics.IsValid,
+                    ErrorMessage = metrics.ErrorMessage
+                };
             }
 
             lock (_lock)
             {
+                if (_isRunning == false)
+                    return;
+
                 _currentMetrics = metrics;
 
-                // Store in history if SNMP is enabled (to avoid storing empty metrics)
                 if (_options.Snmp.Enabled && metrics.IsValid)
                 {
                     _metricsHistory.Add(metrics);
@@ -166,7 +156,17 @@ public sealed class ServerMetricsTracker : IDisposable
         }
         catch
         {
-            // Silently continue on failure - server metrics are supplementary
+            // Server metrics are supplementary; polling continues on failure.
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                if (_isRunning)
+                {
+                    _timer.Change((int)_options.Snmp.PollInterval.TotalMilliseconds, Timeout.Infinite);
+                }
+            }
         }
     }
 
@@ -182,6 +182,6 @@ public sealed class ServerMetricsTracker : IDisposable
     {
         Stop();
         _timer.Dispose();
-        // Note: Don't dispose _transport - it's owned by the caller
+        // _transport is owned by the caller; do not dispose it here.
     }
 }

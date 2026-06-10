@@ -17,9 +17,7 @@ public sealed class ReadWorkload : IWorkload
     public OperationBase NextOperation(Random rng)
     {
         var k = _distribution.NextKey(rng, (int)Math.Min(_maxKey, int.MaxValue));
-        return new ReadOperation { Id = IdFor(k) };
+        return new ReadOperation { Id = BenchIds.IdFor(k) };
     }
-
-    private static string IdFor(long i) => $"bench/{i:D8}";
 }
 

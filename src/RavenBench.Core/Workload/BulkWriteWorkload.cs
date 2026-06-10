@@ -22,13 +22,11 @@ public sealed class BulkWriteWorkload : IWorkload
         for (int i = 0; i < _batchSize; i++)
         {
             var keyValue = Interlocked.Increment(ref _maxKey);
-            var id = IdFor(keyValue);
+            var id = BenchIds.IdFor(keyValue);
             var payload = PayloadGenerator.Generate(_docSizeBytes, rng);
             documents.Add(new DocumentToWrite<string> { Id = id, Document = payload });
         }
 
         return new BulkInsertOperation<string> { Documents = documents };
     }
-
-    private static string IdFor(long i) => $"bench/{i:D8}";
 }

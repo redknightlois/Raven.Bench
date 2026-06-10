@@ -44,15 +44,12 @@ public sealed class RecallMeasurement
             HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
 
-        // Ensure the index exists before querying
         var indexName = GetIndexName(metadata, quantization, searchEngine);
         await EnsureIndexExistsAsync(store, metadata, indexName);
 
-        // Step 1: Compute or load ground truth
-        var queryFingerprint = ComputeQueryFingerprint(metadata);
+        var queryFingerprint = ComputeQueryFingerprint(metadata, quantization, indexName);
         var (groundTruth, cached, groundTruthTime) = await GetGroundTruthAsync(store, metadata, maxK, quantization, searchEngine, queryFingerprint);
 
-        // Step 2: Run approximate search and compute recall
         var measureSw = Stopwatch.StartNew();
         var recallAtK = await ComputeRecallAsync(store, metadata, groundTruth, recallKs, maxK, quantization, searchEngine, efSearch);
         measureSw.Stop();
@@ -92,12 +89,10 @@ public sealed class RecallMeasurement
             HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
         store.Initialize();
 
-        // Ensure the index exists before querying
         var indexName = GetIndexName(metadata, quantization, searchEngine);
         await EnsureIndexExistsAsync(store, metadata, indexName);
 
-        // Compute ground truth once
-        var queryFingerprint = ComputeQueryFingerprint(metadata);
+        var queryFingerprint = ComputeQueryFingerprint(metadata, quantization, indexName);
         var (groundTruth, cached, groundTruthTime) = await GetGroundTruthAsync(store, metadata, maxK, quantization, searchEngine, queryFingerprint);
 
         var results = new Dictionary<int, RecallResult>();
@@ -134,7 +129,6 @@ public sealed class RecallMeasurement
         IndexingEngine searchEngine,
         string queryFingerprint)
     {
-        // Try to load from cache
         var cached = await LoadGroundTruthAsync(store, maxK, metadata.QueryVectorCount, queryFingerprint);
         if (cached != null)
         {
@@ -142,14 +136,12 @@ public sealed class RecallMeasurement
             return (cached, true, TimeSpan.Zero);
         }
 
-        // Compute via exact search
         Console.WriteLine($"[Recall] Computing ground truth for {metadata.QueryVectorCount} queries at depth {maxK}...");
         var sw = Stopwatch.StartNew();
         var groundTruth = await ComputeGroundTruthAsync(store, metadata, maxK, quantization, searchEngine);
         sw.Stop();
         Console.WriteLine($"[Recall] Ground truth computed in {sw.Elapsed}");
 
-        // Cache in database
         await StoreGroundTruthAsync(store, groundTruth, maxK, queryFingerprint);
         Console.WriteLine($"[Recall] Ground truth cached in database");
 
@@ -192,22 +184,24 @@ public sealed class RecallMeasurement
     }
 
     /// <summary>
-    /// Computes a fingerprint of the query vectors so we can detect when they change.
+    /// Computes a fingerprint of the query vectors plus quantization mode and index name,
+    /// so cached ground truth is invalidated when any of them change.
     /// Uses first/last vector values + count to avoid hashing megabytes of floats.
     /// </summary>
-    private static string ComputeQueryFingerprint(VectorWorkloadMetadata metadata)
+    private static string ComputeQueryFingerprint(VectorWorkloadMetadata metadata, VectorQuantization quantization, string indexName)
     {
         var vecs = metadata.QueryVectors;
         if (vecs.Length == 0)
-            return "empty";
+            return $"empty|{quantization}|{indexName}";
 
-        // Hash: count + first vector's first 4 values + last vector's first 4 values
         var first = vecs[0];
         var last = vecs[^1];
         var parts = new List<string>
         {
             vecs.Length.ToString(),
-            metadata.VectorDimensions.ToString()
+            metadata.VectorDimensions.ToString(),
+            quantization.ToString(),
+            indexName
         };
         for (int i = 0; i < Math.Min(4, first.Length); i++)
             parts.Add(first[i].ToString("R"));
@@ -293,7 +287,6 @@ public sealed class RecallMeasurement
         IndexingEngine searchEngine,
         int? efSearch = null)
     {
-        // Per-K hit count
         var hits = new Dictionary<int, int>();
         var queryCount = new Dictionary<int, int>();
         foreach (var k in recallKs)
@@ -365,7 +358,6 @@ public sealed class RecallMeasurement
 
         Console.WriteLine();
 
-        // Average recall across all queries
         var recallAtK = new Dictionary<int, double>();
         foreach (var k in recallKs)
         {
@@ -436,12 +428,10 @@ public sealed class RecallMeasurement
         VectorQuantization quantization,
         IndexingEngine searchEngine)
     {
-        // If the metadata has an explicit index name, use it
         if (string.IsNullOrEmpty(metadata.IndexName) == false)
             return metadata.IndexName;
 
-        // Fall back to the convention-based naming
-        var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
+        var engineSuffix = VectorIndexMapping.GetEngineSuffix(searchEngine);
         var collection = metadata.CollectionName ?? "Words";
         return VectorIndexNaming.GetIndexName(collection, quantization, engineSuffix);
     }

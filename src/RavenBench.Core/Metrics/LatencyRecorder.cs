@@ -28,8 +28,7 @@ public sealed class LatencyRecorder : IDisposable
     /// Creates a new latency recorder.
     /// </summary>
     /// <param name="recordLatencies">Whether to actually record latencies. When false, all operations are no-ops.</param>
-    /// <param name="maxSamples">Unused. Kept for backward compatibility but ignored since HDRHistogram manages its own storage.</param>
-    public LatencyRecorder(bool recordLatencies, int maxSamples = 100_000)
+    public LatencyRecorder(bool recordLatencies)
     {
         _enabled = recordLatencies;
 
@@ -69,7 +68,6 @@ public sealed class LatencyRecorder : IDisposable
         {
             _recorder.RecordValue(micros);
 
-            // Track maximum latency using lock-free atomic operations
             long currentMax;
             do
             {
@@ -149,18 +147,13 @@ public sealed class LatencyRecorder : IDisposable
 
         // GetIntervalHistogram returns the histogram since last call and resets the recorder
         var histogram = _recorder.GetIntervalHistogram();
-        var maxMicros = Volatile.Read(ref _maxMicros);
-
-        // Reset max for next interval
-        Interlocked.Exchange(ref _maxMicros, 0);
+        var maxMicros = Interlocked.Exchange(ref _maxMicros, 0);
 
         return new HistogramSnapshot(histogram, maxMicros);
     }
 
     public void Dispose()
     {
-        // Recorder doesn't require explicit disposal, but follow IDisposable pattern
-        // for future-proofing and resource management consistency
     }
 }
 

@@ -21,7 +21,6 @@ namespace RavenBench.Core
         private readonly double _targetRps;
         private readonly int _maxConcurrency;
         private readonly Random _rng;
-        private readonly object _workloadLock = new();
 
         public int Concurrency => _maxConcurrency;
         public double? TargetThroughput => _targetRps;
@@ -42,8 +41,7 @@ namespace RavenBench.Core
 
         public async Task ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken)
         {
-            var warmupRps = _targetRps * 0.5; // Use 50% of target rate for warmup
-            await ExecuteAsync(duration, warmupRps, isWarmup: true, cancellationToken);
+            await ExecuteAsync(duration, _targetRps, isWarmup: true, cancellationToken);
         }
 
         public async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteMeasurementAsync(
@@ -60,9 +58,8 @@ namespace RavenBench.Core
         private async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteAsync(
             TimeSpan duration, double targetRps, bool isWarmup, CancellationToken cancellationToken)
         {
-            var latencyRecorder = new LatencyRecorder(!isWarmup);
+            var latencyRecorder = new LatencyRecorder(isWarmup == false);
             var counters = new LoadGeneratorCounters();
-            var scheduledCount = 0L;
             var measurementStopwatch = Stopwatch.StartNew();
             RollingRateStats? rollingStats = null;
             RollingRateSampler? rollingSampler = null;
@@ -77,7 +74,6 @@ namespace RavenBench.Core
                 scheduler,
                 latencyRecorder,
                 counters,
-                () => Interlocked.Increment(ref scheduledCount),
                 cancellationToken);
 
             if (isWarmup == false && targetRps > 0)
@@ -108,10 +104,16 @@ namespace RavenBench.Core
                 }
             }
 
+            if (isWarmup == false && scheduler.DroppedTokens > 0)
+            {
+                Console.Error.WriteLine(
+                    $"[Raven.Bench] WARNING: token bucket dropped {scheduler.DroppedTokens} scheduled arrivals at burst capacity; the run is saturated and latency correction is bounded.");
+            }
+
             var metrics = LoadGeneratorExecution.BuildMetrics(
                 counters,
                 measurementStopwatch.Elapsed,
-                scheduledCount,
+                scheduler.ScheduledOperations,
                 isWarmup,
                 rollingStats);
 
@@ -122,20 +124,19 @@ namespace RavenBench.Core
             TokenBucketScheduler scheduler,
             LatencyRecorder latencyRecorder,
             LoadGeneratorCounters counters,
-            Action onOperationScheduled,
             CancellationToken cancellationToken)
         {
             var workers = new Task[_maxConcurrency];
             for (int i = 0; i < _maxConcurrency; i++)
             {
+                var workerRng = new Random(_rng.Next());
                 workers[i] = Task.Run(async () =>
                 {
                     try
                     {
                         await foreach (var dueTimestamp in scheduler.ConsumeAsync(cancellationToken))
                         {
-                            var operation = CreateOperation();
-                            onOperationScheduled();
+                            var operation = _workload.NextOperation(workerRng);
 
                             // Measure from the token's scheduled time, not pickup: any wait while all
                             // workers were busy is real client-observed latency, not to be omitted.
@@ -163,14 +164,6 @@ namespace RavenBench.Core
             return workers;
         }
 
-        private OperationBase CreateOperation()
-        {
-            lock (_workloadLock)
-            {
-                return _workload.NextOperation(_rng);
-            }
-        }
-
         /// <summary>
         /// Token-bucket scheduler that releases work permits at the requested rate. Each permit carries
         /// its scheduled (due) time as a <see cref="Stopwatch.GetTimestamp"/> value, computed against the
@@ -189,7 +182,14 @@ namespace RavenBench.Core
             private readonly double _ticksPerToken;
             private long _sequence;
             private double _carry;
+            private double _droppedTokens;
             private int _stopped;
+
+            /// <summary>Tokens minted; counts arrivals scheduled, which may exceed completed operations.</summary>
+            public long ScheduledOperations => Volatile.Read(ref _sequence);
+
+            /// <summary>Scheduled arrivals discarded when the bucket hit burst capacity; non-zero means bounded coordinated omission.</summary>
+            public long DroppedTokens => (long)Volatile.Read(ref _droppedTokens);
 
             public TokenBucketScheduler(double ratePerSecond, int burstCapacity, CancellationToken cancellationToken)
             {
@@ -250,7 +250,8 @@ namespace RavenBench.Core
                 var targetIntervalMs = CalculateReplenishmentDelay(_ratePerSecond, _burstCapacity);
                 var targetIntervalTicks = (long)(targetIntervalMs * TimeSpan.TicksPerMillisecond);
                 var stopwatch = Stopwatch.StartNew();
-                var lastTick = stopwatch.ElapsedTicks;
+                // All pacing math uses Elapsed.Ticks (TimeSpan ticks); never ElapsedTicks (raw frequency), which mismatches targetTick off Windows.
+                var lastTick = stopwatch.Elapsed.Ticks;
 
                 try
                 {
@@ -266,7 +267,10 @@ namespace RavenBench.Core
 
                             if (tokensToAdd > 0)
                             {
-                                _carry = Math.Min(_carry + tokensToAdd, _burstCapacity);
+                                var uncapped = _carry + tokensToAdd;
+                                _carry = Math.Min(uncapped, _burstCapacity);
+                                if (uncapped > _burstCapacity)
+                                    Volatile.Write(ref _droppedTokens, Volatile.Read(ref _droppedTokens) + (uncapped - _burstCapacity));
                                 var wholeTokens = (int)Math.Floor(_carry);
 
                                 if (wholeTokens > 0)
@@ -328,7 +332,7 @@ namespace RavenBench.Core
             {
                 while (producerToken.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false)
                 {
-                    var remainingTicks = targetTick - stopwatch.ElapsedTicks;
+                    var remainingTicks = targetTick - stopwatch.Elapsed.Ticks;
                     if (remainingTicks <= 0)
                         return;
 

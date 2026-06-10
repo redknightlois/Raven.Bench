@@ -333,25 +333,12 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
             Console.WriteLine($"[ClinicalWords] Database already contains {stats.CountOfDocuments:N0} documents - skipping import");
         }
 
-        // Create vector index based on quantization setting
-        // Include search engine suffix to allow both Lucene and Corax indexes to coexist
-        var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
+        var engineSuffix = VectorIndexMapping.GetEngineSuffix(searchEngine);
         var indexName = VectorIndexNaming.GetIndexName("Words", quantization, engineSuffix);
 
         Console.WriteLine($"[ClinicalWords] Creating vector index '{indexName}' (quantization: {quantization}, exact: {exactSearch}, engine: {engineName})...");
 
-        // Determine vector embedding types based on quantization
-        var (sourceType, destType) = quantization switch
-        {
-            VectorQuantization.Int8 => (VectorEmbeddingType.Single, VectorEmbeddingType.Int8),
-            VectorQuantization.Binary => (VectorEmbeddingType.Single, VectorEmbeddingType.Binary),
-            // Int2=4, Int3=5, Int4=6 in the turboquant VectorEmbeddingType enum — cast directly
-            // since the NuGet client library doesn't define these values yet.
-            VectorQuantization.Int4 => (VectorEmbeddingType.Single, (VectorEmbeddingType)6),
-            VectorQuantization.Int3 => (VectorEmbeddingType.Single, (VectorEmbeddingType)5),
-            VectorQuantization.Int2 => (VectorEmbeddingType.Single, (VectorEmbeddingType)4),
-            _ => (VectorEmbeddingType.Single, VectorEmbeddingType.Single)
-        };
+        var (sourceType, destType) = VectorIndexMapping.GetEmbeddingTypes(quantization);
 
         var index = new IndexDefinition
         {
@@ -422,7 +409,6 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         if (string.IsNullOrEmpty(word))
             return "empty";
 
-        // Replace or encode problematic characters
         // RavenDB document ID restrictions: cannot end with '|', and other special chars may cause issues
         var sanitized = word
             .Replace("|", "_pipe_")

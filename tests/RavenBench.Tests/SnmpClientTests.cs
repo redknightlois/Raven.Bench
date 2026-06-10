@@ -1,87 +1,29 @@
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentAssertions;
-using Lextm.SharpSnmpLib;
 using RavenBench.Core.Metrics.Snmp;
 using Xunit;
 
 namespace RavenBench.Tests;
 
-public class SnmpMetricMapperTests
+public class SnmpClientTests
 {
     [Fact]
-    public void MapMetrics_ValidGauge32Values_ReturnsCorrectMetrics()
+    public async Task GetManyAsync_UnreachableEndpoint_ReturnsEmpty()
     {
-        // Arrange
-        var values = new Dictionary<string, Variable>
-        {
-            [SnmpOids.MachineCpu] = new Variable(new ObjectIdentifier(SnmpOids.MachineCpu), new Gauge32(75)),
-            [SnmpOids.ProcessCpu] = new Variable(new ObjectIdentifier(SnmpOids.ProcessCpu), new Gauge32(60)),
-            [SnmpOids.ManagedMemory] = new Variable(new ObjectIdentifier(SnmpOids.ManagedMemory), new Gauge32(1024)),
-            [SnmpOids.UnmanagedMemory] = new Variable(new ObjectIdentifier(SnmpOids.UnmanagedMemory), new Gauge32(2048))
-        };
+        var client = new SnmpClient();
 
-        // Act
-        var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = SnmpMetricMapper.MapMetrics(values);
+        var result = await client.GetManyAsync(new[] { "1.3.6.1.2.1.1.1.0" }, "127.0.0.1", port: 1, timeoutMs: 250);
 
-        // Assert
-        machineCpu.Should().Be(75.0);
-        processCpu.Should().Be(60.0);
-        managedMemoryMb.Should().Be(1024L); // 1024 MB
-        unmanagedMemoryMb.Should().Be(2048L); // 2048 MB
+        result.Should().BeEmpty();
     }
 
     [Fact]
-    public void MapMetrics_MissingOids_ReturnsNullValues()
+    public async Task GetManyAsync_HostName_ResolvesAndReturnsEmptyOnFailure()
     {
-        // Arrange
-        var values = new Dictionary<string, Variable>();
+        var client = new SnmpClient();
 
-        // Act
-        var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = SnmpMetricMapper.MapMetrics(values);
+        var result = await client.GetManyAsync(new[] { "1.3.6.1.2.1.1.1.0" }, "localhost", port: 1, timeoutMs: 250);
 
-        // Assert
-        machineCpu.Should().BeNull();
-        processCpu.Should().BeNull();
-        managedMemoryMb.Should().BeNull();
-        unmanagedMemoryMb.Should().BeNull();
-    }
-
-    [Fact]
-    public void MapMetrics_WrongDataTypes_ReturnsNullForInvalidTypes()
-    {
-        // Arrange
-        var values = new Dictionary<string, Variable>
-        {
-            [SnmpOids.MachineCpu] = new Variable(new ObjectIdentifier(SnmpOids.MachineCpu), new OctetString("wrong type")),
-            [SnmpOids.ProcessCpu] = new Variable(new ObjectIdentifier(SnmpOids.ProcessCpu), new Gauge32(40)),
-            [SnmpOids.ManagedMemory] = new Variable(new ObjectIdentifier(SnmpOids.ManagedMemory), new OctetString("wrong type")),
-            [SnmpOids.UnmanagedMemory] = new Variable(new ObjectIdentifier(SnmpOids.UnmanagedMemory), new Gauge32(50))
-        };
-
-        // Act
-        var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = SnmpMetricMapper.MapMetrics(values);
-
-        // Assert
-        machineCpu.Should().BeNull(); // Wrong type
-        processCpu.Should().Be(40.0); // Correct type
-        managedMemoryMb.Should().BeNull(); // Wrong type
-        unmanagedMemoryMb.Should().Be(50L); // Correct type
-    }
-
-    [Fact]
-    public void MapMetrics_EmptyDictionary_ReturnsNullValues()
-    {
-        // Arrange
-        var values = new Dictionary<string, Variable>();
-
-        // Act
-        var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = SnmpMetricMapper.MapMetrics(values);
-
-        // Assert
-        machineCpu.Should().BeNull();
-        processCpu.Should().BeNull();
-        managedMemoryMb.Should().BeNull();
-        unmanagedMemoryMb.Should().BeNull();
+        result.Should().BeEmpty();
     }
 }

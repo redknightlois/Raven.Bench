@@ -29,9 +29,8 @@ public sealed class SnmpSample
     public double? IoReadKbPerSec { get; init; }
     public double? IoWriteKbPerSec { get; init; }
 
-    // Request metrics
-    public long? TotalRequests { get; init; }  // Counter: total since server start
-    public double? RequestsPerSec { get; init; }  // Rate: already computed by RavenDB
+    // Counter: total requests since server start.
+    public long? TotalRequests { get; init; }
 
     public bool IsEmpty =>
         MachineCpu == null &&

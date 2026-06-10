@@ -44,9 +44,16 @@ public static class LoadGeneratorExecution
         int? resultCount = null;
         bool? isStale = null;
 
+        bool cancelled = false;
+
         try
         {
             var result = await transport.ExecuteAsync(operation, cancellationToken);
+            if (result.Cancelled)
+            {
+                cancelled = true;
+                return new WorkItemResult { Cancelled = true };
+            }
             if (result.IsSuccess == false)
             {
                 isError = true;
@@ -72,7 +79,7 @@ public static class LoadGeneratorExecution
         {
             var end = Stopwatch.GetTimestamp();
             latencyMicros = Math.Max(1, (long)Math.Round((end - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency));
-            if (isError == false)
+            if (cancelled == false && isError == false)
             {
                 try
                 {
@@ -154,6 +161,11 @@ public static class LoadGeneratorExecution
 public readonly struct WorkItemResult
 {
     public bool IsError { get; init; }
+
+    /// <summary>
+    /// True when the operation was aborted by external cancellation; excluded from all counters.
+    /// </summary>
+    public bool Cancelled { get; init; }
     public string? ErrorDetails { get; init; }
     public long BytesOut { get; init; }
     public long BytesIn { get; init; }
@@ -173,6 +185,9 @@ public sealed class LoadGeneratorCounters
 
     public void Record(in WorkItemResult result)
     {
+        if (result.Cancelled)
+            return;
+
         Interlocked.Increment(ref _operations);
         if (result.IsError)
         {

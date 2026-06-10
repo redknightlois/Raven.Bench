@@ -21,33 +21,32 @@ public sealed class MixedProfileWorkload : IWorkload
 
     public OperationBase NextOperation(Random rng)
     {
+        // Reads and updates may target keys from in-flight inserts; the overshoot is bounded by concurrency.
         var p = rng.Next(0, 100);
-        if (p < _mix.ReadPercent && _maxKey > 0)
+        long maxKey = Volatile.Read(ref _maxKey);
+        if (p < _mix.ReadPercent && maxKey > 0)
         {
-            var k = _distribution.NextKey(rng, (int)Math.Min(_maxKey, int.MaxValue));
-            return new ReadOperation { Id = IdFor(k) };
+            var k = _distribution.NextKey(rng, (int)Math.Min(maxKey, int.MaxValue));
+            return new ReadOperation { Id = BenchIds.IdFor(k) };
         }
         if (p < _mix.ReadPercent + _mix.WritePercent)
         {
             var keyValue = Interlocked.Increment(ref _maxKey);
-            var id = IdFor(keyValue);
+            var id = BenchIds.IdFor(keyValue);
             var payload = PayloadGenerator.Generate(_docSizeBytes, rng);
             return new InsertOperation<string> { Id = id, Payload = payload };
         }
 
-        // Update; if no key yet, insert first
-        if (_maxKey == 0)
+        if (maxKey == 0)
         {
             var keyValue = Interlocked.Increment(ref _maxKey);
-            var id = IdFor(keyValue);
+            var id = BenchIds.IdFor(keyValue);
             var payload = PayloadGenerator.Generate(_docSizeBytes, rng);
             return new InsertOperation<string> { Id = id, Payload = payload };
         }
 
-        var id2 = IdFor(_distribution.NextKey(rng, (int)Math.Min(_maxKey, int.MaxValue)));
+        var id2 = BenchIds.IdFor(_distribution.NextKey(rng, (int)Math.Min(maxKey, int.MaxValue)));
         var payload2 = PayloadGenerator.Generate(_docSizeBytes, rng);
         return new UpdateOperation<string> { Id = id2, Payload = payload2 };
     }
-
-    private static string IdFor(long i) => $"bench/{i:D8}";
 }

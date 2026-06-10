@@ -140,8 +140,7 @@ public class SnmpMetricMapperTests
             ["1.3.6.1.4.1.45751.1.1.5.2.1.2.8"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.2.8"), new Gauge32(5000)),
             ["1.3.6.1.4.1.45751.1.1.5.2.1.2.9"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.2.9"), new Gauge32(1024)),
             ["1.3.6.1.4.1.45751.1.1.5.2.1.2.10"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.2.10"), new Gauge32(512)),
-            ["1.3.6.1.4.1.45751.1.1.5.2.1.3.6"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.3.6"), new Integer32(100000)),
-            ["1.3.6.1.4.1.45751.1.1.5.2.1.3.5"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.3.5"), new Gauge32(1500))
+            ["1.3.6.1.4.1.45751.1.1.5.2.1.3.6"] = new Variable(new ObjectIdentifier("1.3.6.1.4.1.45751.1.1.5.2.1.3.6"), new Integer32(100000))
         };
 
         // Act
@@ -161,29 +160,6 @@ public class SnmpMetricMapperTests
         sample.IoReadKbPerSec.Should().Be(1024.0);
         sample.IoWriteKbPerSec.Should().Be(512.0);
         sample.TotalRequests.Should().Be(100000);
-        sample.RequestsPerSec.Should().Be(1500.0);
-    }
-
-    [Fact]
-    public void MapMetrics_BackwardCompatibility_ReturnsLegacyTuple()
-    {
-        // Arrange
-        var values = new Dictionary<string, Variable>
-        {
-            [SnmpOids.MachineCpu] = new Variable(new ObjectIdentifier(SnmpOids.MachineCpu), new Gauge32(75)),
-            [SnmpOids.ProcessCpu] = new Variable(new ObjectIdentifier(SnmpOids.ProcessCpu), new Gauge32(50)),
-            [SnmpOids.ManagedMemory] = new Variable(new ObjectIdentifier(SnmpOids.ManagedMemory), new Gauge32(2048)),
-            [SnmpOids.UnmanagedMemory] = new Variable(new ObjectIdentifier(SnmpOids.UnmanagedMemory), new Gauge32(512))
-        };
-
-        // Act
-        var (machineCpu, processCpu, managedMemoryMb, unmanagedMemoryMb) = SnmpMetricMapper.MapMetrics(values);
-
-        // Assert
-        machineCpu.Should().Be(75.0);
-        processCpu.Should().Be(50.0);
-        managedMemoryMb.Should().Be(2048);
-        unmanagedMemoryMb.Should().Be(512);
     }
 
     [Fact]

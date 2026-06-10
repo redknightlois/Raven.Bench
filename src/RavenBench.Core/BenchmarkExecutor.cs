@@ -24,22 +24,19 @@ namespace RavenBench.Core
         private readonly IWorkload _workload;
         private readonly ProcessCpuTracker _cpuTracker;
         private readonly ServerMetricsTracker? _serverTracker;
-        private readonly SnmpOptions? _snmpOptions;
 
         public BenchmarkExecutor(
             RunOptions options,
             ITransport transport,
             IWorkload workload,
             ProcessCpuTracker cpuTracker,
-            ServerMetricsTracker? serverTracker = null,
-            SnmpOptions? snmpOptions = null)
+            ServerMetricsTracker? serverTracker = null)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _transport = transport ?? throw new ArgumentNullException(nameof(transport));
             _workload = workload ?? throw new ArgumentNullException(nameof(workload));
             _cpuTracker = cpuTracker ?? throw new ArgumentNullException(nameof(cpuTracker));
             _serverTracker = serverTracker;
-            _snmpOptions = snmpOptions;
         }
 
         /// <summary>
@@ -55,16 +52,13 @@ namespace RavenBench.Core
             var warmupTime = _options.Warmup;
             var measurementTime = _options.Duration;
 
-            // Set baseline latency for coordinated omission correction
             loadGenerator.SetBaselineLatency(baselineLatencyMicros);
 
-            // Warmup phase
             if (warmupTime > TimeSpan.Zero)
             {
                 await loadGenerator.ExecuteWarmupAsync(warmupTime, cancellationToken);
             }
 
-            // Start tracking before measurement
             _cpuTracker.Reset();
             _cpuTracker.Start();
             _serverTracker?.Start();
@@ -73,7 +67,6 @@ namespace RavenBench.Core
 
             try
             {
-                // Measurement phase
                 var (latencyRecorder, metrics) = await loadGenerator.ExecuteMeasurementAsync(
                     measurementTime, cancellationToken);
 
@@ -96,30 +89,25 @@ namespace RavenBench.Core
                     Console.Error.WriteLine("[Raven.Bench] Benchmarks should not throw on the hot path; fix the transport or treat results as untrusted.");
                 }
 
-                // Build step result
-                var result = BuildStepResultAsync(
-                    loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics, cancellationToken);
+                var result = BuildStepResult(
+                    loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics);
 
                 return (latencyRecorder, result);
             }
             finally
             {
-                // Stop tracking after measurement
                 _cpuTracker.Stop();
                 _serverTracker?.Stop();
             }
         }
 
-        private StepResult BuildStepResultAsync(
+        private StepResult BuildStepResult(
             ILoadGenerator loadGenerator,
             int stepIndex,
             int currentStepValue,
             LatencyRecorder latencyRecorder,
-            LoadGeneratorMetrics metrics,
-            CancellationToken cancellationToken)
+            LoadGeneratorMetrics metrics)
         {
-            // Don't take snapshot here - let BenchmarkRunner handle all snapshot and percentile logic
-            // to avoid double-snapshot issue
 
             var serverMetrics = _serverTracker?.Current ?? new ServerMetrics();
 
@@ -146,7 +134,6 @@ namespace RavenBench.Core
                 ErrorRate = metrics.ErrorRate,
                 BytesOut = metrics.BytesOut,
                 BytesIn = metrics.BytesIn,
-                // Percentiles will be set by BenchmarkRunner after taking snapshot
                 Raw = default,
                 Normalized = default,
                 P9999 = 0,
@@ -193,13 +180,6 @@ namespace RavenBench.Core
                 StaleQueryCount = hasQueries && query!.StaleQueries > 0 ? query.StaleQueries : null,
                 QueryProfile = _options.QueryProfile != QueryProfile.VoronEquality ? _options.QueryProfile : null
             };
-
-            // Collect SNMP metrics if configured
-            if (_snmpOptions != null)
-            {
-                // TODO: Implement SNMP metrics collection
-                // This would involve calling the SNMP client to get current metrics
-            }
 
             return result;
         }

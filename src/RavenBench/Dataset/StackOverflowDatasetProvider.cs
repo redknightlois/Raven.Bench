@@ -70,7 +70,6 @@ public class StackOverflowDatasetProvider : IDatasetProvider
                 return false;
             }
 
-            // Check document counts using ForDatabase() since store is already initialized
             var stats = await store.Maintenance.ForDatabase(databaseName).SendAsync(new GetStatisticsOperation());
 
             if (stats.CountOfDocuments < expectedMinDocuments)
@@ -143,7 +142,7 @@ public class StackOverflowDatasetProvider : IDatasetProvider
         store.Initialize();
 
         var engineName = searchEngine == IndexingEngine.Lucene ? "Lucene" : "Corax";
-        var engineSuffix = searchEngine == IndexingEngine.Lucene ? "-lucene" : "-corax";
+        var engineSuffix = VectorIndexMapping.GetEngineSuffix(searchEngine);
 
         var indexNames = new StaticIndexNames
         {

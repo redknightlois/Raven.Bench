@@ -25,8 +25,7 @@ public sealed class StackOverflowWorkloadMetadata
     public string[] SearchTermsRare { get; set; } = Array.Empty<string>();
     public string[] SearchTermsCommon { get; set; } = Array.Empty<string>();
 
-    // Static index names (set by BenchmarkRunner after index creation)
-    // These are populated at runtime with the actual index names including engine suffix
+    // Static index names, populated at runtime (include the engine suffix)
     public string? TitleIndexName { get; set; }
     public string? TitleSearchIndexName { get; set; }
 }
@@ -70,30 +69,27 @@ public static class StackOverflowWorkloadHelper
 
         Console.WriteLine("[Workload] Discovering StackOverflow document IDs and text search terms by sampling database...");
 
-        // Sample actual document IDs from the database
         var questionIds = await SampleDocumentIdsAsync(store, "questions", seed, sampleSize);
         var userIds = await SampleDocumentIdsAsync(store, "users", seed, sampleSize);
 
-        if (questionIds.Count() == 0 || userIds.Count() == 0)
+        if (questionIds.Count == 0 || userIds.Count == 0)
         {
             throw new InvalidOperationException(
                 $"Failed to discover StackOverflow document IDs. Found {questionIds.Count} questions, {userIds.Count} users. " +
                 "Ensure the StackOverflow dataset is imported before running benchmarks.");
         }
 
-        // Sample title prefixes and search terms for text queries to ensure realistic selectivity
         var (titlePrefixes, searchTermsRare, searchTermsCommon) = await DiscoverTextSearchTermsAsync(store, seed);
 
-        Console.WriteLine($"[Workload] Sampled {questionIds.Count()} questions, {userIds.Count()} users");
+        Console.WriteLine($"[Workload] Sampled {questionIds.Count} questions, {userIds.Count} users");
         Console.WriteLine($"[Workload] Discovered {titlePrefixes.Length} title prefixes, {searchTermsRare.Length} rare terms, {searchTermsCommon.Length} common terms");
 
-        // Store metadata for future use
         var metadata = new StackOverflowWorkloadMetadata
         {
             QuestionIds = questionIds.ToArray(),
             UserIds = userIds.ToArray(),
-            QuestionCount = questionIds.Count(),
-            UserCount = userIds.Count(),
+            QuestionCount = questionIds.Count,
+            UserCount = userIds.Count,
             TitlePrefixes = titlePrefixes,
             SearchTermsRare = searchTermsRare,
             SearchTermsCommon = searchTermsCommon,
@@ -123,7 +119,6 @@ public static class StackOverflowWorkloadHelper
         using var session = store.OpenAsyncSession();
 
         // Use RavenDB's built-in random() ordering with a deterministic seed for reproducible sampling
-        // This is much more efficient than streaming all documents
         // Note: WaitForNonStaleResults is not compatible with streaming queries
         // The caller must ensure indexes are non-stale before calling this method
         var samplingSeed = $"ravenbench-{seed}";
@@ -133,18 +128,15 @@ public static class StackOverflowWorkloadHelper
 
         while (await stream.MoveNextAsync())
         {
-            // The result is just the ID string
             var result = stream.Current.Document;
             string? docId = null;
 
-            // Handle both direct ID strings and objects with Id property
             if (result is string idString)
             {
                 docId = idString;
             }
             else if (result != null)
             {
-                // Try to get Id property dynamically
                 try
                 {
                     docId = (result as dynamic)?.Id ?? stream.Current.Id;
@@ -194,8 +186,6 @@ public static class StackOverflowWorkloadHelper
         using var session = store.OpenAsyncSession();
 
         // Sample question titles using deterministic random ordering.
-        // 5000 titles provide sufficient diversity for prefix and term extraction
-        // while being efficient for large datasets.
         const int sampleSize = 5000;
         var samplingSeed = $"ravenbench-title-{seed}";
         var query = session.Advanced.AsyncRawQuery<dynamic>(
@@ -209,7 +199,6 @@ public static class StackOverflowWorkloadHelper
             var result = stream.Current.Document;
             string? title = null;
 
-            // Extract Title (handle different response formats)
             if (result is string titleStr)
             {
                 title = titleStr;
@@ -222,7 +211,6 @@ public static class StackOverflowWorkloadHelper
                 }
                 catch
                 {
-                    // Skip entries where we can't extract title
                 }
             }
 
@@ -234,7 +222,6 @@ public static class StackOverflowWorkloadHelper
 
         if (titles.Count == 0)
         {
-            // Fallback: provide default prefixes and terms
             return (
                 new[] { "How", "What", "Why", "C#", "Java", "Python", "Error", "Fix" },
                 new[] { "algorithm", "optimization", "async", "multithreading" },
@@ -242,14 +229,12 @@ public static class StackOverflowWorkloadHelper
             );
         }
 
-        // Extract prefixes (first 3-5 characters of titles) and words for analysis.
         // Prefixes enable startsWith queries with varying selectivity based on title distribution.
         var prefixCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var wordCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var title in titles)
         {
-            // Extract prefixes of 3-5 characters to capture common title beginnings
             for (int prefixLen = 3; prefixLen <= Math.Min(5, title.Length); prefixLen++)
             {
                 var prefix = title.Substring(0, prefixLen);
@@ -309,7 +294,6 @@ public static class StackOverflowWorkloadHelper
             .Select(kvp => kvp.Key)
             .ToArray();
 
-        // Fallback for cases where we couldn't extract meaningful terms/prefixes
         // Use the same defaults as the runtime workload fallbacks to ensure cached metadata is considered complete
         if (selectedPrefixes.Count == 0)
         {

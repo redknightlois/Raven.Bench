@@ -37,9 +37,6 @@ public class QueryOperation : OperationBase
     /// Optional expected index name for validation/reporting.
     /// </summary>
     public string? ExpectedIndex { get; init; }
-
-    // Legacy compatibility: provide Id property that extracts from parameters for backward compatibility
-    public string? Id => Parameters.TryGetValue("id", out var idValue) ? idValue?.ToString() : null;
 }
 
 /// <summary>
@@ -131,7 +128,6 @@ public class VectorSearchOperation : OperationBase
         if (MinimumSimilarity > 0)
             whereClause += " >= $minSimilarity";
 
-        // Use explicit index name if set, otherwise fall back to convention
         var indexName = ExpectedIndex ?? VectorIndexNaming.GetIndexName("Words", Quantization, "");
 
         return $"from index '{indexName}' where {whereClause}";

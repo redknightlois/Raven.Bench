@@ -176,7 +176,6 @@ public class SnmpCounterCacheTests
             IoWriteOpsPerSec = 200.0,
             IoReadKbPerSec = 256.0,
             IoWriteKbPerSec = 128.0,
-            RequestsPerSec = 1000.0,
             TotalRequests = 12000
         };
 
@@ -192,6 +191,26 @@ public class SnmpCounterCacheTests
         rates.IoWriteBytesPerSec.Should().BeApproximately(128.0 * 1024, 0.01);
         rates.ServerRequestsPerSec.Should().Be(1000.0);
         rates.ErrorsPerSec.Should().BeNull("not available from RavenDB");
+    }
+
+    [Fact]
+    public void NegativeCounterDelta_ReturnsNullRate()
+    {
+        // Arrange
+        var cache = new SnmpCounterCache();
+        var time1 = DateTime.UtcNow;
+        var time2 = time1.AddSeconds(1);
+
+        var sample1 = new SnmpSample { Timestamp = time1, TotalRequests = 10000 };
+        var sample2 = new SnmpSample { Timestamp = time2, TotalRequests = 500 };
+
+        // Act
+        cache.ComputeRates(sample1);
+        var rates = cache.ComputeRates(sample2);
+
+        // Assert
+        rates.Should().NotBeNull();
+        rates!.ServerRequestsPerSec.Should().BeNull("counter wrapped or server restarted");
     }
 
     [Fact]
