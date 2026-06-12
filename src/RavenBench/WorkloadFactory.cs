@@ -41,6 +41,8 @@ internal static class WorkloadFactory
             WorkloadProfile.QueryUsersByName => BuildUsersQueryWorkload(opts, usersMetadata!),
             WorkloadProfile.VectorSearch => BuildVectorSearchWorkload(opts, vectorMetadata!),
             WorkloadProfile.VectorSearchExact => BuildVectorSearchWorkload(opts, vectorMetadata!, exactSearch: true),
+            WorkloadProfile.Patch => new PatchWorkload(CreateDistribution(), opts.Preload),
+            WorkloadProfile.Attachments => new AttachmentWorkload(CreateDistribution(), opts.Preload, opts.AttachmentOp, opts.DocumentSizeBytes, opts.Seed),
             _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
         };
     }
@@ -83,7 +85,11 @@ internal static class WorkloadFactory
             QueryProfile.TextSearchRare => new QuestionsByTitleSearchWorkload(metadata, 1.0), // 100% rare
             QueryProfile.TextSearchCommon => new QuestionsByTitleSearchWorkload(metadata, 0.0), // 100% common
             QueryProfile.TextSearchMixed => new QuestionsByTitleSearchWorkload(metadata, 0.5), // 50% rare, 50% common
-            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for StackOverflow queries. Supported profiles: voron-equality, index-equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
+            QueryProfile.Suggestions => new QuestionsSuggestionsQueryWorkload(metadata),
+            QueryProfile.MoreLikeThis => new QuestionsMoreLikeThisQueryWorkload(metadata),
+            QueryProfile.GroupBy => new QuestionsGroupByQueryWorkload(metadata),
+            QueryProfile.Stream => new QuestionsStreamByTagQueryWorkload(metadata),
+            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for StackOverflow queries. Supported profiles: voron-equality, index-equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed, suggestions, more-like-this, group-by, stream")
         };
     }
 
@@ -93,7 +99,8 @@ internal static class WorkloadFactory
         {
             QueryProfile.VoronEquality or QueryProfile.IndexEquality => new StackOverflowUsersByNameQueryWorkload(metadata),
             QueryProfile.Range => new StackOverflowUsersRangeQueryWorkload(metadata),
-            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range")
+            QueryProfile.Spatial => new UsersSpatialQueryWorkload(metadata),
+            _ => throw new NotSupportedException($"Query profile '{opts.QueryProfile}' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range, spatial")
         };
     }
 
@@ -132,6 +139,8 @@ internal static class WorkloadFactory
             WorkloadProfile.Mixed => true,
             WorkloadProfile.Reads => true,
             WorkloadProfile.QueryById => true,
+            WorkloadProfile.Patch => true,
+            WorkloadProfile.Attachments => true,
             _ => false
         };
     }

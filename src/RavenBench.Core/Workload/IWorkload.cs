@@ -40,6 +40,43 @@ public class QueryOperation : OperationBase
 }
 
 /// <summary>
+/// A query executed through the streams endpoint instead of the queries endpoint.
+/// The full result stream is drained; result counts are not parsed from the body.
+/// </summary>
+public class StreamQueryOperation : QueryOperation
+{
+}
+
+/// <summary>
+/// Server-side JavaScript patch applied to a single document.
+/// </summary>
+public class DocumentPatchOperation : OperationBase
+{
+    public required string Id { get; init; }
+    public required string Script { get; init; }
+}
+
+public enum AttachmentOperationKind
+{
+    Put,
+    Get,
+    Delete
+}
+
+/// <summary>
+/// Attachment operation against a single document. Payload is required for Put.
+/// Get and Delete assume the attachment was created beforehand; Delete of a missing
+/// attachment is a server-side no-op.
+/// </summary>
+public class AttachmentOperation : OperationBase
+{
+    public required string DocumentId { get; init; }
+    public required string Name { get; init; }
+    public required AttachmentOperationKind Kind { get; init; }
+    public byte[]? Payload { get; init; }
+}
+
+/// <summary>
 /// Represents a vector search operation using RavenDB's vector search capabilities.
 /// Supports both approximate (HNSW) and exact vector search with quantization options.
 /// </summary>

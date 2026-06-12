@@ -27,6 +27,9 @@ internal static class Program
             cfg.AddCommand<RecallCommand>("recall")
                 .WithDescription("Measure recall@K only (no throughput benchmark). Requires data already imported.")
                 .WithExample("recall", "--url", "http://localhost:10101", "--dataset", "sphere", "--dataset-profile", "100k", "--vector-quantization", "Int2", "--vector-recall-ef-sweep", "64,128,256,512");
+            cfg.AddCommand<IndexBuildCommand>("index-build")
+                .WithDescription("Build a static index from scratch and report build time and docs/s. Leaves the database indexed for reuse.")
+                .WithExample("index-build", "--url", "http://localhost:10101", "--dataset", "stackoverflow", "--dataset-profile", "small", "--index-kind", "fanout");
 
         });
 

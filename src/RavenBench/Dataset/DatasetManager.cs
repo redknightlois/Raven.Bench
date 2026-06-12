@@ -123,7 +123,8 @@ public sealed class DatasetManager : IDisposable
 
         store.Initialize();
 
-        var operation = await store.Smuggler.ImportAsync(new DatabaseSmugglerImportOptions(), dumpFilePath, ct);
+        await using var dumpStream = await OpenDumpStreamAsync(dumpFilePath, ct);
+        var operation = await store.Smuggler.ImportAsync(new DatabaseSmugglerImportOptions(), dumpStream, ct);
 
         Console.WriteLine($"[Dataset] Import operation started");
 
@@ -214,6 +215,94 @@ public sealed class DatasetManager : IDisposable
         {
             Console.WriteLine($"[Dataset] Error checking if dataset exists: {ex.Message}");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Opens a dump for import. Some published StackOverflow dumps declare BuildVersion 40000
+    /// while carrying v3-era metadata (Raven-Entity-Name); the server translates that to
+    /// @collection only for BuildVersion below 40000, so such dumps are rewritten to 30000 —
+    /// otherwise every document lands in the @empty collection and no index maps anything.
+    /// </summary>
+    private static async Task<Stream> OpenDumpStreamAsync(string path, CancellationToken ct)
+    {
+        Stream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: true);
+        var header = new byte[2];
+        var headerRead = await stream.ReadAtLeastAsync(header, 2, throwOnEndOfStream: false, ct);
+        stream.Position = 0;
+        if (headerRead == 2 && header[0] == 0x1F && header[1] == 0x8B)
+            stream = new System.IO.Compression.GZipStream(stream, System.IO.Compression.CompressionMode.Decompress);
+
+        var prefix = new byte[64 * 1024];
+        var prefixLength = await stream.ReadAtLeastAsync(prefix, prefix.Length, throwOnEndOfStream: false, ct);
+
+        var text = System.Text.Encoding.Latin1.GetString(prefix, 0, prefixLength);
+        var version = System.Text.RegularExpressions.Regex.Match(text, """^\{\s*"BuildVersion"\s*:\s*(\d+)""");
+        if (version.Success && version.Groups[1].Length == 5 &&
+            long.Parse(version.Groups[1].Value) >= 40000 && text.Contains("\"Raven-Entity-Name\""))
+        {
+            Console.WriteLine("[Dataset] Dump carries v3 metadata under a v4+ BuildVersion; rewriting header so collections are preserved");
+            System.Text.Encoding.Latin1.GetBytes("30000", prefix.AsSpan(version.Groups[1].Index, 5));
+        }
+
+        return new PrefixedStream(prefix, prefixLength, stream);
+    }
+
+    private sealed class PrefixedStream(byte[] prefix, int prefixLength, Stream inner) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_position < prefixLength)
+            {
+                var n = Math.Min(buffer.Length, prefixLength - _position);
+                prefix.AsSpan(_position, n).CopyTo(buffer);
+                _position += n;
+                return n;
+            }
+            return inner.Read(buffer);
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_position < prefixLength)
+            {
+                var n = Math.Min(buffer.Length, prefixLength - _position);
+                prefix.AsMemory(_position, n).CopyTo(buffer);
+                _position += n;
+                return n;
+            }
+            return await inner.ReadAsync(buffer, ct);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                inner.Dispose();
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            await base.DisposeAsync();
         }
     }
 

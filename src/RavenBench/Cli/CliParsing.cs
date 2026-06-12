@@ -50,6 +50,7 @@ internal static class CliParsing
             VectorRecallEfSweep = ParseEfSweep(settings.VectorRecallEfSweep),
             Profile = ParseProfile(settings.Profile),
             QueryProfile = ParseQueryProfile(settings.QueryProfile),
+            AttachmentOp = ParseAttachmentOp(settings.AttachmentOp),
             DocumentSizeBytes = ParseSize(settings.DocSize),
             Step = stepPlan.Normalize(),
             Shape = shape,
@@ -124,7 +125,9 @@ internal static class CliParsing
             "query-users-by-name" or "queryusersbyname" => WorkloadProfile.QueryUsersByName,
             "vector-search" or "vectorsearch" => WorkloadProfile.VectorSearch,
             "vector-search-exact" or "vectorsearchexact" => WorkloadProfile.VectorSearchExact,
-            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact")
+            "patch" => WorkloadProfile.Patch,
+            "attachments" or "attachment" => WorkloadProfile.Attachments,
+            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact, patch, attachments")
         };
     }
 
@@ -144,7 +147,23 @@ internal static class CliParsing
             "text-search-rare" or "textsearchrare" or "search-rare" => QueryProfile.TextSearchRare,
             "text-search-common" or "textsearchcommon" or "search-common" => QueryProfile.TextSearchCommon,
             "text-search-mixed" or "textsearchmixed" or "search-mixed" => QueryProfile.TextSearchMixed,
-            _ => throw new ArgumentException($"Invalid query profile: {queryProfile}. Valid options: voron-equality, index-equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed")
+            "spatial" => QueryProfile.Spatial,
+            "suggestions" or "suggest" => QueryProfile.Suggestions,
+            "more-like-this" or "morelikethis" or "mlt" => QueryProfile.MoreLikeThis,
+            "group-by" or "groupby" => QueryProfile.GroupBy,
+            "stream" => QueryProfile.Stream,
+            _ => throw new ArgumentException($"Invalid query profile: {queryProfile}. Valid options: voron-equality, index-equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed, spatial, suggestions, more-like-this, group-by, stream")
+        };
+    }
+
+    private static AttachmentOperationKind ParseAttachmentOp(string attachmentOp)
+    {
+        return attachmentOp.Trim().ToLowerInvariant() switch
+        {
+            "create" or "put" => AttachmentOperationKind.Put,
+            "get" => AttachmentOperationKind.Get,
+            "delete" => AttachmentOperationKind.Delete,
+            _ => throw new ArgumentException($"Invalid attachment op: {attachmentOp}. Valid options: create, get, delete")
         };
     }
 

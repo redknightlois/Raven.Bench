@@ -23,6 +23,7 @@ public sealed class StackOverflowUsersWorkloadMetadata
     // Static index names, populated at runtime (include the engine suffix)
     public string? DisplayNameIndexName { get; set; }
     public string? ReputationIndexName { get; set; }
+    public string? SpatialIndexName { get; set; }
 }
 
 /// <summary>

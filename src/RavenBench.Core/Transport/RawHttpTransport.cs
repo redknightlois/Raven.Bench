@@ -93,8 +93,14 @@ public sealed class RawHttpTransport : ITransport
                     return await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false);
                 case UpdateOperation<string> updateOp:
                     return await PutAsyncInternal(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false);
+                case StreamQueryOperation streamOp:
+                    return await PostStreamQueryAsync(streamOp, ct).ConfigureAwait(false);
                 case QueryOperation queryOp:
                     return await PostQueryAsync(queryOp, ct).ConfigureAwait(false);
+                case DocumentPatchOperation patchOp:
+                    return await PatchDocumentAsync(patchOp, ct).ConfigureAwait(false);
+                case AttachmentOperation attachmentOp:
+                    return await ExecuteAttachmentAsync(attachmentOp, ct).ConfigureAwait(false);
                 case BulkInsertOperation<string> bulkOp:
                     return await PostBulkDocsAsync(bulkOp.Documents, ct).ConfigureAwait(false);
                 case VectorSearchOperation vectorOp:
@@ -287,6 +293,162 @@ public sealed class RawHttpTransport : ITransport
         {
             var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
             return new TransportResult(0, 0, errorDetails);
+        }
+    }
+
+    /// <summary>
+    /// Executes a query through the streams endpoint and drains the full result stream.
+    /// Result counts and query stats are not parsed from the streamed body.
+    /// </summary>
+    private async Task<TransportResult> PostStreamQueryAsync(StreamQueryOperation streamOp, CancellationToken ct)
+    {
+        try
+        {
+            var url = $"{_baseUrl}/databases/{_db}/streams/queries";
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+
+            var payload = new
+            {
+                Query = streamOp.QueryText,
+                QueryParameters = streamOp.Parameters
+            };
+
+            var queryPayload = JsonSerializer.Serialize(payload);
+            req.Content = new StringContent(queryPayload, Encoding.UTF8, "application/json");
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+            {
+                if (resp.IsSuccessStatusCode == false)
+                {
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
+                    return new TransportResult(0, 0, errorDetails);
+                }
+
+                long bytesIn = await DrainResponseAsync(resp, cts.Token).ConfigureAwait(false);
+
+                long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+                long bytesOut = CalculateHeaderSize(req) + bodyBytes;
+
+                return new TransportResult(bytesOut, bytesIn, indexName: streamOp.ExpectedIndex);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            if (ct.IsCancellationRequested)
+                return TransportResult.CancelledResult;
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
+        catch (Exception ex)
+        {
+            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private async Task<TransportResult> PatchDocumentAsync(DocumentPatchOperation patchOp, CancellationToken ct)
+    {
+        try
+        {
+            var url = $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(patchOp.Id)}";
+
+            using var req = new HttpRequestMessage(HttpMethod.Patch, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+
+            var payload = new { Patch = new { Script = patchOp.Script, Values = new { } } };
+            var jsonPayload = JsonSerializer.Serialize(payload);
+            req.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+            {
+                if (resp.IsSuccessStatusCode == false)
+                {
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return new TransportResult(0, 0, $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}");
+                }
+
+                long drained = await DrainResponseAsync(resp, cts.Token).ConfigureAwait(false);
+                long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+                long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload));
+                return new TransportResult(bytesOut, bytesIn);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            if (ct.IsCancellationRequested)
+                return TransportResult.CancelledResult;
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
+        catch (Exception ex)
+        {
+            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private async Task<TransportResult> ExecuteAttachmentAsync(AttachmentOperation op, CancellationToken ct)
+    {
+        try
+        {
+            var url = $"{_baseUrl}/databases/{_db}/attachments?id={Uri.EscapeDataString(op.DocumentId)}&name={Uri.EscapeDataString(op.Name)}";
+
+            var method = op.Kind switch
+            {
+                AttachmentOperationKind.Put => HttpMethod.Put,
+                AttachmentOperationKind.Get => HttpMethod.Get,
+                AttachmentOperationKind.Delete => HttpMethod.Delete,
+                _ => throw new ArgumentOutOfRangeException(nameof(op.Kind), op.Kind, null)
+            };
+
+            using var req = new HttpRequestMessage(method, url);
+            req.Headers.AcceptEncoding.Clear();
+            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+            req.Headers.ExpectContinue = false;
+
+            long bodyBytes = 0;
+            if (op.Kind == AttachmentOperationKind.Put)
+            {
+                req.Content = new ReadOnlyMemoryContent(op.Payload!);
+                req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                bodyBytes = op.Payload!.Length;
+            }
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+            {
+                if (resp.IsSuccessStatusCode == false)
+                {
+                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    return new TransportResult(0, 0, $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}");
+                }
+
+                long drained = await DrainResponseAsync(resp, cts.Token).ConfigureAwait(false);
+                long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+                long bytesOut = CalculateHeaderSize(req) + bodyBytes;
+                return new TransportResult(bytesOut, bytesIn);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            if (ct.IsCancellationRequested)
+                return TransportResult.CancelledResult;
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
+        catch (Exception ex)
+        {
+            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
         }
     }
 

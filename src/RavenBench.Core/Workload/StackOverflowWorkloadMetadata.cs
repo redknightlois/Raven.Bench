@@ -25,9 +25,16 @@ public sealed class StackOverflowWorkloadMetadata
     public string[] SearchTermsRare { get; set; } = Array.Empty<string>();
     public string[] SearchTermsCommon { get; set; } = Array.Empty<string>();
 
+    // Sampled question tags for tag-filtered (stream) queries
+    public string[] Tags { get; set; } = Array.Empty<string>();
+
     // Static index names, populated at runtime (include the engine suffix)
     public string? TitleIndexName { get; set; }
     public string? TitleSearchIndexName { get; set; }
+    public string? TitleSuggestionsIndexName { get; set; }
+    public string? TitleMoreLikeThisIndexName { get; set; }
+    public string? ViewCountGroupedIndexName { get; set; }
+    public string? TagsIndexName { get; set; }
 }
 
 /// <summary>
@@ -61,9 +68,10 @@ public static class StackOverflowWorkloadHelper
         var cached = await session.LoadAsync<StackOverflowWorkloadMetadata>(MetadataDocId);
 
         if (cached != null && cached.QuestionIds.Length > 0 && cached.UserIds.Length > 0 &&
-            cached.TitlePrefixes.Length > 0 && (cached.SearchTermsRare.Length > 0 || cached.SearchTermsCommon.Length > 0))
+            cached.TitlePrefixes.Length > 0 && (cached.SearchTermsRare.Length > 0 || cached.SearchTermsCommon.Length > 0) &&
+            cached.Tags.Length > 0)
         {
-            Console.WriteLine($"[Workload] Using cached StackOverflow metadata: {cached.QuestionIds.Length} questions, {cached.UserIds.Length} users, {cached.TitlePrefixes.Length} prefixes, {cached.SearchTermsRare.Length + cached.SearchTermsCommon.Length} search terms");
+            Console.WriteLine($"[Workload] Using cached StackOverflow metadata: {cached.QuestionIds.Length} questions, {cached.UserIds.Length} users, {cached.TitlePrefixes.Length} prefixes, {cached.SearchTermsRare.Length + cached.SearchTermsCommon.Length} search terms, {cached.Tags.Length} tags");
             return cached;
         }
 
@@ -80,9 +88,10 @@ public static class StackOverflowWorkloadHelper
         }
 
         var (titlePrefixes, searchTermsRare, searchTermsCommon) = await DiscoverTextSearchTermsAsync(store, seed);
+        var tags = await SampleQuestionTagsAsync(store, seed);
 
         Console.WriteLine($"[Workload] Sampled {questionIds.Count} questions, {userIds.Count} users");
-        Console.WriteLine($"[Workload] Discovered {titlePrefixes.Length} title prefixes, {searchTermsRare.Length} rare terms, {searchTermsCommon.Length} common terms");
+        Console.WriteLine($"[Workload] Discovered {titlePrefixes.Length} title prefixes, {searchTermsRare.Length} rare terms, {searchTermsCommon.Length} common terms, {tags.Length} tags");
 
         var metadata = new StackOverflowWorkloadMetadata
         {
@@ -93,6 +102,7 @@ public static class StackOverflowWorkloadHelper
             TitlePrefixes = titlePrefixes,
             SearchTermsRare = searchTermsRare,
             SearchTermsCommon = searchTermsCommon,
+            Tags = tags,
             ComputedAt = DateTime.UtcNow
         };
 
@@ -169,6 +179,56 @@ public static class StackOverflowWorkloadHelper
 
         var idPart = docId.Substring(prefix.Length);
         return int.TryParse(idPart, out numericId);
+    }
+
+    /// <summary>
+    /// Samples question tags with a mix of common and medium-frequency tags for varied selectivity.
+    /// Uses deterministic sampling for reproducibility across runs.
+    /// </summary>
+    private static async Task<string[]> SampleQuestionTagsAsync(IDocumentStore store, int seed)
+    {
+        using var session = store.OpenAsyncSession();
+
+        const int sampleSize = 5000;
+        var samplingSeed = $"ravenbench-tags-{seed}";
+        var query = session.Advanced.AsyncRawQuery<dynamic>(
+            $"from questions order by random('{samplingSeed}') select Tags limit {sampleSize}");
+
+        var tagCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        await using var stream = await session.Advanced.StreamAsync(query);
+
+        while (await stream.MoveNextAsync())
+        {
+            var result = stream.Current.Document;
+            if (result == null)
+                continue;
+
+            try
+            {
+                var tags = (result as dynamic)?.Tags;
+                if (tags == null)
+                    continue;
+
+                foreach (var tag in tags)
+                {
+                    string? tagString = tag?.ToString();
+                    if (string.IsNullOrWhiteSpace(tagString) == false)
+                    {
+                        tagCounts.TryGetValue(tagString, out var count);
+                        tagCounts[tagString] = count + 1;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        var sorted = tagCounts.OrderByDescending(kvp => kvp.Value).ToList();
+        var selected = sorted.Take(20).Select(kvp => kvp.Key).ToList();
+        selected.AddRange(sorted.Skip(sorted.Count / 4).Take(30).Select(kvp => kvp.Key));
+
+        return selected.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     /// <summary>

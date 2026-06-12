@@ -196,6 +196,9 @@ public sealed record RunOptions
     public int BulkBatchSize { get; init; } = 100;
     public int BulkDepth { get; init; } = 1;
 
+    // Attachment operation for the Attachments profile; attachment size comes from DocumentSizeBytes
+    public AttachmentOperationKind AttachmentOp { get; init; } = AttachmentOperationKind.Put;
+
     // Dataset management
     public string? Dataset { get; init; }
     public string? DatasetProfile { get; init; } // small, half, full - automatically sets database name and size
@@ -233,7 +236,9 @@ public enum WorkloadProfile
     StackOverflowTextSearch,
     QueryUsersByName,
     VectorSearch,
-    VectorSearchExact
+    VectorSearchExact,
+    Patch,
+    Attachments
 }
 
 public static class WorkloadProfiles
@@ -309,7 +314,32 @@ public enum QueryProfile
     /// <summary>
     /// Full-text search mixing rare and common terms (50/50)
     /// </summary>
-    TextSearchMixed
+    TextSearchMixed,
+
+    /// <summary>
+    /// Spatial radius search (e.g., WHERE spatial.within(Coordinates, spatial.circle(...)))
+    /// </summary>
+    Spatial,
+
+    /// <summary>
+    /// Term suggestions (e.g., SELECT suggest(Title, $term))
+    /// </summary>
+    Suggestions,
+
+    /// <summary>
+    /// More-like-this document similarity (e.g., WHERE morelikethis(id() = $id))
+    /// </summary>
+    MoreLikeThis,
+
+    /// <summary>
+    /// Map-reduce aggregation over a static index (e.g., WHERE Count BETWEEN $min AND $max)
+    /// </summary>
+    GroupBy,
+
+    /// <summary>
+    /// Streaming query through the streams endpoint (large result throughput)
+    /// </summary>
+    Stream
 }
 
 public enum HistogramExportFormat

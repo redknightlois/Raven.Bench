@@ -194,7 +194,7 @@ public class CliParsingTests
         var act = () => settings.ToRunOptions();
 
         act.Should().Throw<ArgumentException>()
-            .WithMessage("Invalid query profile: invalid. Valid options: voron-equality, index-equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
+            .WithMessage("Invalid query profile: invalid. Valid options: voron-equality, index-equality, range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed, spatial, suggestions, more-like-this, group-by, stream");
     }
 
     [Fact]

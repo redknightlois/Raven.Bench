@@ -284,19 +284,19 @@ public class IntegrationTests
         var soRangeOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowTextSearch, QueryProfile = QueryProfile.Range };
         var act1 = () => WorkloadFactory.BuildWorkload(soRangeOpts, null, null, null);
         act1.Should().Throw<NotSupportedException>()
-            .WithMessage("Query profile 'Range' is not supported for StackOverflow queries. Supported profiles: voron-equality, index-equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed");
+            .WithMessage("Query profile 'Range' is not supported for StackOverflow queries. Supported profiles: voron-equality, index-equality, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed, suggestions, more-like-this, group-by, stream");
 
         // StackOverflow queries do not support text-prefix for users profile
         var usersPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextPrefix };
         var act2 = () => WorkloadFactory.BuildWorkload(usersPrefixOpts, null, null, null);
         act2.Should().Throw<NotSupportedException>()
-            .WithMessage("Query profile 'TextPrefix' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range");
+            .WithMessage("Query profile 'TextPrefix' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range, spatial");
 
         // StackOverflow queries do not support text-search for users profile
         var usersSearchOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.QueryUsersByName, QueryProfile = QueryProfile.TextSearch };
         var act3 = () => WorkloadFactory.BuildWorkload(usersSearchOpts, null, null, null);
         act3.Should().Throw<NotSupportedException>()
-            .WithMessage("Query profile 'TextSearch' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range");
+            .WithMessage("Query profile 'TextSearch' is not supported for Users queries. Supported profiles: voron-equality, index-equality, range, spatial");
 
         // StackOverflow queries support text-prefix
         var soTextPrefixOpts = new RunOptions { Url = "http://localhost:8080", Database = "test", Profile = WorkloadProfile.StackOverflowTextSearch, QueryProfile = QueryProfile.TextPrefix };

@@ -88,12 +88,23 @@ public class BenchmarkRunner(RunOptions opts)
                                   opts.Profile == WorkloadProfile.QueryUsersByName;
         if (needsStaticIndexes && opts.Dataset?.Equals("stackoverflow", StringComparison.OrdinalIgnoreCase) == true)
         {
+            var extraIndexes = opts.QueryProfile switch
+            {
+                QueryProfile.Spatial => new[] { StackOverflowIndex.UsersBySpatial },
+                QueryProfile.Suggestions => new[] { StackOverflowIndex.QuestionsByTitleSuggestions },
+                QueryProfile.MoreLikeThis => new[] { StackOverflowIndex.QuestionsByTitleMoreLikeThis },
+                QueryProfile.GroupBy => new[] { StackOverflowIndex.QuestionsByViewCountGrouped },
+                QueryProfile.Stream => new[] { StackOverflowIndex.QuestionsByTags },
+                _ => Array.Empty<StackOverflowIndex>()
+            };
+
             var stackOverflowProvider = new StackOverflowDatasetProvider();
             staticIndexNames = await stackOverflowProvider.CreateStaticIndexesAsync(
                 opts.Url,
                 effectiveDatabase,
                 opts.SearchEngine,
-                negotiatedHttpVersion);
+                negotiatedHttpVersion,
+                extraIndexes);
         }
 
         StackOverflowWorkloadMetadata? stackOverflowMetadata = null;
@@ -113,6 +124,10 @@ public class BenchmarkRunner(RunOptions opts)
             {
                 stackOverflowMetadata.TitleIndexName = staticIndexNames.QuestionsTitleIndex;
                 stackOverflowMetadata.TitleSearchIndexName = staticIndexNames.QuestionsTitleSearchIndex;
+                stackOverflowMetadata.TitleSuggestionsIndexName = staticIndexNames.QuestionsTitleSuggestionsIndex;
+                stackOverflowMetadata.TitleMoreLikeThisIndexName = staticIndexNames.QuestionsTitleMoreLikeThisIndex;
+                stackOverflowMetadata.ViewCountGroupedIndexName = staticIndexNames.QuestionsViewCountGroupedIndex;
+                stackOverflowMetadata.TagsIndexName = staticIndexNames.QuestionsTagsIndex;
             }
         }
 
@@ -133,6 +148,7 @@ public class BenchmarkRunner(RunOptions opts)
             {
                 usersMetadata.DisplayNameIndexName = staticIndexNames.UsersDisplayNameIndex;
                 usersMetadata.ReputationIndexName = staticIndexNames.UsersReputationIndex;
+                usersMetadata.SpatialIndexName = staticIndexNames.UsersSpatialIndex;
             }
         }
 
@@ -157,6 +173,9 @@ public class BenchmarkRunner(RunOptions opts)
             await PreloadAsync(transport, opts, opts.Preload, opts.DocumentSizeBytes);
         else if (opts.Preload > 0)
             Console.WriteLine($"[Raven.Bench] Skipping preload - profile '{opts.Profile}' uses imported dataset");
+
+        if (opts.Profile == WorkloadProfile.Attachments && opts.AttachmentOp != AttachmentOperationKind.Put)
+            await PreloadAttachmentsAsync(transport, opts);
 
         var steps = new List<StepResult>();
         var histogramArtifacts = new List<HistogramArtifact>();
@@ -553,6 +572,45 @@ public class BenchmarkRunner(RunOptions opts)
             throw new InvalidOperationException($"Preload failed: {failures} of {count} document writes failed.");
 
         Console.WriteLine("[Raven.Bench] Preload complete.");
+    }
+
+    /// <summary>
+    /// Get/Delete attachment workloads need attachments to exist on the preloaded documents.
+    /// </summary>
+    private static async Task PreloadAttachmentsAsync(ITransport transport, RunOptions opts)
+    {
+        Console.WriteLine($"[Raven.Bench] Creating attachments on {opts.Preload} preloaded documents...");
+
+        var payload = new byte[opts.DocumentSizeBytes];
+        new Random(opts.Seed).NextBytes(payload);
+
+        var options = new ParallelOptions { MaxDegreeOfParallelism = 32 };
+        var failures = 0;
+        await Parallel.ForEachAsync(
+            Enumerable.Range(1, opts.Preload),
+            options,
+            async (i, ct) =>
+            {
+                var docId = BenchIds.IdFor(i);
+                var result = await transport.ExecuteAsync(new AttachmentOperation
+                {
+                    DocumentId = docId,
+                    Name = AttachmentWorkload.NameFor(docId),
+                    Kind = AttachmentOperationKind.Put,
+                    Payload = payload
+                }, ct);
+
+                if (result.IsSuccess == false)
+                {
+                    Interlocked.Increment(ref failures);
+                    VerboseErrorTracker.LogError(result.ErrorDetails ?? "attachment preload failed", opts.Verbose);
+                }
+            });
+
+        if (failures > 0)
+            throw new InvalidOperationException($"Attachment preload failed: {failures} of {opts.Preload} attachment writes failed.");
+
+        Console.WriteLine("[Raven.Bench] Attachment preload complete.");
     }
 
     /// <summary>

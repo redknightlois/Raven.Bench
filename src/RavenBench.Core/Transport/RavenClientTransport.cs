@@ -142,6 +142,31 @@ public sealed class RavenClientTransport : ITransport
                     long headerBytes = EstimateHeaderSize("PUT", $"/databases/{_db}/docs?id={Uri.EscapeDataString(updateOp.Id)}", updateOutBytes);
                     return new TransportResult(headerBytes + updateOutBytes, 256);
                 }
+                case StreamQueryOperation streamOp:
+                {
+                    using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
+                    {
+                        var query = s.Advanced.AsyncRawQuery<BlittableJsonReaderObject>(streamOp.QueryText);
+                        foreach (var param in streamOp.Parameters)
+                            query = query.AddParameter(param.Key, param.Value);
+
+                        int count = 0;
+                        long bytesIn = 0;
+                        await using (var stream = await s.Advanced.StreamAsync(query, ct).ConfigureAwait(false))
+                        {
+                            while (await stream.MoveNextAsync().ConfigureAwait(false))
+                            {
+                                count++;
+                                bytesIn += stream.Current.Document?.Size ?? 0;
+                            }
+                        }
+
+                        long queryPayloadBytes = EstimateQueryPayloadSize(streamOp);
+                        long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/streams/queries", queryPayloadBytes);
+
+                        return new TransportResult(queryPayloadBytes + headerBytes, bytesIn, indexName: streamOp.ExpectedIndex, resultCount: count);
+                    }
+                }
                 case QueryOperation queryOp:
                 {
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
@@ -169,6 +194,57 @@ public sealed class RavenClientTransport : ITransport
                             isStale: stats.IsStale,
                             queryDurationMs: stats.DurationInMs
                         );
+                    }
+                }
+                case DocumentPatchOperation patchOp:
+                {
+                    var operation = new Raven.Client.Documents.Operations.PatchOperation(
+                        patchOp.Id,
+                        changeVector: null,
+                        new Raven.Client.Documents.Operations.PatchRequest { Script = patchOp.Script });
+                    await _store.Operations.SendAsync(operation, token: ct).ConfigureAwait(false);
+
+                    long payloadBytes = patchOp.Script.Length + 64;
+                    long headerBytes = EstimateHeaderSize("PATCH", $"/databases/{_db}/docs?id={Uri.EscapeDataString(patchOp.Id)}", payloadBytes);
+                    return new TransportResult(headerBytes + payloadBytes, 256);
+                }
+                case AttachmentOperation attachmentOp:
+                {
+                    var path = $"/databases/{_db}/attachments?id={Uri.EscapeDataString(attachmentOp.DocumentId)}&name={Uri.EscapeDataString(attachmentOp.Name)}";
+                    switch (attachmentOp.Kind)
+                    {
+                        case AttachmentOperationKind.Put:
+                        {
+                            using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = false });
+                            using var ms = new MemoryStream(attachmentOp.Payload!);
+                            session.Advanced.Attachments.Store(attachmentOp.DocumentId, attachmentOp.Name, ms);
+                            await session.SaveChangesAsync(ct).ConfigureAwait(false);
+                            long headerBytes = EstimateHeaderSize("PUT", path, attachmentOp.Payload!.Length);
+                            return new TransportResult(headerBytes + attachmentOp.Payload!.Length, 256);
+                        }
+                        case AttachmentOperationKind.Get:
+                        {
+                            using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = true });
+                            using var result = await session.Advanced.Attachments.GetAsync(attachmentOp.DocumentId, attachmentOp.Name, ct).ConfigureAwait(false);
+                            long bytesIn = 0;
+                            if (result != null)
+                            {
+                                var buffer = new byte[64 * 1024];
+                                int read;
+                                while ((read = await result.Stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                                    bytesIn += read;
+                            }
+                            return new TransportResult(EstimateHeaderSize("GET", path), bytesIn);
+                        }
+                        case AttachmentOperationKind.Delete:
+                        {
+                            using var session = _store.OpenAsyncSession(new SessionOptions { NoTracking = false });
+                            session.Advanced.Attachments.Delete(attachmentOp.DocumentId, attachmentOp.Name);
+                            await session.SaveChangesAsync(ct).ConfigureAwait(false);
+                            return new TransportResult(EstimateHeaderSize("DELETE", path), 256);
+                        }
+                        default:
+                            throw new ArgumentOutOfRangeException(nameof(attachmentOp.Kind), attachmentOp.Kind, null);
                     }
                 }
                 case BulkInsertOperation<string> bulkOp:

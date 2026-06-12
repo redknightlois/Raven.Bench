@@ -69,12 +69,16 @@ public abstract class BaseRunSettings : CommandSettings
     public string? VectorRecallEfSweep { get; init; }
 
     [CommandOption("--profile")]
-    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact")]
+    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact, patch, attachments")]
     public string? Profile { get; init; }
 
     [CommandOption("--query-profile")]
-    [Description("Query profile for query workloads: voron-equality (direct id() lookup), index-equality (index-based), range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed (default: voron-equality)")]
+    [Description("Query profile for query workloads: voron-equality (direct id() lookup), index-equality (index-based), range, text-prefix, text-search, text-search-rare, text-search-common, text-search-mixed, spatial, suggestions, more-like-this, group-by, stream (default: voron-equality)")]
     public string? QueryProfile { get; init; }
+
+    [CommandOption("--attachment-op")]
+    [Description("Attachment operation for --profile attachments: create, get, delete (default: create). Attachment size follows --doc-size.")]
+    public string AttachmentOp { get; init; } = "create";
 
     [CommandOption("--bulk-batch-size")]
     [Description("Number of documents per bulk batch (default: 100)")]
