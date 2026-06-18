@@ -51,7 +51,12 @@ public static class ResultAnalyzer
             return $"network-limited at ~{opts.LinkMbps:F0} Mb/s (est.)";
         if (s.ClientCpu >= 0.85)
             return "client-limited (CPU)";
-        // Without server counters, we can't attribute server/async/disk yet.
+        // ProcessCpu (SNMP) / ServerCpu (admin endpoint) are 0..100%; null compares false.
+        var serverCpu = s.ProcessCpu ?? s.ServerCpu;
+        if (serverCpu >= 85.0)
+            return "server-limited (CPU)";
+        if (serverCpu.HasValue)
+            return "unknown (not CPU- or network-bound at the knee)";
         return "unknown (collect server counters for attribution)";
     }
 
