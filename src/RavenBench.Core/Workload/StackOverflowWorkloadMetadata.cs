@@ -331,28 +331,7 @@ public static class StackOverflowWorkloadHelper
         var mediumPrefixes = sortedPrefixes.Skip(sortedPrefixes.Count / 4).Take(10).Select(kvp => kvp.Key);
         selectedPrefixes.AddRange(mediumPrefixes);
 
-        // Select search terms: rare (low frequency) and common (high frequency) words
-        // to enable queries with different selectivity characteristics
-        var sortedWords = wordCounts.OrderBy(kvp => kvp.Value).ToList();
-
-        // Ensure we have at least some terms even for small datasets
-        var sliceSize = Math.Max(1, sortedWords.Count / 5); // Divide into 5 slices
-
-        // Rare terms: bottom slice by frequency (more selective queries, fewer results)
-        var rareTerms = sortedWords
-            .Take(sliceSize)
-            .Where(kvp => kvp.Value >= 2) // At least 2 occurrences to ensure they exist
-            .Take(20)
-            .Select(kvp => kvp.Key)
-            .ToArray();
-
-        // Common terms: top slice by frequency (less selective queries, more results)
-        var commonTerms = sortedWords
-            .OrderByDescending(kvp => kvp.Value)
-            .Take(sliceSize)
-            .Take(20)
-            .Select(kvp => kvp.Key)
-            .ToArray();
+        var (rareTerms, commonTerms) = SelectSearchTerms(wordCounts);
 
         // Use the same defaults as the runtime workload fallbacks to ensure cached metadata is considered complete
         if (selectedPrefixes.Count == 0)
@@ -367,5 +346,30 @@ public static class StackOverflowWorkloadHelper
         }
 
         return (selectedPrefixes.ToArray(), rareTerms, commonTerms);
+    }
+
+    // Bottom/top frequency slices of sampled title words. Words come from stored titles,
+    // so any count proves existence — a >= 2 floor would empty the rare slice on corpora
+    // where the least-frequent sampled words each occur once.
+    public static (string[] Rare, string[] Common) SelectSearchTerms(Dictionary<string, int> wordCounts)
+    {
+        var sortedWords = wordCounts.OrderBy(kvp => kvp.Value).ToList();
+        var sliceSize = Math.Max(1, sortedWords.Count / 5);
+
+        var rare = sortedWords
+            .Take(sliceSize)
+            .Where(kvp => kvp.Value >= 1)
+            .Take(20)
+            .Select(kvp => kvp.Key)
+            .ToArray();
+
+        var common = sortedWords
+            .OrderByDescending(kvp => kvp.Value)
+            .Take(sliceSize)
+            .Take(20)
+            .Select(kvp => kvp.Key)
+            .ToArray();
+
+        return (rare, common);
     }
 }
