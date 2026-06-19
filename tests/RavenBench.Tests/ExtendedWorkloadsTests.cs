@@ -67,6 +67,26 @@ public class ExtendedWorkloadsTests
     }
 
     [Fact]
+    public void TextSearch_And_Prefix_Queries_Are_Bounded()
+    {
+        // Unbounded text-search/prefix queries return the whole matching set; common terms
+        // match most of the corpus and OOM the load generator. Both must carry a limit.
+        var meta = new StackOverflowWorkloadMetadata
+        {
+            TitlePrefixes = new[] { "How" },
+            SearchTermsRare = new[] { "algorithm" },
+            SearchTermsCommon = new[] { "error" },
+            TitleIndexName = "Questions/ByTitle-corax",
+            TitleSearchIndexName = "Questions/ByTitleSearch-corax"
+        };
+
+        new QuestionsByTitlePrefixWorkload(meta).NextOperation(new Random(1))
+            .Should().BeOfType<QueryOperation>().Which.QueryText.Should().Contain("limit");
+        new QuestionsByTitleSearchWorkload(meta).NextOperation(new Random(1))
+            .Should().BeOfType<QueryOperation>().Which.QueryText.Should().Contain("limit");
+    }
+
+    [Fact]
     public void Stream_Workload_Emits_StreamQueryOperation_With_Sampled_Tag()
     {
         var op = new QuestionsStreamByTagQueryWorkload(SoMetadata()).NextOperation(new Random(42));
