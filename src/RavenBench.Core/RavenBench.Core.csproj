@@ -8,6 +8,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="RavenBench.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="HdrHistogram" Version="2.5.0" />
         <PackageReference Include="Lextm.SharpSnmpLib" Version="10.0.0" />
         <PackageReference Include="RavenDB.Client" Version="7.1.*" />

@@ -44,6 +44,19 @@ public class RawHttpTransportTests
     }
 
     [Fact]
+    public async Task Zstd_Request_Body_Is_Encoded_And_Decodes_To_Original()
+    {
+        var json = "{\"field0\":\"hello zstd compression\",\"field1\":\"abcabcabcabcabcabc\"}";
+
+        using var content = RawHttpTransport.ZstdJsonContent(System.Text.Encoding.UTF8.GetBytes(json));
+
+        content.Headers.ContentEncoding.Should().Contain("zstd");
+        var wire = await content.ReadAsByteArrayAsync();
+        using var decompressor = new ZstdSharp.Decompressor();
+        System.Text.Encoding.UTF8.GetString(decompressor.Unwrap(wire).ToArray()).Should().Be(json);
+    }
+
+    [Fact]
     public void CancelledResult_Is_Not_An_Error_And_Is_Flagged_Cancelled()
     {
         var result = TransportResult.CancelledResult;
