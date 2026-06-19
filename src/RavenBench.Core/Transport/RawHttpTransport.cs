@@ -109,6 +109,18 @@ public sealed class RawHttpTransport : ITransport
         return content;
     }
 
+    // Parses a JSON response, decoding zstd first. HttpClient does not auto-decode zstd, so any
+    // response path that parses the body must route through here. wireMs holds the raw wire bytes
+    // (already counted for bytesIn); identity passes straight through.
+    private static async Task<JsonDocument> ParseJsonResponseAsync(MemoryStream wireMs, HttpResponseMessage resp, CancellationToken ct)
+    {
+        if (NeedsZstdDecode(resp) == false)
+            return await JsonDocument.ParseAsync(wireMs, cancellationToken: ct).ConfigureAwait(false);
+
+        await using var zstdStream = new DecompressionStream(wireMs);
+        return await JsonDocument.ParseAsync(zstdStream, cancellationToken: ct).ConfigureAwait(false);
+    }
+
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
         try
@@ -278,10 +290,10 @@ public sealed class RawHttpTransport : ITransport
                     return new TransportResult(0, 0, errorDetails);
                 }
 
-                using var ms = await BufferResponseAsync(resp, ct).ConfigureAwait(false);
-                long bytesIn = ms.Length;
+                using var wireMs = await BufferResponseAsync(resp, ct).ConfigureAwait(false);
+                long bytesIn = wireMs.Length;
 
-                using var doc = await JsonDocument.ParseAsync(ms, cancellationToken: ct).ConfigureAwait(false);
+                using var doc = await ParseJsonResponseAsync(wireMs, resp, ct).ConfigureAwait(false);
 
                 var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
                     ? indexProp.GetString()
@@ -818,17 +830,7 @@ public sealed class RawHttpTransport : ITransport
                 using var wireMs = await BufferResponseAsync(resp, ct).ConfigureAwait(false);
                 long bytesIn = wireMs.Length;
 
-                // Zstd is not auto-decompressed by HttpClient; decode before parsing JSON.
-                Stream parseStream = wireMs;
-                Stream? zstdStream = null;
-                if (NeedsZstdDecode(resp))
-                {
-                    zstdStream = new DecompressionStream(wireMs);
-                    parseStream = zstdStream;
-                }
-
-                using var doc = await JsonDocument.ParseAsync(parseStream, cancellationToken: ct).ConfigureAwait(false);
-                zstdStream?.Dispose();
+                using var doc = await ParseJsonResponseAsync(wireMs, resp, ct).ConfigureAwait(false);
 
                 var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
                     ? indexProp.GetString()
