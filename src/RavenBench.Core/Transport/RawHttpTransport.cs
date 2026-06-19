@@ -18,6 +18,10 @@ public sealed class RawHttpTransport : ITransport
     private const int BufferSize = 32 * 1024;
     private const int PoolCount = 1024;
 
+    // ZstdSharp's Compressor is not thread-safe; one per worker thread, reused across requests.
+    // Default zstd level — add a level knob here if a run ever needs to vary it.
+    private static readonly ThreadLocal<Compressor> ZstdCompressor = new(() => new Compressor());
+
     private readonly HttpClient _http;
     private readonly string _baseUrl;
     private readonly string _db;
@@ -79,6 +83,30 @@ public sealed class RawHttpTransport : ITransport
             if (string.Equals(e, "zstd", StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
+    }
+
+    // UTF-8 JSON request body, zstd-encoded when the run uses zstd (Content-Encoding: zstd).
+    // Content-Length is the compressed size, so wire-byte accounting reports it as-is.
+    private HttpContent CreateJsonContent(string json)
+        => _compression == CompressionMode.Zstd
+            ? ZstdJsonContent(Encoding.UTF8.GetBytes(json))
+            : new StringContent(json, Encoding.UTF8, "application/json");
+
+    private HttpContent CreateJsonContent(ReadOnlyMemory<byte> utf8Json)
+    {
+        if (_compression == CompressionMode.Zstd)
+            return ZstdJsonContent(utf8Json.Span);
+        var content = new ReadOnlyMemoryContent(utf8Json);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        return content;
+    }
+
+    internal static HttpContent ZstdJsonContent(ReadOnlySpan<byte> utf8Json)
+    {
+        var content = new ByteArrayContent(ZstdCompressor.Value!.Wrap(utf8Json).ToArray());
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        content.Headers.ContentEncoding.Add("zstd");
+        return content;
     }
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
@@ -236,7 +264,7 @@ public sealed class RawHttpTransport : ITransport
             };
 
             var queryPayload = JsonSerializer.Serialize(payload);
-            req.Content = new StringContent(queryPayload, Encoding.UTF8, "application/json");
+            req.Content = CreateJsonContent(queryPayload);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -318,7 +346,7 @@ public sealed class RawHttpTransport : ITransport
             };
 
             var queryPayload = JsonSerializer.Serialize(payload);
-            req.Content = new StringContent(queryPayload, Encoding.UTF8, "application/json");
+            req.Content = CreateJsonContent(queryPayload);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -365,7 +393,7 @@ public sealed class RawHttpTransport : ITransport
 
             var payload = new { Patch = new { Script = patchOp.Script, Values = new { } } };
             var jsonPayload = JsonSerializer.Serialize(payload);
-            req.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+            req.Content = CreateJsonContent(jsonPayload);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -482,8 +510,7 @@ public sealed class RawHttpTransport : ITransport
                 writer.WriteEndObject();
             }
             int jsonByteCount = bufferWriter.WrittenCount;
-            req.Content = new ReadOnlyMemoryContent(bufferWriter.WrittenMemory);
-            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+            req.Content = CreateJsonContent(bufferWriter.WrittenMemory);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -573,7 +600,7 @@ public sealed class RawHttpTransport : ITransport
             req.Headers.ExpectContinue = false;
 
             string jsonPayload = document is string s ? s : JsonSerializer.Serialize(document);
-            req.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+            req.Content = CreateJsonContent(jsonPayload);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -773,8 +800,7 @@ public sealed class RawHttpTransport : ITransport
             }
             var jsonBytes = bufferWriter.WrittenMemory;
             var jsonByteCount = jsonBytes.Length;
-            req.Content = new ReadOnlyMemoryContent(jsonBytes);
-            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+            req.Content = CreateJsonContent(jsonBytes);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(30));
