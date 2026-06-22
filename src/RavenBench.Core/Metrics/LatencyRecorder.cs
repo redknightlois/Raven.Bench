@@ -20,6 +20,8 @@ namespace RavenBench.Core.Metrics;
 /// </remarks>
 public sealed class LatencyRecorder : IDisposable
 {
+    public const long MaxTrackableMicros = 60_000_000;
+
     private readonly bool _enabled;
     private readonly Recorder _recorder;
     private long _maxMicros;
@@ -44,7 +46,7 @@ public sealed class LatencyRecorder : IDisposable
             // If a latency exceeds 60s, the histogram will throw an exception (fail-fast).
             _recorder = new Recorder(
                 lowestDiscernibleValue: 1,
-                highestTrackableValue: 60_000_000,  // 60 seconds in microseconds
+                highestTrackableValue: MaxTrackableMicros,  // 60 seconds in microseconds
                 numberOfSignificantValueDigits: 3,
                 histogramFactory: (instanceId, low, high, digits) => new LongHistogram(low, high, digits));
 
