@@ -124,7 +124,11 @@ public sealed class DatasetManager : IDisposable
         store.Initialize();
 
         await using var dumpStream = await OpenDumpStreamAsync(dumpFilePath, ct);
-        var operation = await store.Smuggler.ImportAsync(new DatabaseSmugglerImportOptions(), dumpStream, ct);
+        // Raven.Bench builds its own -corax indexes per workload; the dump's bundled indexes
+        // are never queried and their builds saturate small SKUs, so exclude them on import.
+        var importOptions = new DatabaseSmugglerImportOptions();
+        importOptions.OperateOnTypes &= ~DatabaseItemType.Indexes;
+        var operation = await store.Smuggler.ImportAsync(importOptions, dumpStream, ct);
 
         Console.WriteLine($"[Dataset] Import operation started");
 
