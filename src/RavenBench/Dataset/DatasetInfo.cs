@@ -94,7 +94,7 @@ public static class KnownDatasets
             new DatasetFile
             {
                 FileName = "StackExchange-Indexes.ravendbdump",
-                Url = $"{S3Base}/StackExchange-Indexes.ravendbdump",
+                Url = $"{S3Base}/2022-06/StackExchange-Indexes.ravendbdump",
                 Type = "indexes",
                 EstimatedSizeBytes = 100 * 1024 * 1024, // ~100 MB
                 Description = "Index definitions for StackExchange data"
@@ -102,7 +102,7 @@ public static class KnownDatasets
             new DatasetFile
             {
                 FileName = "StackOverflow-2022-06-06.ravendbdump",
-                Url = $"{S3Base}/StackOverflow-2022-06-06.ravendbdump",
+                Url = $"{S3Base}/2022-06/StackOverflow-2022-06-06.ravendbdump",
                 Type = "full",
                 EstimatedSizeBytes = 50L * 1024 * 1024 * 1024, // ~50 GB
                 Description = "Complete StackOverflow dataset snapshot from June 2022"
