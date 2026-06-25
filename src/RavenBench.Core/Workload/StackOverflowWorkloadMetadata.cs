@@ -54,6 +54,8 @@ public static class StackOverflowWorkloadHelper
         string serverUrl,
         string databaseName,
         int seed,
+        int maxQuestionId,
+        int maxUserId,
         int sampleSize = DefaultSampleSize)
     {
         using var store = new DocumentStore
@@ -77,28 +79,36 @@ public static class StackOverflowWorkloadHelper
 
         Console.WriteLine("[Workload] Discovering StackOverflow document IDs and text search terms by sampling database...");
 
-        var questionIds = await SampleDocumentIdsAsync(store, "questions", seed, sampleSize);
-        var userIds = await SampleDocumentIdsAsync(store, "users", seed, sampleSize);
+        var questions = await SampleExistingDocsAsync(store, "questions", maxQuestionId, seed, sampleSize);
+        var users = await SampleExistingDocsAsync(store, "users", maxUserId, seed + 1, sampleSize);
 
-        if (questionIds.Count == 0 || userIds.Count == 0)
+        if (questions.Count == 0 || users.Count == 0)
         {
             throw new InvalidOperationException(
-                $"Failed to discover StackOverflow document IDs. Found {questionIds.Count} questions, {userIds.Count} users. " +
+                $"Failed to discover StackOverflow document IDs. Found {questions.Count} questions, {users.Count} users. " +
                 "Ensure the StackOverflow dataset is imported before running benchmarks.");
         }
 
-        var (titlePrefixes, searchTermsRare, searchTermsCommon) = await DiscoverTextSearchTermsAsync(store, seed);
-        var tags = await SampleQuestionTagsAsync(store, seed);
+        var titles = new List<string>(questions.Count);
+        var tagArrays = new List<dynamic>(questions.Count);
+        foreach (var (_, doc) in questions)
+        {
+            try { string? t = (doc as dynamic)?.Title; if (string.IsNullOrWhiteSpace(t) == false) titles.Add(t!); } catch { }
+            try { var tg = (doc as dynamic)?.Tags; if (tg != null) tagArrays.Add(tg); } catch { }
+        }
 
-        Console.WriteLine($"[Workload] Sampled {questionIds.Count} questions, {userIds.Count} users");
+        var (titlePrefixes, searchTermsRare, searchTermsCommon) = BuildTextSearchTerms(titles);
+        var tags = BuildTags(tagArrays);
+
+        Console.WriteLine($"[Workload] Sampled {questions.Count} questions, {users.Count} users");
         Console.WriteLine($"[Workload] Discovered {titlePrefixes.Length} title prefixes, {searchTermsRare.Length} rare terms, {searchTermsCommon.Length} common terms, {tags.Length} tags");
 
         var metadata = new StackOverflowWorkloadMetadata
         {
-            QuestionIds = questionIds.ToArray(),
-            UserIds = userIds.ToArray(),
-            QuestionCount = questionIds.Count,
-            UserCount = userIds.Count,
+            QuestionIds = questions.Select(q => q.Id).ToArray(),
+            UserIds = users.Select(u => u.Id).ToArray(),
+            QuestionCount = questions.Count,
+            UserCount = users.Count,
             TitlePrefixes = titlePrefixes,
             SearchTermsRare = searchTermsRare,
             SearchTermsCommon = searchTermsCommon,
@@ -114,108 +124,68 @@ public static class StackOverflowWorkloadHelper
     }
 
     /// <summary>
-    /// Samples document IDs from a collection using RavenDB's random() ordering.
-    /// Returns a list of actual document IDs that exist in the database.
-    /// Uses a deterministic seed for reproducibility.
+    /// Samples existing documents from a collection by bulk-loading random ids in [1, maxId].
+    /// Point lookups only — never scans or sorts the collection, so it does not depend on the
+    /// dataset fitting in RAM. Candidate ids are drawn deterministically from the seed; gaps in
+    /// the id space are skipped. Returns the numeric id paired with the loaded document.
     /// </summary>
-    private static async Task<HashSet<int>> SampleDocumentIdsAsync(
+    public static async Task<List<(int Id, dynamic Doc)>> SampleExistingDocsAsync(
         IDocumentStore store,
         string collection,
+        int maxId,
         int seed,
         int sampleSize)
     {
-        var ids = new HashSet<int>();
+        if (maxId <= 0)
+            throw new InvalidOperationException($"Cannot sample '{collection}': max id is {maxId}.");
 
-        using var session = store.OpenAsyncSession();
+        var rng = new Random(seed);
+        var tried = new HashSet<int>();
+        var results = new List<(int, dynamic)>(sampleSize);
+        const int batchSize = 256;
+        var attemptCap = Math.Min((long)maxId, Math.Max((long)sampleSize * 8, sampleSize + batchSize));
 
-        // Use RavenDB's built-in random() ordering with a deterministic seed for reproducible sampling
-        // Note: WaitForNonStaleResults is not compatible with streaming queries
-        // The caller must ensure indexes are non-stale before calling this method
-        var samplingSeed = $"ravenbench-{seed}";
-        var query = session.Advanced.AsyncRawQuery<dynamic>($"from {collection} order by random('{samplingSeed}') select id() limit {sampleSize}");
-
-        await using var stream = await session.Advanced.StreamAsync(query);
-
-        while (await stream.MoveNextAsync())
+        while (results.Count < sampleSize && tried.Count < attemptCap)
         {
-            var result = stream.Current.Document;
-            string? docId = null;
-
-            if (result is string idString)
+            var batch = new List<int>(batchSize);
+            var ids = new List<string>(batchSize);
+            while (batch.Count < batchSize && tried.Count < attemptCap)
             {
-                docId = idString;
+                var n = rng.Next(1, maxId + 1);
+                if (tried.Add(n)) { batch.Add(n); ids.Add($"{collection}/{n}"); }
             }
-            else if (result != null)
-            {
-                try
-                {
-                    docId = (result as dynamic)?.Id ?? stream.Current.Id;
-                }
-                catch
-                {
-                    docId = stream.Current.Id;
-                }
-            }
+            if (ids.Count == 0)
+                break;
 
-            if (string.IsNullOrEmpty(docId) == false && TryExtractNumericId(docId, collection, out var numericId))
+            using var session = store.OpenAsyncSession();
+            var loaded = await session.LoadAsync<dynamic>(ids);
+            for (int i = 0; i < batch.Count; i++)
             {
-                ids.Add(numericId);
+                if (loaded.TryGetValue(ids[i], out var doc) && doc != null)
+                    results.Add((batch[i], doc));
             }
         }
 
-        return ids;
+        return results;
     }
 
     /// <summary>
-    /// Extracts numeric ID from document ID format: "questions/123" -> 123
+    /// Selects a mix of common and medium-frequency tags from sampled question tag arrays.
     /// </summary>
-    private static bool TryExtractNumericId(string docId, string expectedPrefix, out int numericId)
+    private static string[] BuildTags(List<dynamic> tagArrays)
     {
-        numericId = 0;
-
-        var prefix = expectedPrefix + "/";
-        if (docId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == false)
-            return false;
-
-        var idPart = docId.Substring(prefix.Length);
-        return int.TryParse(idPart, out numericId);
-    }
-
-    /// <summary>
-    /// Samples question tags with a mix of common and medium-frequency tags for varied selectivity.
-    /// Uses deterministic sampling for reproducibility across runs.
-    /// </summary>
-    private static async Task<string[]> SampleQuestionTagsAsync(IDocumentStore store, int seed)
-    {
-        using var session = store.OpenAsyncSession();
-
-        const int sampleSize = 5000;
-        var samplingSeed = $"ravenbench-tags-{seed}";
-        var query = session.Advanced.AsyncRawQuery<dynamic>(
-            $"from questions order by random('{samplingSeed}') select Tags limit {sampleSize}");
-
         var tagCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        await using var stream = await session.Advanced.StreamAsync(query);
-
-        while (await stream.MoveNextAsync())
+        foreach (var tags in tagArrays)
         {
-            var result = stream.Current.Document;
-            if (result == null)
-                continue;
-
             try
             {
-                var tags = (result as dynamic)?.Tags;
-                if (tags == null)
-                    continue;
-
                 foreach (var tag in tags)
                 {
                     string? tagString = tag?.ToString();
                     if (string.IsNullOrWhiteSpace(tagString) == false)
                     {
-                        tagCounts.TryGetValue(tagString, out var count);
-                        tagCounts[tagString] = count + 1;
+                        tagCounts.TryGetValue(tagString!, out var count);
+                        tagCounts[tagString!] = count + 1;
                     }
                 }
             }
@@ -232,54 +202,12 @@ public static class StackOverflowWorkloadHelper
     }
 
     /// <summary>
-    /// Discovers title prefixes and search terms for text-based query workloads.
-    /// Samples question titles and extracts prefixes (3-5 chars) and words to create varied selectivity:
-    /// - Prefixes for startsWith queries (varying result set sizes)
-    /// - Rare terms (low frequency) for selective search queries
-    /// - Common terms (high frequency) for less selective search queries
-    /// Uses deterministic sampling for reproducibility across runs.
+    /// Builds title prefixes (3-5 chars, startsWith queries) and rare/common search terms from
+    /// sampled question titles, giving varied selectivity for the text-query workloads.
     /// </summary>
-    private static async Task<(string[] prefixes, string[] rareTerms, string[] commonTerms)> DiscoverTextSearchTermsAsync(
-        IDocumentStore store,
-        int seed)
+    private static (string[] prefixes, string[] rareTerms, string[] commonTerms) BuildTextSearchTerms(
+        List<string> titles)
     {
-        using var session = store.OpenAsyncSession();
-
-        // Sample question titles using deterministic random ordering.
-        const int sampleSize = 5000;
-        var samplingSeed = $"ravenbench-title-{seed}";
-        var query = session.Advanced.AsyncRawQuery<dynamic>(
-            $"from questions order by random('{samplingSeed}') select Title limit {sampleSize}");
-
-        var titles = new List<string>();
-        await using var stream = await session.Advanced.StreamAsync(query);
-
-        while (await stream.MoveNextAsync())
-        {
-            var result = stream.Current.Document;
-            string? title = null;
-
-            if (result is string titleStr)
-            {
-                title = titleStr;
-            }
-            else if (result != null)
-            {
-                try
-                {
-                    title = (result as dynamic)?.Title;
-                }
-                catch
-                {
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(title) == false)
-            {
-                titles.Add(title);
-            }
-        }
-
         if (titles.Count == 0)
         {
             return (

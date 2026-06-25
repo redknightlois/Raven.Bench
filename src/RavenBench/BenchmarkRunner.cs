@@ -107,13 +107,19 @@ public class BenchmarkRunner(RunOptions opts)
                 extraIndexes);
         }
 
+        var soDataset = string.IsNullOrEmpty(opts.Dataset) ? null : KnownDatasets.GetByName(opts.Dataset);
+        var soMaxQuestionId = soDataset?.MaxQuestionId ?? 0;
+        var soMaxUserId = soDataset?.MaxUserId ?? 0;
+
         StackOverflowWorkloadMetadata? stackOverflowMetadata = null;
         if (opts.Profile == WorkloadProfile.StackOverflowRandomReads || opts.Profile == WorkloadProfile.StackOverflowTextSearch)
         {
             stackOverflowMetadata = await StackOverflowWorkloadHelper.DiscoverOrLoadMetadataAsync(
                 opts.Url,
                 effectiveDatabase,
-                opts.Seed);
+                opts.Seed,
+                soMaxQuestionId,
+                soMaxUserId);
 
             if (stackOverflowMetadata == null)
             {
@@ -137,7 +143,8 @@ public class BenchmarkRunner(RunOptions opts)
             usersMetadata = await StackOverflowUsersWorkloadHelper.DiscoverOrLoadMetadataAsync(
                 opts.Url,
                 effectiveDatabase,
-                opts.Seed);
+                opts.Seed,
+                soMaxUserId);
 
             if (usersMetadata == null)
             {
