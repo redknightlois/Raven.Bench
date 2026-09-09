@@ -172,13 +172,48 @@ public class StackOverflowDatasetProvider : IDatasetProvider
         Console.WriteLine($"[Dataset] Creating static indexes for StackOverflow workloads (engine: {searchEngine})...");
 
         var definitions = indexes.Select(i => StackOverflowIndexes.GetDefinition(i, searchEngine)).ToArray();
-        await store.Maintenance.SendAsync(new PutIndexesOperation(definitions));
+        await PutIndexesWithRetryAsync(store, definitions);
 
         var createdNames = definitions.Select(d => d.Name!).ToArray();
         Console.WriteLine($"[Dataset] Created indexes: {string.Join(", ", createdNames)}");
 
         await WaitForIndexesNonStaleAsync(store, createdNames);
         return indexNames;
+    }
+
+    // Index creation commits through Rachis; right after a large import the cluster write can
+    // exceed the server's 15s operation timeout on small/IO-bound SKUs. Transient once the
+    // import settles, so retry with escalating backoff before giving up.
+    private static async Task PutIndexesWithRetryAsync(IDocumentStore store, IndexDefinition[] definitions)
+    {
+        const int maxAttempts = 8;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await store.Maintenance.SendAsync(new PutIndexesOperation(definitions));
+                return;
+            }
+            catch (Exception e) when (attempt < maxAttempts && IsTransientClusterError(e))
+            {
+                var delay = TimeSpan.FromSeconds(attempt * 5);
+                Console.WriteLine($"[Dataset] Index creation attempt {attempt} failed ({e.GetType().Name}); cluster busy, retrying in {delay.TotalSeconds:F0}s...");
+                await Task.Delay(delay);
+            }
+        }
+    }
+
+    private static bool IsTransientClusterError(Exception e)
+    {
+        for (var cur = e; cur != null; cur = cur.InnerException)
+        {
+            if (cur is TimeoutException)
+                return true;
+            if (cur.Message.Contains("Cluster is probably down", StringComparison.OrdinalIgnoreCase)
+                || cur.Message.Contains("was not applied in this time", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
