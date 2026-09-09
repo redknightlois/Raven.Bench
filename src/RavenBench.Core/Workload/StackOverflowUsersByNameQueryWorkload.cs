@@ -53,6 +53,7 @@ public static class StackOverflowUsersWorkloadHelper
         string serverUrl,
         string databaseName,
         int seed,
+        int maxUserId,
         int sampleSize = DefaultSampleSize)
     {
         using var store = new DocumentStore
@@ -74,8 +75,15 @@ public static class StackOverflowUsersWorkloadHelper
 
         Console.WriteLine("[Workload] Discovering Users names and reputation histogram by sampling database...");
 
-        // Sample actual names from the database
-        var sampleNames = await SampleUserNamesAsync(store, seed, sampleSize);
+        var users = await StackOverflowWorkloadHelper.SampleExistingDocsAsync(store, "users", maxUserId, seed, sampleSize);
+
+        var sampleNames = new HashSet<string>();
+        var reputationSamples = new List<int>();
+        foreach (var (_, doc) in users)
+        {
+            try { string? name = (doc as dynamic)?.DisplayName; if (string.IsNullOrWhiteSpace(name) == false) sampleNames.Add(name!); } catch { }
+            try { var rep = (doc as dynamic)?.Reputation; if (rep != null) reputationSamples.Add(Convert.ToInt32(rep)); } catch { }
+        }
 
         if (sampleNames.Count == 0)
         {
@@ -86,7 +94,7 @@ public static class StackOverflowUsersWorkloadHelper
 
         var totalUserCount = await GetTotalUserCountAsync(store);
 
-        var (reputationBuckets, minReputation, maxReputation) = await DiscoverReputationHistogramAsync(store, seed);
+        var (reputationBuckets, minReputation, maxReputation) = BuildReputationHistogram(reputationSamples);
 
         Console.WriteLine($"[Workload] Sampled {sampleNames.Count} unique user names from {totalUserCount} total users");
         Console.WriteLine($"[Workload] Discovered reputation range: {minReputation} to {maxReputation} across {reputationBuckets.Length} buckets");
@@ -110,55 +118,6 @@ public static class StackOverflowUsersWorkloadHelper
     }
 
     /// <summary>
-    /// Samples user names from the Users collection using RavenDB's random() ordering.
-    /// Returns a list of actual names that exist in the database.
-    /// Uses a deterministic seed for reproducibility.
-    /// </summary>
-    private static async Task<HashSet<string>> SampleUserNamesAsync(
-        IDocumentStore store,
-        int seed,
-        int sampleSize)
-    {
-        var names = new HashSet<string>();
-
-        using var session = store.OpenAsyncSession();
-
-        // Use RavenDB's built-in random() ordering with a deterministic seed for reproducible sampling
-        var samplingSeed = $"ravenbench-users-{seed}";
-        var query = session.Advanced.AsyncRawQuery<dynamic>($"from Users order by random('{samplingSeed}') select DisplayName limit {sampleSize}");
-
-        await using var stream = await session.Advanced.StreamAsync(query);
-
-        while (await stream.MoveNextAsync())
-        {
-            var result = stream.Current.Document;
-            string? name = null;
-
-            if (result is string nameString)
-            {
-                name = nameString;
-            }
-            else if (result != null)
-            {
-                try
-                {
-                    name = (result as dynamic)?.DisplayName;
-                }
-                catch
-                {
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(name) == false)
-            {
-                names.Add(name);
-            }
-        }
-
-        return names;
-    }
-
-    /// <summary>
     /// Gets the total count of documents in the Users collection.
     /// </summary>
     private static async Task<long> GetTotalUserCountAsync(IDocumentStore store)
@@ -172,53 +131,13 @@ public static class StackOverflowUsersWorkloadHelper
     }
 
     /// <summary>
-    /// Discovers reputation value distribution and creates histogram buckets for range queries.
-    /// Creates buckets with varying selectivity to test different query patterns.
-    /// Uses deterministic sampling to ensure reproducibility.
+    /// Builds reputation histogram buckets from sampled reputation values. Buckets follow
+    /// percentile boundaries (0-25-50-75-90-100) to give range queries varying selectivity.
     /// </summary>
-    private static async Task<(ReputationBucket[] buckets, int minRep, int maxRep)> DiscoverReputationHistogramAsync(
-        IDocumentStore store,
-        int seed)
+    private static (ReputationBucket[] buckets, int minRep, int maxRep) BuildReputationHistogram(
+        List<int> reputationSamples)
     {
-        using var session = store.OpenAsyncSession();
-
-        const int sampleSize = 10000;
-        var samplingSeed = $"ravenbench-reputation-{seed}";
-        var query = session.Advanced.AsyncRawQuery<dynamic>(
-            $"from Users order by random('{samplingSeed}') select Reputation limit {sampleSize}");
-
-        var reputationSamples = new List<int>();
-        await using var stream = await session.Advanced.StreamAsync(query);
-
-        while (await stream.MoveNextAsync())
-        {
-            var result = stream.Current.Document;
-            int? reputation = null;
-
-            if (result is int repInt)
-            {
-                reputation = repInt;
-            }
-            else if (result != null)
-            {
-                try
-                {
-                    var repValue = (result as dynamic)?.Reputation;
-                    if (repValue is int r)
-                        reputation = r;
-                    else if (repValue != null)
-                        reputation = Convert.ToInt32(repValue);
-                }
-                catch
-                {
-                }
-            }
-
-            if (reputation.HasValue)
-            {
-                reputationSamples.Add(reputation.Value);
-            }
-        }
+        var sampleSize = reputationSamples.Count;
 
         if (reputationSamples.Count == 0)
         {
