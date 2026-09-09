@@ -85,7 +85,7 @@ namespace RavenBench.Core
 
                         counters.Record(result);
                         if (warmupRecorder != null && result.IsError == false && result.Cancelled == false)
-                            warmupRecorder.RecordValue(result.LatencyMicros);
+                            warmupRecorder.RecordValue(Math.Min(result.LatencyMicros, LatencyRecorder.MaxTrackableMicros));
                     }
                 }, cancellationToken);
             }
