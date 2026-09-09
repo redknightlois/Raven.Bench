@@ -314,7 +314,7 @@ public sealed class StackOverflowUsersByNameQueryWorkload : IWorkload
 
         return new QueryOperation
         {
-            QueryText = "from Users where DisplayName = $name",
+            QueryText = $"from index '{_expectedIndexName}' where DisplayName = $name",
             Parameters = new Dictionary<string, object?> { ["name"] = name },
             ExpectedIndex = _expectedIndexName
         };
@@ -372,7 +372,7 @@ public sealed class StackOverflowUsersRangeQueryWorkload : IWorkload
 
         return new QueryOperation
         {
-            QueryText = "from Users where Reputation between $min and $max",
+            QueryText = $"from index '{_expectedIndexName}' where Reputation between $min and $max",
             Parameters = new Dictionary<string, object?>
             {
                 ["min"] = minRep,

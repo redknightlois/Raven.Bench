@@ -44,7 +44,7 @@ public class StackOverflowUsersByNameQueryWorkloadTests
         op.Should().BeOfType<QueryOperation>();
         var queryOp = (QueryOperation)op;
 
-        queryOp.QueryText.Should().Be("from Users where DisplayName = $name");
+        queryOp.QueryText.Should().Be("from index 'Users/ByDisplayName-corax' where DisplayName = $name");
         queryOp.Parameters.Should().ContainKey("name");
         queryOp.Parameters["name"].Should().BeOneOf("Alice", "Bob", "Charlie");
         queryOp.ExpectedIndex.Should().Be("Users/ByDisplayName-corax");
@@ -141,7 +141,7 @@ public class StackOverflowUsersRangeQueryWorkloadTests
         op.Should().BeOfType<QueryOperation>();
         var queryOp = (QueryOperation)op;
 
-        queryOp.QueryText.Should().Be("from Users where Reputation between $min and $max");
+        queryOp.QueryText.Should().Be("from index 'Users/ByReputation-corax' where Reputation between $min and $max");
         queryOp.Parameters.Should().ContainKey("min");
         queryOp.Parameters.Should().ContainKey("max");
         queryOp.Parameters["min"].Should().BeOfType<int>();

@@ -50,7 +50,7 @@ public class QuestionsByTitlePrefixWorkloadTests
         op.Should().BeOfType<QueryOperation>();
         var queryOp = (QueryOperation)op;
 
-        queryOp.QueryText.Should().Be("from questions where startsWith(Title, $prefix)");
+        queryOp.QueryText.Should().Be("from index 'Questions/ByTitle-corax' where startsWith(Title, $prefix)");
         queryOp.Parameters.Should().ContainKey("prefix");
         queryOp.Parameters["prefix"].Should().BeOneOf("How", "What", "Why");
         queryOp.ExpectedIndex.Should().Be("Questions/ByTitle-corax");
@@ -131,7 +131,7 @@ public class QuestionsByTitleSearchWorkloadTests
         op.Should().BeOfType<QueryOperation>();
         var queryOp = (QueryOperation)op;
 
-        queryOp.QueryText.Should().Be("from questions where search(Title, $term)");
+        queryOp.QueryText.Should().Be("from index 'Questions/ByTitleSearch-corax' where search(Title, $term)");
         queryOp.Parameters.Should().ContainKey("term");
         queryOp.Parameters["term"].Should().BeOneOf("algorithm", "optimization", "error", "problem", "help");
         queryOp.ExpectedIndex.Should().Be("Questions/ByTitleSearch-corax");
@@ -289,7 +289,7 @@ public class QuestionsByTitleSearchWorkloadTests
         op.Should().BeOfType<QueryOperation>();
         var queryOp = (QueryOperation)op;
 
-        queryOp.QueryText.Should().Be("from questions where search(Title, $term)");
+        queryOp.QueryText.Should().Be("from index 'Questions/ByTitleSearch-corax' where search(Title, $term)");
         queryOp.Parameters.Should().ContainKey("term");
         queryOp.Parameters["term"].Should().BeOneOf("rare1", "rare2");
         queryOp.ExpectedIndex.Should().Be("Questions/ByTitleSearch-corax");
@@ -317,7 +317,7 @@ public class QuestionsByTitleSearchWorkloadTests
         op.Should().BeOfType<QueryOperation>();
         var queryOp = (QueryOperation)op;
 
-        queryOp.QueryText.Should().Be("from questions where search(Title, $term)");
+        queryOp.QueryText.Should().Be("from index 'Questions/ByTitleSearch-corax' where search(Title, $term)");
         queryOp.Parameters.Should().ContainKey("term");
         queryOp.Parameters["term"].Should().BeOneOf("common1", "common2");
         queryOp.ExpectedIndex.Should().Be("Questions/ByTitleSearch-corax");

@@ -33,7 +33,7 @@ public sealed class QuestionsByTitlePrefixWorkload : IWorkload
 
         return new QueryOperation
         {
-            QueryText = "from questions where startsWith(Title, $prefix)",
+            QueryText = $"from index '{_expectedIndexName}' where startsWith(Title, $prefix)",
             Parameters = new Dictionary<string, object?> { ["prefix"] = prefix },
             ExpectedIndex = _expectedIndexName
         };
@@ -86,7 +86,7 @@ public sealed class QuestionsByTitleSearchWorkload : IWorkload
 
         return new QueryOperation
         {
-            QueryText = "from questions where search(Title, $term)",
+            QueryText = $"from index '{_expectedIndexName}' where search(Title, $term)",
             Parameters = new Dictionary<string, object?> { ["term"] = searchTerm },
             ExpectedIndex = _expectedIndexName
         };

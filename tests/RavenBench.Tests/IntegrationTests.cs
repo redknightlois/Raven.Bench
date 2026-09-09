@@ -245,7 +245,7 @@ public class IntegrationTests
         var eqOp = usersEqualityWorkload.NextOperation(rng);
         eqOp.Should().BeOfType<QueryOperation>();
         var eqQueryOp = (QueryOperation)eqOp;
-        eqQueryOp.QueryText.Should().Be("from Users where DisplayName = $name");
+        eqQueryOp.QueryText.Should().Be("from index 'Users/ByDisplayName-corax' where DisplayName = $name");
         eqQueryOp.Parameters.Should().ContainKey("name");
 
         // Test Users range query
@@ -253,7 +253,7 @@ public class IntegrationTests
         var rangeOp = usersRangeWorkload.NextOperation(rng);
         rangeOp.Should().BeOfType<QueryOperation>();
         var rangeQueryOp = (QueryOperation)rangeOp;
-        rangeQueryOp.QueryText.Should().Be("from Users where Reputation between $min and $max");
+        rangeQueryOp.QueryText.Should().Be("from index 'Users/ByReputation-corax' where Reputation between $min and $max");
         rangeQueryOp.Parameters.Should().ContainKey("min");
         rangeQueryOp.Parameters.Should().ContainKey("max");
 
@@ -262,7 +262,7 @@ public class IntegrationTests
         var prefixOp = prefixWorkload.NextOperation(rng);
         prefixOp.Should().BeOfType<QueryOperation>();
         var prefixQueryOp = (QueryOperation)prefixOp;
-        prefixQueryOp.QueryText.Should().Be("from questions where startsWith(Title, $prefix)");
+        prefixQueryOp.QueryText.Should().Be("from index 'Questions/ByTitle-corax' where startsWith(Title, $prefix)");
         prefixQueryOp.Parameters.Should().ContainKey("prefix");
 
         // Test StackOverflow text search query
@@ -270,7 +270,7 @@ public class IntegrationTests
         var searchOp = searchWorkload.NextOperation(rng);
         searchOp.Should().BeOfType<QueryOperation>();
         var searchQueryOp = (QueryOperation)searchOp;
-        searchQueryOp.QueryText.Should().Be("from questions where search(Title, $term)");
+        searchQueryOp.QueryText.Should().Be("from index 'Questions/ByTitleSearch-corax' where search(Title, $term)");
         searchQueryOp.Parameters.Should().ContainKey("term");
     }
 
