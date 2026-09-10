@@ -113,12 +113,7 @@ public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
             return -1;
         }
 
-        using var store = new DocumentStore
-        {
-            Urls = [settings.Url],
-            Database = database
-        };
-        store.Initialize();
+        using var store = HttpHelper.Create(settings.Url, database, httpVersion: null);
 
         // Dataset-shipped or previously created indexes must be done indexing first so the
         // timed build is not competing for indexing resources.

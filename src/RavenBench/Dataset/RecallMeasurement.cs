@@ -39,10 +39,7 @@ public sealed class RecallMeasurement
 
         var maxK = recallKs.Max();
 
-        using var store = new DocumentStore { Urls = [serverUrl], Database = databaseName };
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
         var indexName = GetIndexName(metadata, quantization, searchEngine);
         await EnsureIndexExistsAsync(store, metadata, indexName);
@@ -84,10 +81,7 @@ public sealed class RecallMeasurement
 
         var maxK = recallKs.Max();
 
-        using var store = new DocumentStore { Urls = [serverUrl], Database = databaseName };
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
         var indexName = GetIndexName(metadata, quantization, searchEngine);
         await EnsureIndexExistsAsync(store, metadata, indexName);

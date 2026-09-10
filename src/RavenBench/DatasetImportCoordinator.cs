@@ -138,13 +138,7 @@ internal static class DatasetImportCoordinator
     {
         Console.WriteLine("[Raven.Bench] Waiting for indexes to become non-stale...");
 
-        using var store = new DocumentStore
-        {
-            Urls = new[] { serverUrl },
-            Database = databaseName
-        };
-        HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
         var maxWait = TimeSpan.FromMinutes(10);
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -222,17 +216,10 @@ internal static class DatasetImportCoordinator
         var indexName = metadata.IndexName!;
         Console.WriteLine($"[Raven.Bench] Verifying vector index '{indexName}' exists...");
 
-        using var store = new DocumentStore
-        {
-            Urls = [opts.Url],
-            Database = effectiveDatabase
-        };
         var httpVersion = opts.HttpVersion != "auto"
             ? HttpHelper.ParseHttpVersion(HttpHelper.NormalizeHttpVersion(opts.HttpVersion))
             : null;
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(opts.Url, effectiveDatabase, httpVersion);
 
         var indexes = await store.Maintenance.SendAsync(
             new Raven.Client.Documents.Operations.Indexes.GetIndexNamesOperation(0, int.MaxValue));

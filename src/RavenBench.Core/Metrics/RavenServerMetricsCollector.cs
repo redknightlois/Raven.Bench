@@ -50,22 +50,8 @@ public static class RavenServerMetricsCollector
     private static DocumentStore GetStore(string baseUrl, string database, string? httpVersion)
     {
         var key = $"{baseUrl}|{database}|{httpVersion}";
-        return _stores.GetOrAdd(key, _ => new Lazy<DocumentStore>(() =>
-        {
-            var store = new DocumentStore
-            {
-                Urls = new[] { baseUrl },
-                Database = database
-            };
-
-            if (string.IsNullOrEmpty(httpVersion) == false)
-            {
-                HttpHelper.ConfigureHttpVersion(store, httpVersion);
-            }
-
-            store.Initialize();
-            return store;
-        })).Value;
+        return _stores.GetOrAdd(key, _ => new Lazy<DocumentStore>(
+            () => HttpHelper.CreateFromVersionString(baseUrl, database, httpVersion))).Value;
     }
 
     private static async Task<MemoryStatsResult> GetMemoryStatsAsync(HttpClient httpClient, string baseUrl)

@@ -123,6 +123,27 @@ public static class HttpHelper
     }
 
     /// <summary>
+    /// Creates an HttpClient pinned to an exact HTTP version, with an infinite timeout so long-running
+    /// benchmark and calibration requests are never cut off by the client itself.
+    /// </summary>
+    public static HttpClient CreateVersionedHttpClient(Version httpVersion, DecompressionMethods decompression, Uri? baseAddress = null)
+    {
+        var handler = HttpVersionHandler.CreateConfiguredHandler();
+        handler.AutomaticDecompression = decompression;
+
+        var versionInfo = (httpVersion, HttpVersionPolicy.RequestVersionExact);
+        var client = new HttpClient(new HttpVersionHandler(handler, versionInfo))
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
+
+        if (baseAddress != null)
+            client.BaseAddress = baseAddress;
+
+        return client;
+    }
+
+    /// <summary>
     /// Configures a DocumentStore with the specified HTTP version settings.
     /// Ensures administrative operations use the same HTTP protocol as the benchmarking transport.
     /// </summary>
@@ -187,5 +208,34 @@ public static class HttpHelper
         var normalized = NormalizeHttpVersion(httpVersionString);
         var (version, policy) = GetRequestVersionInfo(normalized);
         ConfigureHttpVersion(store, version, policy);
+    }
+
+    /// <summary>
+    /// Creates and initializes a DocumentStore pointed at the given database, applying the HTTP version
+    /// when given. <paramref name="configure"/> runs after HTTP-version setup and before Initialize(),
+    /// which is the only window in which a caller may still change the conventions.
+    /// </summary>
+    public static DocumentStore Create(string url, string database, Version? httpVersion, Action<DocumentStore>? configure = null)
+    {
+        var store = new DocumentStore { Urls = [url], Database = database };
+        if (httpVersion != null)
+            ConfigureHttpVersion(store, httpVersion);
+        configure?.Invoke(store);
+        store.Initialize();
+        return store;
+    }
+
+    /// <summary>
+    /// Creates and initializes a DocumentStore pointed at the given database, applying the HTTP version
+    /// string when non-empty. Unlike <see cref="Create"/> the version string selects its own policy, so
+    /// "auto" stays RequestVersionOrLower.
+    /// </summary>
+    public static DocumentStore CreateFromVersionString(string url, string database, string? httpVersionString)
+    {
+        var store = new DocumentStore { Urls = [url], Database = database };
+        if (string.IsNullOrEmpty(httpVersionString) == false)
+            ConfigureHttpVersion(store, httpVersionString);
+        store.Initialize();
+        return store;
     }
 }

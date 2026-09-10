@@ -84,15 +84,7 @@ public sealed class DatasetManager : IDisposable
     /// </summary>
     private async Task EnsureDatabaseExistsAsync(string serverUrl, string databaseName, string? httpVersion = null, CancellationToken ct = default)
     {
-        using var store = new DocumentStore
-        {
-            Urls = new[] { serverUrl }
-        };
-        
-        if (string.IsNullOrEmpty(httpVersion) == false)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion);
-
-        store.Initialize();
+        using var store = HttpHelper.CreateFromVersionString(serverUrl, databaseName, httpVersion);
 
         var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName), ct);
         if (dbRecord == null)
@@ -112,16 +104,7 @@ public sealed class DatasetManager : IDisposable
         // Ensure database exists before importing
         await EnsureDatabaseExistsAsync(serverUrl, databaseName, httpVersion, ct);
 
-        using var store = new DocumentStore
-        {
-            Urls = new[] { serverUrl },
-            Database = databaseName
-        };
-        
-        if (string.IsNullOrEmpty(httpVersion) == false)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion);
-
-        store.Initialize();
+        using var store = HttpHelper.CreateFromVersionString(serverUrl, databaseName, httpVersion);
 
         await using var dumpStream = await OpenDumpStreamAsync(dumpFilePath, ct);
         // Raven.Bench builds its own -corax indexes per workload; the dump's bundled indexes
@@ -170,15 +153,7 @@ public sealed class DatasetManager : IDisposable
     {
         try
         {
-            using var store = new DocumentStore
-            {
-                Urls = new[] { serverUrl }
-            };
-            
-            if (string.IsNullOrEmpty(httpVersion) == false)
-                HttpHelper.ConfigureHttpVersion(store, httpVersion);
-
-            store.Initialize();
+            using var store = HttpHelper.CreateFromVersionString(serverUrl, databaseName, httpVersion);
 
             // First check if database exists
             var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName));
