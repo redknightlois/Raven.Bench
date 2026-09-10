@@ -1,5 +1,6 @@
 using Raven.Client.Documents;
 using Raven.Client.Documents.Session;
+using RavenBench.Core;
 using System.Linq;
 
 namespace RavenBench.Core.Workload;
@@ -44,83 +45,67 @@ public sealed class StackOverflowWorkloadMetadata
 public static class StackOverflowWorkloadHelper
 {
     private const string MetadataDocId = "workload/stackoverflow-metadata";
-    private const int DefaultSampleSize = 10000;
 
     /// <summary>
     /// Discovers actual document IDs by sampling the database and caches them for workload use.
     /// Returns sampled question and user IDs that exist in the database.
     /// </summary>
-    public static async Task<StackOverflowWorkloadMetadata> DiscoverOrLoadMetadataAsync(
+    public static Task<StackOverflowWorkloadMetadata> DiscoverOrLoadMetadataAsync(
         string serverUrl,
         string databaseName,
         int seed,
         int maxQuestionId,
         int maxUserId,
-        int sampleSize = DefaultSampleSize)
+        int sampleSize = WorkloadMetadataCache.DefaultSampleSize)
     {
-        using var store = new DocumentStore
-        {
-            Urls = new[] { serverUrl },
-            Database = databaseName
-        };
-        store.Initialize();
+        return WorkloadMetadataCache.DiscoverOrLoadAsync(
+            serverUrl, databaseName, MetadataDocId,
+            cached => cached.QuestionIds.Length > 0 && cached.UserIds.Length > 0 &&
+                cached.TitlePrefixes.Length > 0 && (cached.SearchTermsRare.Length > 0 || cached.SearchTermsCommon.Length > 0) &&
+                cached.Tags.Length > 0,
+            cached => Console.WriteLine($"[Workload] Using cached StackOverflow metadata: {cached.QuestionIds.Length} questions, {cached.UserIds.Length} users, {cached.TitlePrefixes.Length} prefixes, {cached.SearchTermsRare.Length + cached.SearchTermsCommon.Length} search terms, {cached.Tags.Length} tags"),
+            async store =>
+            {
+                Console.WriteLine("[Workload] Discovering StackOverflow document IDs and text search terms by sampling database...");
 
-        // Check if we have cached metadata
-        using var session = store.OpenAsyncSession();
-        var cached = await session.LoadAsync<StackOverflowWorkloadMetadata>(MetadataDocId);
+                var questions = await SampleExistingDocsAsync(store, "questions", maxQuestionId, seed, sampleSize);
+                var users = await SampleExistingDocsAsync(store, "users", maxUserId, seed + 1, sampleSize);
 
-        if (cached != null && cached.QuestionIds.Length > 0 && cached.UserIds.Length > 0 &&
-            cached.TitlePrefixes.Length > 0 && (cached.SearchTermsRare.Length > 0 || cached.SearchTermsCommon.Length > 0) &&
-            cached.Tags.Length > 0)
-        {
-            Console.WriteLine($"[Workload] Using cached StackOverflow metadata: {cached.QuestionIds.Length} questions, {cached.UserIds.Length} users, {cached.TitlePrefixes.Length} prefixes, {cached.SearchTermsRare.Length + cached.SearchTermsCommon.Length} search terms, {cached.Tags.Length} tags");
-            return cached;
-        }
+                if (questions.Count == 0 || users.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to discover StackOverflow document IDs. Found {questions.Count} questions, {users.Count} users. " +
+                        "Ensure the StackOverflow dataset is imported before running benchmarks.");
+                }
 
-        Console.WriteLine("[Workload] Discovering StackOverflow document IDs and text search terms by sampling database...");
+                var titles = new List<string>(questions.Count);
+                var tagArrays = new List<dynamic>(questions.Count);
+                foreach (var (_, doc) in questions)
+                {
+                    try { string? t = (doc as dynamic)?.Title; if (string.IsNullOrWhiteSpace(t) == false) titles.Add(t!); } catch { }
+                    try { var tg = (doc as dynamic)?.Tags; if (tg != null) tagArrays.Add(tg); } catch { }
+                }
 
-        var questions = await SampleExistingDocsAsync(store, "questions", maxQuestionId, seed, sampleSize);
-        var users = await SampleExistingDocsAsync(store, "users", maxUserId, seed + 1, sampleSize);
+                var (titlePrefixes, searchTermsRare, searchTermsCommon) = BuildTextSearchTerms(titles);
+                var tags = BuildTags(tagArrays);
 
-        if (questions.Count == 0 || users.Count == 0)
-        {
-            throw new InvalidOperationException(
-                $"Failed to discover StackOverflow document IDs. Found {questions.Count} questions, {users.Count} users. " +
-                "Ensure the StackOverflow dataset is imported before running benchmarks.");
-        }
+                Console.WriteLine($"[Workload] Sampled {questions.Count} questions, {users.Count} users");
+                Console.WriteLine($"[Workload] Discovered {titlePrefixes.Length} title prefixes, {searchTermsRare.Length} rare terms, {searchTermsCommon.Length} common terms, {tags.Length} tags");
 
-        var titles = new List<string>(questions.Count);
-        var tagArrays = new List<dynamic>(questions.Count);
-        foreach (var (_, doc) in questions)
-        {
-            try { string? t = (doc as dynamic)?.Title; if (string.IsNullOrWhiteSpace(t) == false) titles.Add(t!); } catch { }
-            try { var tg = (doc as dynamic)?.Tags; if (tg != null) tagArrays.Add(tg); } catch { }
-        }
-
-        var (titlePrefixes, searchTermsRare, searchTermsCommon) = BuildTextSearchTerms(titles);
-        var tags = BuildTags(tagArrays);
-
-        Console.WriteLine($"[Workload] Sampled {questions.Count} questions, {users.Count} users");
-        Console.WriteLine($"[Workload] Discovered {titlePrefixes.Length} title prefixes, {searchTermsRare.Length} rare terms, {searchTermsCommon.Length} common terms, {tags.Length} tags");
-
-        var metadata = new StackOverflowWorkloadMetadata
-        {
-            QuestionIds = questions.Select(q => q.Id).ToArray(),
-            UserIds = users.Select(u => u.Id).ToArray(),
-            QuestionCount = questions.Count,
-            UserCount = users.Count,
-            TitlePrefixes = titlePrefixes,
-            SearchTermsRare = searchTermsRare,
-            SearchTermsCommon = searchTermsCommon,
-            Tags = tags,
-            ComputedAt = DateTime.UtcNow
-        };
-
-        await session.StoreAsync(metadata, MetadataDocId);
-        await session.SaveChangesAsync();
-        Console.WriteLine("[Workload] Stored StackOverflow workload metadata in database");
-
-        return metadata;
+                return new StackOverflowWorkloadMetadata
+                {
+                    QuestionIds = questions.Select(q => q.Id).ToArray(),
+                    UserIds = users.Select(u => u.Id).ToArray(),
+                    QuestionCount = questions.Count,
+                    UserCount = users.Count,
+                    TitlePrefixes = titlePrefixes,
+                    SearchTermsRare = searchTermsRare,
+                    SearchTermsCommon = searchTermsCommon,
+                    Tags = tags,
+                    ComputedAt = DateTime.UtcNow
+                };
+            },
+            _ => Console.WriteLine("[Workload] Stored StackOverflow workload metadata in database"));
     }
 
     /// <summary>

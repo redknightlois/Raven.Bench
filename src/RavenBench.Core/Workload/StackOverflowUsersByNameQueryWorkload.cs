@@ -1,5 +1,6 @@
 using Raven.Client.Documents;
 using Raven.Client.Documents.Session;
+using RavenBench.Core;
 
 namespace RavenBench.Core.Workload;
 
@@ -43,78 +44,62 @@ public sealed class ReputationBucket
 public static class StackOverflowUsersWorkloadHelper
 {
     private const string MetadataDocId = "workload/users-metadata";
-    private const int DefaultSampleSize = 10000;
 
     /// <summary>
     /// Discovers actual user names by sampling the database and caches them for workload use.
     /// Returns sampled names that exist in the database.
     /// </summary>
-    public static async Task<StackOverflowUsersWorkloadMetadata> DiscoverOrLoadMetadataAsync(
+    public static Task<StackOverflowUsersWorkloadMetadata> DiscoverOrLoadMetadataAsync(
         string serverUrl,
         string databaseName,
         int seed,
         int maxUserId,
-        int sampleSize = DefaultSampleSize)
+        int sampleSize = WorkloadMetadataCache.DefaultSampleSize)
     {
-        using var store = new DocumentStore
-        {
-            Urls = new[] { serverUrl },
-            Database = databaseName
-        };
-        store.Initialize();
+        return WorkloadMetadataCache.DiscoverOrLoadAsync(
+            serverUrl, databaseName, MetadataDocId,
+            cached => cached.SampleNames.Length > 0,
+            cached => Console.WriteLine($"[Workload] Using cached Users metadata: {cached.SampleNames.Length} sampled names"),
+            async store =>
+            {
+                Console.WriteLine("[Workload] Discovering Users names and reputation histogram by sampling database...");
 
-        // Check if we have cached metadata
-        using var session = store.OpenAsyncSession();
-        var cached = await session.LoadAsync<StackOverflowUsersWorkloadMetadata>(MetadataDocId);
+                var users = await StackOverflowWorkloadHelper.SampleExistingDocsAsync(store, "users", maxUserId, seed, sampleSize);
 
-        if (cached != null && cached.SampleNames.Length > 0)
-        {
-            Console.WriteLine($"[Workload] Using cached Users metadata: {cached.SampleNames.Length} sampled names");
-            return cached;
-        }
+                var sampleNames = new HashSet<string>();
+                var reputationSamples = new List<int>();
+                foreach (var (_, doc) in users)
+                {
+                    try { string? name = (doc as dynamic)?.DisplayName; if (string.IsNullOrWhiteSpace(name) == false) sampleNames.Add(name!); } catch { }
+                    try { var rep = (doc as dynamic)?.Reputation; if (rep != null) reputationSamples.Add(Convert.ToInt32(rep)); } catch { }
+                }
 
-        Console.WriteLine("[Workload] Discovering Users names and reputation histogram by sampling database...");
+                if (sampleNames.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to discover Users names. Found {sampleNames.Count} names. " +
+                        "Ensure the StackOverflow dataset is imported before running benchmarks.");
+                }
 
-        var users = await StackOverflowWorkloadHelper.SampleExistingDocsAsync(store, "users", maxUserId, seed, sampleSize);
+                var totalUserCount = await GetTotalUserCountAsync(store);
 
-        var sampleNames = new HashSet<string>();
-        var reputationSamples = new List<int>();
-        foreach (var (_, doc) in users)
-        {
-            try { string? name = (doc as dynamic)?.DisplayName; if (string.IsNullOrWhiteSpace(name) == false) sampleNames.Add(name!); } catch { }
-            try { var rep = (doc as dynamic)?.Reputation; if (rep != null) reputationSamples.Add(Convert.ToInt32(rep)); } catch { }
-        }
+                var (reputationBuckets, minReputation, maxReputation) = BuildReputationHistogram(reputationSamples);
 
-        if (sampleNames.Count == 0)
-        {
-            throw new InvalidOperationException(
-                $"Failed to discover Users names. Found {sampleNames.Count} names. " +
-                "Ensure the StackOverflow dataset is imported before running benchmarks.");
-        }
+                Console.WriteLine($"[Workload] Sampled {sampleNames.Count} unique user names from {totalUserCount} total users");
+                Console.WriteLine($"[Workload] Discovered reputation range: {minReputation} to {maxReputation} across {reputationBuckets.Length} buckets");
 
-        var totalUserCount = await GetTotalUserCountAsync(store);
-
-        var (reputationBuckets, minReputation, maxReputation) = BuildReputationHistogram(reputationSamples);
-
-        Console.WriteLine($"[Workload] Sampled {sampleNames.Count} unique user names from {totalUserCount} total users");
-        Console.WriteLine($"[Workload] Discovered reputation range: {minReputation} to {maxReputation} across {reputationBuckets.Length} buckets");
-
-        var metadata = new StackOverflowUsersWorkloadMetadata
-        {
-            SampleNames = sampleNames.ToArray(),
-            SampleCount = sampleNames.Count,
-            TotalUserCount = totalUserCount,
-            ReputationBuckets = reputationBuckets,
-            MinReputation = minReputation,
-            MaxReputation = maxReputation,
-            ComputedAt = DateTime.UtcNow
-        };
-
-        await session.StoreAsync(metadata, MetadataDocId);
-        await session.SaveChangesAsync();
-        Console.WriteLine("[Workload] Stored Users workload metadata in database");
-
-        return metadata;
+                return new StackOverflowUsersWorkloadMetadata
+                {
+                    SampleNames = sampleNames.ToArray(),
+                    SampleCount = sampleNames.Count,
+                    TotalUserCount = totalUserCount,
+                    ReputationBuckets = reputationBuckets,
+                    MinReputation = minReputation,
+                    MaxReputation = maxReputation,
+                    ComputedAt = DateTime.UtcNow
+                };
+            },
+            _ => Console.WriteLine("[Workload] Stored Users workload metadata in database"));
     }
 
     /// <summary>
