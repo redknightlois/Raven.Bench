@@ -12,6 +12,7 @@ using RavenBench.Core.Metrics.Snmp;
 using System.Text.Json;
 using System.Text;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using Raven.Client.Documents.Linq;
@@ -50,35 +51,15 @@ public sealed class RavenClientTransport : ITransport
         _compression = compression;
         _httpVersion = httpVersion;
 
-        _store = new DocumentStore
-        {
-            Urls = [url],
-            Database = database
-        };
+        _store = HttpHelper.Create(url, database, _httpVersion, configure: ConfigureCompression);
 
-        ConfigureCompression();
-        HttpHelper.ConfigureHttpVersion((DocumentStore)_store, _httpVersion, HttpVersionPolicy.RequestVersionExact);
-
-        _store.Initialize();
-
-        _calibrationHttp = CreateCalibrationHttpClient(url);
+        _calibrationHttp = HttpHelper.CreateVersionedHttpClient(_httpVersion, DecompressionMethods.None, new Uri(url));
         _admin = new TransportAdminClient(_calibrationHttp, url);
     }
 
-    private HttpClient CreateCalibrationHttpClient(string url)
+    private void ConfigureCompression(IDocumentStore store)
     {
-        var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-        var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
-        return new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
-        {
-            BaseAddress = new Uri(url),
-            Timeout = Timeout.InfiniteTimeSpan
-        };
-    }
-
-    private void ConfigureCompression()
-    {
-        var conventions = _store.Conventions;
+        var conventions = store.Conventions;
 
         if (_compression == CompressionMode.Identity)
         {
@@ -191,8 +172,7 @@ public sealed class RavenClientTransport : ITransport
                             bytesIn: bytesIn,
                             indexName: stats.IndexName,
                             resultCount: results.Count,
-                            isStale: stats.IsStale,
-                            queryDurationMs: stats.DurationInMs
+                            isStale: stats.IsStale
                         );
                     }
                 }
@@ -296,8 +276,7 @@ public sealed class RavenClientTransport : ITransport
                             bytesIn: bytesIn,
                             indexName: stats.IndexName,
                             resultCount: results.Count,
-                            isStale: stats.IsStale,
-                            queryDurationMs: stats.DurationInMs
+                            isStale: stats.IsStale
                         );
                     }
                 }
@@ -305,20 +284,9 @@ public sealed class RavenClientTransport : ITransport
                     return new TransportResult(0, 0);
             }
         }
-        catch (TaskCanceledException)
-        {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out");
-        }
-        catch (HttpRequestException httpEx)
-        {
-            var errorMsg = $"HTTP {httpEx.Data["StatusCode"] ?? "Error"}: {httpEx.Message}";
-            return new TransportResult(0, 0, errorMsg);
-        }
         catch (Exception ex)
         {
-            return new TransportResult(0, 0, ex.Message);
+            return TransportResult.FromException(ex, ct);
         }
     }
 

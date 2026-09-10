@@ -56,14 +56,7 @@ public sealed class RawHttpTransport : ITransport
             _ => DecompressionMethods.None
         };
 
-        var handler = HttpHelper.HttpVersionHandler.CreateConfiguredHandler();
-        handler.AutomaticDecompression = decompression;
-
-        var httpVersionInfo = (_httpVersion, HttpVersionPolicy.RequestVersionExact);
-        _http = new HttpClient(new HttpHelper.HttpVersionHandler(handler, httpVersionInfo))
-        {
-            Timeout = Timeout.InfiniteTimeSpan
-        };
+        _http = HttpHelper.CreateVersionedHttpClient(_httpVersion, decompression);
 
         _admin = new TransportAdminClient(_http, _baseUrl);
 
@@ -121,6 +114,26 @@ public sealed class RawHttpTransport : ITransport
         return await JsonDocument.ParseAsync(zstdStream, cancellationToken: ct).ConfigureAwait(false);
     }
 
+    private readonly record struct QueryEnvelope(string? IndexName, int? ResultCount, bool? IsStale);
+
+    // Metadata fields of a /queries response; each is absent for a query that does not report it.
+    private static QueryEnvelope ParseQueryEnvelope(JsonDocument doc)
+    {
+        var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
+            ? indexProp.GetString()
+            : null;
+
+        var resultCount = doc.RootElement.TryGetProperty("Results", out var resultsProp) && resultsProp.ValueKind == JsonValueKind.Array
+            ? resultsProp.GetArrayLength()
+            : (int?)null;
+
+        var isStale = doc.RootElement.TryGetProperty("IsStale", out var staleProp)
+            ? staleProp.GetBoolean()
+            : (bool?)null;
+
+        return new QueryEnvelope(indexName, resultCount, isStale);
+    }
+
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
         try
@@ -149,20 +162,9 @@ public sealed class RawHttpTransport : ITransport
                     return new TransportResult(0, 0);
             }
         }
-        catch (TaskCanceledException)
-        {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out");
-        }
-        catch (HttpRequestException httpEx)
-        {
-            var errorMsg = $"HTTP {httpEx.Data["StatusCode"] ?? "Error"}: {httpEx.Message}";
-            return new TransportResult(0, 0, errorMsg);
-        }
         catch (Exception ex)
         {
-            return new TransportResult(0, 0, ex.Message);
+            return TransportResult.FromException(ex, ct);
         }
     }
 
@@ -176,24 +178,21 @@ public sealed class RawHttpTransport : ITransport
         string requestLine = $"{req.Method} {req.RequestUri!.PathAndQuery} HTTP/{req.Version}\r\n";
         long size = Encoding.UTF8.GetByteCount(requestLine);
 
-        foreach (var header in req.Headers)
-        {
-            string headerLine = $"{header.Key}: {string.Join(", ", header.Value)}\r\n";
-            size += Encoding.UTF8.GetByteCount(headerLine);
-        }
-
+        size += SumHeaderBytes(req.Headers);
         if (req.Content != null)
-        {
-            foreach (var header in req.Content.Headers)
-            {
-                string headerLine = $"{header.Key}: {string.Join(", ", header.Value)}\r\n";
-                size += Encoding.UTF8.GetByteCount(headerLine);
-            }
-        }
+            size += SumHeaderBytes(req.Content.Headers);
 
         // Blank line after headers
         size += Encoding.UTF8.GetByteCount("\r\n");
 
+        return size;
+    }
+
+    private static long SumHeaderBytes(IEnumerable<KeyValuePair<string, IEnumerable<string>>> headers)
+    {
+        long size = 0;
+        foreach (var header in headers)
+            size += Encoding.UTF8.GetByteCount($"{header.Key}: {string.Join(", ", header.Value)}\r\n");
         return size;
     }
 
@@ -257,71 +256,22 @@ public sealed class RawHttpTransport : ITransport
         await PutAsyncInternal(id, document, cts.Token).ConfigureAwait(false);
     }
 
-    private async Task<TransportResult> PostQueryAsync(QueryOperation queryOp, CancellationToken ct)
+    private HttpRequestMessage NewRequest(HttpMethod method, string url)
+    {
+        var req = new HttpRequestMessage(method, url);
+        req.Headers.AcceptEncoding.Clear();
+        req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
+        req.Headers.ExpectContinue = false;
+        return req;
+    }
+
+    // Guards a whole operation, request construction included, so a serialization throw is reported
+    // as a failed result instead of escaping onto the hot path.
+    private async Task<TransportResult> SendAsync(CancellationToken ct, Func<Task<TransportResult>> body)
     {
         try
         {
-            var url = $"{_baseUrl}/databases/{_db}/queries";
-
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
-
-            var payload = new
-            {
-                Query = queryOp.QueryText,
-                QueryParameters = queryOp.Parameters,
-                MetadataOnly = false
-            };
-
-            var queryPayload = JsonSerializer.Serialize(payload);
-            req.Content = CreateJsonContent(queryPayload);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                    return new TransportResult(0, 0, errorDetails);
-                }
-
-                using var wireMs = await BufferResponseAsync(resp, ct).ConfigureAwait(false);
-                long bytesIn = wireMs.Length;
-
-                using var doc = await ParseJsonResponseAsync(wireMs, resp, ct).ConfigureAwait(false);
-
-                var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
-                    ? indexProp.GetString()
-                    : null;
-
-                var resultCount = doc.RootElement.TryGetProperty("Results", out var resultsProp) && resultsProp.ValueKind == JsonValueKind.Array
-                    ? resultsProp.GetArrayLength()
-                    : (int?)null;
-
-                var isStale = doc.RootElement.TryGetProperty("IsStale", out var staleProp)
-                    ? staleProp.GetBoolean()
-                    : (bool?)null;
-
-                double? queryDurationMs = null;
-                if (doc.RootElement.TryGetProperty("DurationInMs", out var durationProp))
-                {
-                    if (durationProp.ValueKind == JsonValueKind.Number)
-                    {
-                        queryDurationMs = durationProp.GetDouble();
-                    }
-                }
-
-                long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
-                long headerBytes = CalculateHeaderSize(req);
-                long bytesOut = headerBytes + bodyBytes;
-
-                return new TransportResult(bytesOut, bytesIn, indexName: indexName, resultCount: resultCount, isStale: isStale, queryDurationMs: queryDurationMs);
-            }
+            return await body().ConfigureAwait(false);
         }
         catch (TaskCanceledException)
         {
@@ -331,320 +281,210 @@ public sealed class RawHttpTransport : ITransport
         }
         catch (Exception ex)
         {
-            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
-            return new TransportResult(0, 0, errorDetails);
+            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
         }
     }
+
+    // Whether the response-body read stays under the 30s send cap or runs under the caller's own token.
+    private enum ResponseReadDeadline
+    {
+        Uncapped,
+        Capped
+    }
+
+    // The 30s cap starts here, after the caller has built the request, so it bounds the round trip
+    // and not the payload serialization.
+    private async Task<TransportResult> SendCoreAsync(HttpRequestMessage req, CancellationToken ct, ResponseReadDeadline readDeadline,
+        Func<HttpResponseMessage, CancellationToken, Task<TransportResult>> handleResponse)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+        if (resp.IsSuccessStatusCode == false)
+        {
+            var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            return new TransportResult(0, 0, $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}");
+        }
+
+        var readToken = readDeadline == ResponseReadDeadline.Capped ? cts.Token : ct;
+        return await handleResponse(resp, readToken).ConfigureAwait(false);
+    }
+
+    private Task<TransportResult> PostQueryAsync(QueryOperation queryOp, CancellationToken ct) => SendAsync(ct, async () =>
+    {
+        var url = $"{_baseUrl}/databases/{_db}/queries";
+        using var req = NewRequest(HttpMethod.Post, url);
+
+        var payload = new
+        {
+            Query = queryOp.QueryText,
+            QueryParameters = queryOp.Parameters,
+            MetadataOnly = false
+        };
+
+        var queryPayload = JsonSerializer.Serialize(payload);
+        req.Content = CreateJsonContent(queryPayload);
+
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
+        {
+            using var wireMs = await BufferResponseAsync(resp, readCt).ConfigureAwait(false);
+            long bytesIn = wireMs.Length;
+
+            using var doc = await ParseJsonResponseAsync(wireMs, resp, readCt).ConfigureAwait(false);
+            var envelope = ParseQueryEnvelope(doc);
+
+            long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
+
+            return new TransportResult(bytesOut, bytesIn, indexName: envelope.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
+        }).ConfigureAwait(false);
+    });
 
     /// <summary>
     /// Executes a query through the streams endpoint and drains the full result stream.
     /// Result counts and query stats are not parsed from the streamed body.
     /// </summary>
-    private async Task<TransportResult> PostStreamQueryAsync(StreamQueryOperation streamOp, CancellationToken ct)
+    private Task<TransportResult> PostStreamQueryAsync(StreamQueryOperation streamOp, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        try
+        var url = $"{_baseUrl}/databases/{_db}/streams/queries";
+        using var req = NewRequest(HttpMethod.Post, url);
+
+        var payload = new
         {
-            var url = $"{_baseUrl}/databases/{_db}/streams/queries";
+            Query = streamOp.QueryText,
+            QueryParameters = streamOp.Parameters
+        };
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
+        var queryPayload = JsonSerializer.Serialize(payload);
+        req.Content = CreateJsonContent(queryPayload);
 
-            var payload = new
-            {
-                Query = streamOp.QueryText,
-                QueryParameters = streamOp.Parameters
-            };
-
-            var queryPayload = JsonSerializer.Serialize(payload);
-            req.Content = CreateJsonContent(queryPayload);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                    return new TransportResult(0, 0, errorDetails);
-                }
-
-                long bytesIn = await DrainResponseAsync(resp, cts.Token).ConfigureAwait(false);
-
-                long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
-                long bytesOut = CalculateHeaderSize(req) + bodyBytes;
-
-                return new TransportResult(bytesOut, bytesIn, indexName: streamOp.ExpectedIndex);
-            }
-        }
-        catch (TaskCanceledException)
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Capped, async (resp, readCt) =>
         {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
-        }
-        catch (Exception ex)
-        {
-            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
-        }
-    }
+            long bytesIn = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
 
-    private async Task<TransportResult> PatchDocumentAsync(DocumentPatchOperation patchOp, CancellationToken ct)
+            long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
+            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
+
+            return new TransportResult(bytesOut, bytesIn, indexName: streamOp.ExpectedIndex);
+        }).ConfigureAwait(false);
+    });
+
+    private Task<TransportResult> PatchDocumentAsync(DocumentPatchOperation patchOp, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        try
+        var url = $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(patchOp.Id)}";
+        using var req = NewRequest(HttpMethod.Patch, url);
+
+        var payload = new { Patch = new { Script = patchOp.Script, Values = new { } } };
+        var jsonPayload = JsonSerializer.Serialize(payload);
+        req.Content = CreateJsonContent(jsonPayload);
+
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Capped, async (resp, readCt) =>
         {
-            var url = $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(patchOp.Id)}";
+            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
+            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+            long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload));
+            return new TransportResult(bytesOut, bytesIn);
+        }).ConfigureAwait(false);
+    });
 
-            using var req = new HttpRequestMessage(HttpMethod.Patch, url);
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
-
-            var payload = new { Patch = new { Script = patchOp.Script, Values = new { } } };
-            var jsonPayload = JsonSerializer.Serialize(payload);
-            req.Content = CreateJsonContent(jsonPayload);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    return new TransportResult(0, 0, $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}");
-                }
-
-                long drained = await DrainResponseAsync(resp, cts.Token).ConfigureAwait(false);
-                long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-                long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload));
-                return new TransportResult(bytesOut, bytesIn);
-            }
-        }
-        catch (TaskCanceledException)
-        {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
-        }
-        catch (Exception ex)
-        {
-            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
-        }
-    }
-
-    private async Task<TransportResult> ExecuteAttachmentAsync(AttachmentOperation op, CancellationToken ct)
+    private Task<TransportResult> ExecuteAttachmentAsync(AttachmentOperation op, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        try
+        var url = $"{_baseUrl}/databases/{_db}/attachments?id={Uri.EscapeDataString(op.DocumentId)}&name={Uri.EscapeDataString(op.Name)}";
+
+        var method = op.Kind switch
         {
-            var url = $"{_baseUrl}/databases/{_db}/attachments?id={Uri.EscapeDataString(op.DocumentId)}&name={Uri.EscapeDataString(op.Name)}";
+            AttachmentOperationKind.Put => HttpMethod.Put,
+            AttachmentOperationKind.Get => HttpMethod.Get,
+            AttachmentOperationKind.Delete => HttpMethod.Delete,
+            _ => throw new ArgumentOutOfRangeException(nameof(op.Kind), op.Kind, null)
+        };
 
-            var method = op.Kind switch
-            {
-                AttachmentOperationKind.Put => HttpMethod.Put,
-                AttachmentOperationKind.Get => HttpMethod.Get,
-                AttachmentOperationKind.Delete => HttpMethod.Delete,
-                _ => throw new ArgumentOutOfRangeException(nameof(op.Kind), op.Kind, null)
-            };
+        using var req = NewRequest(method, url);
 
-            using var req = new HttpRequestMessage(method, url);
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
-
-            long bodyBytes = 0;
-            if (op.Kind == AttachmentOperationKind.Put)
-            {
-                req.Content = new ReadOnlyMemoryContent(op.Payload!);
-                req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                bodyBytes = op.Payload!.Length;
-            }
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    return new TransportResult(0, 0, $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}");
-                }
-
-                long drained = await DrainResponseAsync(resp, cts.Token).ConfigureAwait(false);
-                long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-                long bytesOut = CalculateHeaderSize(req) + bodyBytes;
-                return new TransportResult(bytesOut, bytesIn);
-            }
-        }
-        catch (TaskCanceledException)
+        long bodyBytes = 0;
+        if (op.Kind == AttachmentOperationKind.Put)
         {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+            req.Content = new ReadOnlyMemoryContent(op.Payload!);
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            bodyBytes = op.Payload!.Length;
         }
-        catch (Exception ex)
-        {
-            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
-        }
-    }
 
-    private async Task<TransportResult> PostBulkDocsAsync(List<DocumentToWrite<string>> documents, CancellationToken ct)
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Capped, async (resp, readCt) =>
+        {
+            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
+            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
+            return new TransportResult(bytesOut, bytesIn);
+        }).ConfigureAwait(false);
+    });
+
+    private Task<TransportResult> PostBulkDocsAsync(List<DocumentToWrite<string>> documents, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        try
+        var url = $"{_baseUrl}/databases/{_db}/bulk_docs";
+        using var req = NewRequest(HttpMethod.Post, url);
+
+        var bufferWriter = new ArrayBufferWriter<byte>(BufferSize);
+        using (var writer = new Utf8JsonWriter(bufferWriter))
         {
-            var url = $"{_baseUrl}/databases/{_db}/bulk_docs";
-
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
-
-            var bufferWriter = new ArrayBufferWriter<byte>(BufferSize);
-            using (var writer = new Utf8JsonWriter(bufferWriter))
+            writer.WriteStartObject();
+            writer.WritePropertyName("Commands");
+            writer.WriteStartArray();
+            foreach (var doc in documents)
             {
                 writer.WriteStartObject();
-                writer.WritePropertyName("Commands");
-                writer.WriteStartArray();
-                foreach (var doc in documents)
-                {
-                    writer.WriteStartObject();
-                    writer.WriteString("Id", doc.Id);
-                    writer.WriteString("Type", "PUT");
-                    writer.WritePropertyName("Document");
-                    writer.WriteRawValue(doc.Document);
-                    writer.WriteEndObject();
-                }
-                writer.WriteEndArray();
+                writer.WriteString("Id", doc.Id);
+                writer.WriteString("Type", "PUT");
+                writer.WritePropertyName("Document");
+                writer.WriteRawValue(doc.Document);
                 writer.WriteEndObject();
             }
-            int jsonByteCount = bufferWriter.WrittenCount;
-            req.Content = CreateJsonContent(bufferWriter.WrittenMemory);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                    return new TransportResult(0, 0, errorDetails);
-                }
-
-                long drained = await DrainResponseAsync(resp, ct).ConfigureAwait(false);
-                long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-
-                long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? jsonByteCount);
-                return new TransportResult(bytesOut, bytesIn);
-            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
         }
-        catch (TaskCanceledException)
+        int jsonByteCount = bufferWriter.WrittenCount;
+        req.Content = CreateJsonContent(bufferWriter.WrittenMemory);
+
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
         {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
-        }
-        catch (Exception ex)
-        {
-            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
-            return new TransportResult(0, 0, errorDetails);
-        }
-    }
+            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
+            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+            long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? jsonByteCount);
+            return new TransportResult(bytesOut, bytesIn);
+        }).ConfigureAwait(false);
+    });
 
-    private async Task<TransportResult> GetAsync(string id, CancellationToken ct)
+    private Task<TransportResult> GetAsync(string id, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        try
+        var url = BuildUrl(id);
+        using var req = NewRequest(HttpMethod.Get, url);
+
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
         {
-            var url = BuildUrl(id);
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
+            // If gzip auto-decompressed, Content-Length is the wire size; drained is post-inflate.
+            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+            long bytesOut = CalculateHeaderSize(req);
+            return new TransportResult(bytesOut, bytesIn);
+        }).ConfigureAwait(false);
+    });
 
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                    return new TransportResult(0, 0, errorDetails);
-                }
-
-                long drained = await DrainResponseAsync(resp, ct).ConfigureAwait(false);
-                // If gzip auto-decompressed, Content-Length is the wire size; drained is post-inflate.
-                long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-
-                long bytesOut = CalculateHeaderSize(req);
-                return new TransportResult(bytesOut, bytesIn);
-            }
-        }
-        catch (TaskCanceledException)
-        {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
-        }
-        catch (Exception ex)
-        {
-            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
-            return new TransportResult(0, 0, errorDetails);
-        }
-    }
-
-    private async Task<TransportResult> PutAsyncInternal<T>(string id, T document, CancellationToken ct)
+    private Task<TransportResult> PutAsyncInternal<T>(string id, T document, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        try
+        var url = BuildUrl(id);
+        using var req = NewRequest(HttpMethod.Put, url);
+
+        string jsonPayload = document is string s ? s : JsonSerializer.Serialize(document);
+        req.Content = CreateJsonContent(jsonPayload);
+
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
         {
-            var url = BuildUrl(id);
-
-            using var req = new HttpRequestMessage(HttpMethod.Put, url);
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
-
-            string jsonPayload = document is string s ? s : JsonSerializer.Serialize(document);
-            req.Content = CreateJsonContent(jsonPayload);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                    return new TransportResult(0, 0, errorDetails);
-                }
-
-                long drained = await DrainResponseAsync(resp, ct).ConfigureAwait(false);
-                long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-
-                long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload));
-                return new TransportResult(bytesOut, bytesIn);
-            }
-        }
-        catch (TaskCanceledException)
-        {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
-        }
-        catch (Exception ex)
-        {
-            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
-            return new TransportResult(0, 0, errorDetails);
-        }
-    }
+            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
+            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+            long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload));
+            return new TransportResult(bytesOut, bytesIn);
+        }).ConfigureAwait(false);
+    });
 
     public async Task<int?> GetServerMaxCoresAsync()
     {
@@ -761,122 +601,62 @@ public sealed class RawHttpTransport : ITransport
     /// Creates a DocumentStore configured with the same HTTP version settings as the transport.
     /// Used for administrative operations (database creation, document counting, etc.).
     /// </summary>
-    private Raven.Client.Documents.DocumentStore CreateAdminStore(string databaseName)
+    private Raven.Client.Documents.DocumentStore CreateAdminStore(string databaseName) =>
+        HttpHelper.Create(_baseUrl, databaseName, _httpVersion);
+
+    private Task<TransportResult> PostVectorSearchAsync(VectorSearchOperation vectorOp, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        var store = new Raven.Client.Documents.DocumentStore
+        var url = $"{_baseUrl}/databases/{_db}/queries";
+        using var req = NewRequest(HttpMethod.Post, url);
+
+        string queryText = vectorOp.ToRqlQuery();
+
+        // Pre-sized for the cohere-768 worst case (~10KB); 16KB avoids a Grow.
+        var bufferWriter = new ArrayBufferWriter<byte>(16384);
+        using (var writer = new Utf8JsonWriter(bufferWriter))
         {
-            Urls = [_baseUrl],
-            Database = databaseName
-        };
-
-        HttpHelper.ConfigureHttpVersion(store, _httpVersion, HttpVersionPolicy.RequestVersionExact);
-
-        return store;
-    }
-
-    private async Task<TransportResult> PostVectorSearchAsync(VectorSearchOperation vectorOp, CancellationToken ct)
-    {
-        try
-        {
-            var url = $"{_baseUrl}/databases/{_db}/queries";
-
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.AcceptEncoding.Clear();
-            req.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue(_acceptEncoding));
-            req.Headers.ExpectContinue = false;
-
-            string queryText = vectorOp.ToRqlQuery();
-
-            // Pre-sized for the cohere-768 worst case (~10KB); 16KB avoids a Grow.
-            var bufferWriter = new ArrayBufferWriter<byte>(16384);
-            using (var writer = new Utf8JsonWriter(bufferWriter))
-            {
-                writer.WriteStartObject();
-                writer.WriteString("Query", queryText);
-                writer.WritePropertyName("QueryParameters");
-                writer.WriteStartObject();
-                writer.WritePropertyName("vector");
-                writer.WriteStartArray();
-                var vec = vectorOp.QueryVector;
-                for (int i = 0; i < vec.Length; i++)
-                    writer.WriteNumberValue(vec[i]);
-                writer.WriteEndArray();
-                if (vectorOp.EfSearch.HasValue)
-                    writer.WriteNumber("efSearch", vectorOp.EfSearch.Value);
-                if (vectorOp.MinimumSimilarity > 0)
-                    writer.WriteNumber("minSimilarity", vectorOp.MinimumSimilarity);
-                writer.WriteEndObject();
-                writer.WriteBoolean("MetadataOnly", false);
-                writer.WriteNumber("PageSize", vectorOp.TopK);
-                writer.WriteEndObject();
-            }
-            var jsonBytes = bufferWriter.WrittenMemory;
-            var jsonByteCount = jsonBytes.Length;
-            req.Content = CreateJsonContent(jsonBytes);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
-            {
-                if (resp.IsSuccessStatusCode == false)
-                {
-                    var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    var errorDetails = $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}";
-                    return new TransportResult(0, 0, errorDetails);
-                }
-
-                // Buffered bytes are post-AutomaticDecompression for gzip/deflate/brotli; raw for zstd/identity.
-                using var wireMs = await BufferResponseAsync(resp, ct).ConfigureAwait(false);
-                long bytesIn = wireMs.Length;
-
-                using var doc = await ParseJsonResponseAsync(wireMs, resp, ct).ConfigureAwait(false);
-
-                var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
-                    ? indexProp.GetString()
-                    : null;
-
-                var resultCount = doc.RootElement.TryGetProperty("Results", out var resultsProp) && resultsProp.ValueKind == JsonValueKind.Array
-                    ? resultsProp.GetArrayLength()
-                    : (int?)null;
-
-                var isStale = doc.RootElement.TryGetProperty("IsStale", out var staleProp)
-                    ? staleProp.GetBoolean()
-                    : (bool?)null;
-
-                double? queryDurationMs = null;
-                if (doc.RootElement.TryGetProperty("DurationInMs", out var durationProp))
-                {
-                    if (durationProp.ValueKind == JsonValueKind.Number)
-                    {
-                        queryDurationMs = durationProp.GetDouble();
-                    }
-                }
-
-                long bodyBytes = req.Content?.Headers.ContentLength ?? jsonByteCount;
-                long headerBytes = CalculateHeaderSize(req);
-                long bytesOut = headerBytes + bodyBytes;
-
-                return new TransportResult(bytesOut, bytesIn, indexName: indexName, resultCount: resultCount, isStale: isStale, queryDurationMs: queryDurationMs);
-            }
+            writer.WriteStartObject();
+            writer.WriteString("Query", queryText);
+            writer.WritePropertyName("QueryParameters");
+            writer.WriteStartObject();
+            writer.WritePropertyName("vector");
+            writer.WriteStartArray();
+            var vec = vectorOp.QueryVector;
+            for (int i = 0; i < vec.Length; i++)
+                writer.WriteNumberValue(vec[i]);
+            writer.WriteEndArray();
+            if (vectorOp.EfSearch.HasValue)
+                writer.WriteNumber("efSearch", vectorOp.EfSearch.Value);
+            if (vectorOp.MinimumSimilarity > 0)
+                writer.WriteNumber("minSimilarity", vectorOp.MinimumSimilarity);
+            writer.WriteEndObject();
+            writer.WriteBoolean("MetadataOnly", false);
+            writer.WriteNumber("PageSize", vectorOp.TopK);
+            writer.WriteEndObject();
         }
-        catch (TaskCanceledException)
+        var jsonBytes = bufferWriter.WrittenMemory;
+        var jsonByteCount = jsonBytes.Length;
+        req.Content = CreateJsonContent(jsonBytes);
+
+        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
         {
-            if (ct.IsCancellationRequested)
-                return TransportResult.CancelledResult;
-            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
-        }
-        catch (Exception ex)
-        {
-            var errorDetails = $"Exception: {ex.GetType().Name}: {ex.Message}";
-            return new TransportResult(0, 0, errorDetails);
-        }
-    }
+            // Buffered bytes are post-AutomaticDecompression for gzip/deflate/brotli; raw for zstd/identity.
+            using var wireMs = await BufferResponseAsync(resp, readCt).ConfigureAwait(false);
+            long bytesIn = wireMs.Length;
+
+            using var doc = await ParseJsonResponseAsync(wireMs, resp, readCt).ConfigureAwait(false);
+            var envelope = ParseQueryEnvelope(doc);
+
+            long bodyBytes = req.Content?.Headers.ContentLength ?? jsonByteCount;
+            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
+
+            return new TransportResult(bytesOut, bytesIn, indexName: envelope.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
+        }).ConfigureAwait(false);
+    });
 
     public async Task EnsureDatabaseExistsAsync(string databaseName)
     {
         using var adminStore = CreateAdminStore(databaseName);
-        adminStore.Initialize();
 
         try
         {
@@ -892,7 +672,6 @@ public sealed class RawHttpTransport : ITransport
     public async Task<long> GetDocumentCountAsync(string idPrefix)
     {
         using var adminStore = CreateAdminStore(_db);
-        adminStore.Initialize();
 
         return await TransportAdminClient.GetDocumentCountAsync(adminStore, idPrefix).ConfigureAwait(false);
     }

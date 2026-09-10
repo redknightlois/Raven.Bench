@@ -10,7 +10,7 @@ namespace RavenBench.Core.Transport;
 /// Represents the result of a transport operation execution.
 /// Includes byte counts, error details, and optional query-specific metadata.
 /// </summary>
-public readonly struct TransportResult(long bytesOut, long bytesIn, string? errorDetails = null, string? indexName = null, int? resultCount = null, bool? isStale = null, double? queryDurationMs = null)
+public readonly struct TransportResult(long bytesOut, long bytesIn, string? errorDetails = null, string? indexName = null, int? resultCount = null, bool? isStale = null)
 {
     public long BytesOut { get; } = bytesOut;
     public long BytesIn { get; } = bytesIn;
@@ -26,6 +26,18 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     public static TransportResult CancelledResult { get; } = new TransportResult(0, 0) { Cancelled = true };
 
     /// <summary>
+    /// Maps a failure raised out of a transport's ExecuteAsync to a result. External cancellation
+    /// yields <see cref="CancelledResult"/>, which callers must not count as an error.
+    /// </summary>
+    internal static TransportResult FromException(Exception ex, CancellationToken ct) => ex switch
+    {
+        TaskCanceledException when ct.IsCancellationRequested => CancelledResult,
+        TaskCanceledException => new TransportResult(0, 0, "Operation timed out"),
+        HttpRequestException httpEx => new TransportResult(0, 0, $"HTTP {httpEx.Data["StatusCode"] ?? "Error"}: {httpEx.Message}"),
+        _ => new TransportResult(0, 0, ex.Message)
+    };
+
+    /// <summary>
     /// Index name used by the query (populated for query operations).
     /// </summary>
     public string? IndexName { get; } = indexName;
@@ -39,12 +51,6 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     /// Whether the index was stale at query time (populated for query operations).
     /// </summary>
     public bool? IsStale { get; } = isStale;
-
-    /// <summary>
-    /// Query execution duration in milliseconds as reported by RavenDB (populated for query operations).
-    /// This is the server-side query execution time, not the full round-trip time.
-    /// </summary>
-    public double? QueryDurationMs { get; } = queryDurationMs;
 }
 
 public readonly struct CalibrationResult(double ttfbMs, double totalMs, long bytesDown, Version httpVersion, bool isSuccess = true, string? errorDetails = null)
