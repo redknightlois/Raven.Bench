@@ -8,7 +8,6 @@ using Raven.Client.Documents;
 using Raven.Client.Documents.Indexes;
 using Raven.Client.Documents.Indexes.Vector;
 using Raven.Client.Documents.Operations;
-using Raven.Client.Documents.Operations.Indexes;
 using Raven.Client.ServerWide;
 using Raven.Client.ServerWide.Operations;
 using RavenBench.Core;
@@ -21,7 +20,7 @@ namespace RavenBench.Dataset;
 /// Supports profiles from 100K to 899M passages. Streams .jsonl.tar.gz files directly into RavenDB
 /// bulk insert with no intermediate decompressed files on disk.
 /// </summary>
-public sealed class SphereDatasetProvider : IDatasetProvider
+public sealed class SphereDatasetProvider
 {
     public const int VectorDimensions = 768; // facebook-dpr-ctx_encoder-single-nq-base
     public const string CollectionName = "Passages";
@@ -79,73 +78,18 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         _profile = profile;
     }
 
-    public string DatasetName => "sphere";
     public string Profile => _profile;
 
     public static IReadOnlyCollection<string> AvailableProfiles => Profiles.Keys;
-
-    public DatasetInfo GetDatasetInfo(string? profile = null, int? customSize = null)
-    {
-        var p = ResolveProfile(profile);
-        return new DatasetInfo
-        {
-            Name = $"SPHERE-{(profile ?? _profile).ToUpperInvariant()}",
-            Description = $"SPHERE {p.TargetDocCount:N0} passages with {VectorDimensions}D DPR embeddings",
-            MaxQuestionId = 0,
-            MaxUserId = 0,
-            Files = new()
-        };
-    }
 
     public string GetDatabaseName(string? profile = null, int? customSize = null)
     {
         return ResolveProfile(profile).DatabaseName;
     }
 
-    public async Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName,
-        int expectedMinDocuments = 1000, Version? httpVersion = null)
-    {
-        try
-        {
-            using var store = new DocumentStore { Urls = [serverUrl], Database = databaseName };
-            if (httpVersion != null)
-                HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-            store.Initialize();
-
-            var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName));
-            if (dbRecord == null)
-            {
-                Console.WriteLine($"[Sphere] Database '{databaseName}' does not exist");
-                return false;
-            }
-
-            var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
-            if (stats.CountOfDocuments < expectedMinDocuments)
-            {
-                Console.WriteLine($"[Sphere] Database '{databaseName}' has {stats.CountOfDocuments} documents (expected >= {expectedMinDocuments})");
-                return false;
-            }
-
-            using var session = store.OpenAsyncSession();
-            var passagesExist = await session.Advanced.AsyncRawQuery<object>($"from {CollectionName}")
-                .Take(1)
-                .AnyAsync();
-
-            if (passagesExist == false)
-            {
-                Console.WriteLine($"[Sphere] Database '{databaseName}' exists but '{CollectionName}' collection is missing");
-                return false;
-            }
-
-            Console.WriteLine($"[Sphere] Database '{databaseName}' already has {stats.CountOfDocuments:N0} documents - skipping import");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[Sphere] Skip check failed: {ex.Message}");
-            return false;
-        }
-    }
+    public Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName,
+        int expectedMinDocuments = 1000, Version? httpVersion = null) =>
+        DatasetImportCheck.RunAsync(serverUrl, databaseName, httpVersion, "[Sphere]", CollectionName, expectedMinDocuments);
 
     /// <summary>
     /// Streams a .jsonl.tar.gz source into RavenDB via bulk insert. Supports resume and measures
@@ -163,10 +107,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
         int? numberOfCandidatesForIndexing = null,
         CancellationToken ct = default)
     {
-        using var store = new DocumentStore { Urls = [serverUrl], Database = databaseName };
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
         var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName));
         if (dbRecord == null)
@@ -277,10 +218,7 @@ public sealed class SphereDatasetProvider : IDatasetProvider
     public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(
         string serverUrl, string databaseName, int count = 1000, Version? httpVersion = null, int seed = 42)
     {
-        using var store = new DocumentStore { Urls = [serverUrl], Database = databaseName };
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
         var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
         var totalDocs = stats.CountOfDocuments;
@@ -576,18 +514,8 @@ public sealed class SphereDatasetProvider : IDatasetProvider
             Configuration = new IndexConfiguration { { "Indexing.Static.SearchEngineType", engineName } }
         };
 
-        await store.Maintenance.SendAsync(new PutIndexesOperation(index));
-        Console.WriteLine($"[Sphere] Created index '{indexName}'");
-
-        Console.WriteLine($"[Sphere] Waiting for index to become non-stale...");
-        using var session = store.OpenAsyncSession();
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-        await session.Query<Passage>(indexName)
-            .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
-            .Take(0)
-            .ToListAsync();
-
-        Console.WriteLine($"[Sphere] Index '{indexName}' is ready");
+        await VectorIndexHelper.CreateAndWaitForIndexAsync(store, index, "[Sphere]");
+        Console.WriteLine($"[Sphere] Index '{index.Name}' is ready");
     }
 
     // --- Checkpoint management ---

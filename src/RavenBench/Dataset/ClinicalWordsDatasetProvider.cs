@@ -1,7 +1,5 @@
-using System.Net;
 using System.Text.RegularExpressions;
 using Parquet;
-using Parquet.Serialization;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations;
 using Raven.Client.ServerWide;
@@ -9,9 +7,7 @@ using Raven.Client.ServerWide.Operations;
 using RavenBench.Core.Workload;
 using Raven.Client.Documents.Indexes;
 using Raven.Client.Documents.Indexes.Vector;
-using Raven.Client.Documents.BulkInsert;
 using Raven.Client.Documents.Operations.Indexes;
-using Raven.Client.Json;
 using RavenBench.Core;
 
 namespace RavenBench.Dataset;
@@ -19,7 +15,7 @@ namespace RavenBench.Dataset;
 /// <summary>
 /// Word embeddings provider for clinical vocabulary (Word2Vec 100D, 300D, 600D).
 /// </summary>
-public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
+public sealed class ClinicalWordsDatasetProvider
 {
     /// <summary>
     /// Helper record for deserializing word documents during batch import.
@@ -50,7 +46,6 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         _dimensions = dimensions;
     }
 
-    public string DatasetName => $"clinicalwords{_dimensions}d";
     public int Dimensions => _dimensions;
     public static IReadOnlyCollection<int> AvailableDimensions => ParquetFiles.Keys;
 
@@ -198,73 +193,15 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         };
     }
 
-    // IDatasetProvider implementation
-    public DatasetInfo GetDatasetInfo(string? profile = null, int? customSize = null) => new()
-    {
-        Name = $"ClinicalWords{_dimensions}D",
-        Description = $"Clinical Word2Vec {_dimensions}D embeddings",
-        MaxQuestionId = 0, MaxUserId = 0, Files = new() 
-    };
-
     public string GetDatabaseName(string? profile = null, int? customSize = null) => $"ClinicalWords{_dimensions}D";
 
     public async Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000, Version? httpVersion = null)
     {
         // Check if parquet file exists locally
-        try { GetParquetPath(); } 
+        try { GetParquetPath(); }
         catch { return false; }
 
-        try
-        {
-            using var store = new DocumentStore 
-            { 
-                Urls = new[] { serverUrl },
-                Database = databaseName
-            };
-            if (httpVersion != null)
-                HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-            store.Initialize();
-
-            // Step 1: Check if database exists at server level
-            var dbRecord = await store.Maintenance.Server.SendAsync(
-                new GetDatabaseRecordOperation(databaseName));
-            if (dbRecord == null)
-            {
-                Console.WriteLine($"[ClinicalWords] Database '{databaseName}' does not exist");
-                return false;
-            }
-
-            // Step 2: Check document count
-            var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
-
-            if (stats.CountOfDocuments < expectedMinDocuments)
-            {
-                Console.WriteLine($"[ClinicalWords] Database '{databaseName}' exists but has only " +
-                    $"{stats.CountOfDocuments} documents (expected >= {expectedMinDocuments})");
-                return false;
-            }
-
-            // Step 3: Verify WordDocuments collection exists with vector data
-            using var session = store.OpenAsyncSession();
-            var wordsExist = await session.Advanced.AsyncRawQuery<object>("from WordDocuments")
-                .Take(1)
-                .AnyAsync();
-
-            if (wordsExist == false)
-            {
-                Console.WriteLine($"[ClinicalWords] Database '{databaseName}' exists but 'WordDocuments' collection is missing");
-                return false;
-            }
-
-            Console.WriteLine($"[ClinicalWords] Database '{databaseName}' already has " +
-                $"{stats.CountOfDocuments:N0} documents with words collection - skipping import");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ClinicalWords] Skip check failed: {ex.Message}");
-            return false;
-        }
+        return await DatasetImportCheck.RunAsync(serverUrl, databaseName, httpVersion, "[ClinicalWords]", "WordDocuments", expectedMinDocuments);
     }
 
     /// <summary>
@@ -280,10 +217,7 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         Version? httpVersion = null,
         IndexingEngine searchEngine = IndexingEngine.Corax)
     {
-        using var store = new DocumentStore { Urls = new[] { serverUrl }, Database = databaseName };
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
         // Create database if needed (use default Corax, search engine is set per-index)
         var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName));
@@ -362,20 +296,11 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
             Configuration = new IndexConfiguration { { "Indexing.Static.SearchEngineType", engineName } }
         };
 
-        await store.Maintenance.SendAsync(new PutIndexesOperation(index));
-        Console.WriteLine($"[ClinicalWords] Created index '{indexName}'");
-
-        // Wait for index to become non-stale (indefinitely - indexing large datasets can take time)
-        Console.WriteLine($"[ClinicalWords] Waiting for index to become non-stale...");
-        using var session = store.OpenAsyncSession();
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-        await session.Query<WordDocument>(indexName)
-            .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
-            .Take(0)
-            .ToListAsync();
+        await VectorIndexHelper.CreateAndWaitForIndexAsync(store, index, "[ClinicalWords]");
 
         // Sanity check: verify we can query the index
         Console.WriteLine($"[ClinicalWords] Running sanity check...");
+        using var session = store.OpenAsyncSession();
         var sampleResults = await session.Query<WordDocument>(indexName)
             .Take(5)
             .ToListAsync();
@@ -392,13 +317,6 @@ public sealed class ClinicalWordsDatasetProvider : IDatasetProvider
         }
     }
 
-
-    public static async Task<VectorWorkloadMetadata> LoadQueryVectorsAsync(string queryFilePath)
-    {
-        var json = await File.ReadAllTextAsync(queryFilePath);
-        var queries = System.Text.Json.JsonSerializer.Deserialize<List<float[]>>(json)!;
-        return new VectorWorkloadMetadata { QueryVectors = queries.ToArray(), FieldName = "Embedding" };
-    }
 
     /// <summary>
     /// Sanitizes a word for use as a RavenDB document ID suffix.

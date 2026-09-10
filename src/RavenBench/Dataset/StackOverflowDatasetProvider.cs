@@ -1,9 +1,7 @@
-using System.Net;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Indexes;
 using Raven.Client.Documents.Operations;
 using Raven.Client.Documents.Operations.Indexes;
-using Raven.Client.ServerWide.Operations;
 using RavenBench.Core;
 
 namespace RavenBench.Dataset;
@@ -11,99 +9,8 @@ namespace RavenBench.Dataset;
 /// <summary>
 /// Dataset provider for StackOverflow data with questions and users collections.
 /// </summary>
-public class StackOverflowDatasetProvider : IDatasetProvider
+public class StackOverflowDatasetProvider
 {
-    public string DatasetName => "stackoverflow";
-
-    public DatasetInfo GetDatasetInfo(string? profile = null, int? customSize = null)
-    {
-        if (string.IsNullOrEmpty(profile) == false)
-        {
-            var parsedProfile = Enum.Parse<DatasetProfile>(profile, ignoreCase: true);
-            var size = KnownDatasets.GetDatasetSize(parsedProfile);
-            return KnownDatasets.StackOverflowPartial(size);
-        }
-        else if (customSize.HasValue)
-        {
-            return KnownDatasets.StackOverflowPartial(customSize.Value);
-        }
-        else
-        {
-            return KnownDatasets.StackOverflow;
-        }
-    }
-
-    public string GetDatabaseName(string? profile = null, int? customSize = null)
-    {
-        if (string.IsNullOrEmpty(profile) == false)
-        {
-            var parsedProfile = Enum.Parse<DatasetProfile>(profile, ignoreCase: true);
-            return KnownDatasets.GetDatabaseName(parsedProfile);
-        }
-        else if (customSize.HasValue)
-        {
-            return KnownDatasets.GetDatabaseNameForSize(customSize.Value);
-        }
-        else
-        {
-            return "StackOverflow";
-        }
-    }
-
-    public async Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000, Version? httpVersion = null)
-    {
-        try
-        {
-            using var store = new DocumentStore
-            {
-                Urls = new[] { serverUrl }
-            };
-            if (httpVersion != null)
-                HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-            store.Initialize();
-
-            // First check if database exists
-            var dbRecord = await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(databaseName));
-            if (dbRecord == null)
-            {
-                Console.WriteLine($"[Dataset] Database '{databaseName}' does not exist");
-                return false;
-            }
-
-            var stats = await store.Maintenance.ForDatabase(databaseName).SendAsync(new GetStatisticsOperation());
-
-            if (stats.CountOfDocuments < expectedMinDocuments)
-            {
-                Console.WriteLine($"[Dataset] Database '{databaseName}' exists but has only {stats.CountOfDocuments} documents (expected >= {expectedMinDocuments})");
-                return false;
-            }
-
-            // Verify StackOverflow-specific collections: questions and users
-            using var session = store.OpenAsyncSession(databaseName);
-            var questionsExist = await session.Advanced.AsyncRawQuery<object>("from questions")
-                .Take(1)
-                .AnyAsync();
-
-            var usersExist = await session.Advanced.AsyncRawQuery<object>("from users")
-                .Take(1)
-                .AnyAsync();
-
-            if (questionsExist == false || usersExist == false)
-            {
-                Console.WriteLine($"[Dataset] Database '{databaseName}' exists but missing expected collections (questions: {questionsExist}, users: {usersExist})");
-                return false;
-            }
-
-            Console.WriteLine($"[Dataset] Database '{databaseName}' already has {stats.CountOfDocuments} documents with expected collections");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[Dataset] Error checking if dataset exists: {ex.Message}");
-            return false;
-        }
-    }
-
     /// <summary>
     /// Result of creating static indexes for StackOverflow workloads.
     /// Contains the actual index names with engine suffix for use by workloads.
@@ -135,14 +42,7 @@ public class StackOverflowDatasetProvider : IDatasetProvider
         Version? httpVersion = null,
         IReadOnlyCollection<StackOverflowIndex>? extraIndexes = null)
     {
-        using var store = new DocumentStore
-        {
-            Urls = new[] { serverUrl },
-            Database = databaseName
-        };
-        if (httpVersion != null)
-            HttpHelper.ConfigureHttpVersion(store, httpVersion, HttpVersionPolicy.RequestVersionExact);
-        store.Initialize();
+        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
         var baseIndexes = new[]
         {

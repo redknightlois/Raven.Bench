@@ -22,7 +22,6 @@ public sealed class DatasetFile
     public required string Type { get; init; } // "indexes", "users", "questions", "posts"
     public required long EstimatedSizeBytes { get; init; }
     public string? Description { get; init; }
-    public string[]? MirrorUrls { get; init; }
 }
 
 /// <summary>

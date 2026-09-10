@@ -33,17 +33,6 @@ public class SphereDatasetProviderTests
     }
 
     [Fact]
-    public void GetDatasetInfo_ReturnsCorrectInfo()
-    {
-        var provider = new SphereDatasetProvider("1m");
-        var info = provider.GetDatasetInfo("1m");
-
-        Assert.Contains("SPHERE", info.Name);
-        Assert.Contains("1,000,000", info.Description);
-        Assert.Contains("768", info.Description);
-    }
-
-    [Fact]
     public void GetProfile_ReturnsCorrectTargetDocCount()
     {
         var profile = SphereDatasetProvider.GetProfile("100k");
@@ -186,13 +175,6 @@ public class SphereDatasetProviderTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
-    }
-
-    [Fact]
-    public void DatasetName_IsSphere()
-    {
-        var provider = new SphereDatasetProvider("100k");
-        Assert.Equal("sphere", provider.DatasetName);
     }
 
     [Fact]
