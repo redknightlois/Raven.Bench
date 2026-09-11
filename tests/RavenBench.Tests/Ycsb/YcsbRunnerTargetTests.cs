@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench.Cli;
+using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Ycsb;
 using RavenBench.Reporter;
@@ -92,6 +94,35 @@ public class YcsbRunnerTargetTests
         YcsbRunner.ResolveConcurrencyCeiling(scenario, "unused", "unused").Should().BeGreaterThanOrEqualTo(16);
     }
 
+    private static void AssertProvenance(List<(YcsbRunKind Kind, BenchmarkSummary Summary)> results)
+    {
+        results.Select(r => r.Summary.Ycsb!.Run).Should().OnlyHaveUniqueItems();
+
+        var fingerprint = results[0].Summary.MachineFingerprint;
+        fingerprint.Should().NotBeNull("the ycsb entry point collects the machine fingerprint at run start");
+
+        foreach (var (_, summary) in results)
+        {
+            summary.MachineFingerprint.Should().Be(fingerprint);
+            summary.Ycsb!.ImageReference.Should().NotBeNullOrWhiteSpace("a containerized target records the image that ran");
+            summary.Ycsb.ImageDigest.Should().NotBeNullOrWhiteSpace();
+        }
+
+        var paths = results
+            .SelectMany(r => r.Summary.HistogramArtifacts!)
+            .SelectMany(a => new[] { a.HlogPath, a.CsvPath })
+            .ToList();
+
+        paths.Should().NotContainNulls("every ycsb step writes both the HdrHistogram log and the CSV");
+        paths.Should().OnlyHaveUniqueItems("the run identity keeps the five runs' artifacts apart");
+
+        foreach (var path in paths)
+        {
+            File.Exists(path).Should().BeTrue($"the result names '{path}'");
+            new FileInfo(path!).Length.Should().BeGreaterThan(0);
+        }
+    }
+
     private static async Task RunDispatchedSequence(string connectionString, string target, string expectedProductName)
     {
         var database = "ycsb_dispatch_" + Guid.NewGuid().ToString("N");
@@ -137,6 +168,8 @@ public class YcsbRunnerTargetTests
                 summary.Options.Url.Should().NotContain("bench:bench", "no result field may carry the connection-string password");
             }
 
+            AssertProvenance(results);
+
             var path = Path.Combine(Path.GetTempPath(), $"ycsb-dispatch-{Guid.NewGuid():N}.json");
             try
             {
@@ -147,6 +180,10 @@ public class YcsbRunnerTargetTests
                 loaded.SchemaVersion.Should().Be(SummaryLoader.ExpectedSchemaVersion);
                 loaded.Ycsb!.ProductName.Should().Be(expectedProductName);
                 loaded.Ycsb.Durability.Value.Should().Be("j=true");
+                loaded.Ycsb.ImageReference.Should().Be(results[0].Summary.Ycsb!.ImageReference);
+                loaded.Ycsb.ImageDigest.Should().Be(results[0].Summary.Ycsb!.ImageDigest);
+                loaded.MachineFingerprint.Should().NotBeNull();
+                loaded.MachineFingerprint!.HarnessCommit.Should().Be(results[0].Summary.MachineFingerprint!.HarnessCommit);
             }
             finally
             {
@@ -204,6 +241,8 @@ public class YcsbRunnerTargetTests
             summary.Steps.Should().OnlyContain(step => step.NetworkBytesMeasured == false, "the driver does not expose the socket");
         }
 
+        AssertProvenance(results);
+
         var path = Path.Combine(Path.GetTempPath(), $"ycsb-pg-dispatch-{Guid.NewGuid():N}.json");
         try
         {
@@ -215,6 +254,9 @@ public class YcsbRunnerTargetTests
             loaded.Ycsb!.ProductName.Should().Be("PostgreSQL");
             loaded.Ycsb.Durability.Setting.Should().Be("synchronous_commit");
             loaded.Ycsb.Durability.Value.Should().Be("on");
+            loaded.Ycsb.ImageReference.Should().Be(results[0].Summary.Ycsb!.ImageReference);
+            loaded.Ycsb.ImageDigest.Should().Be(results[0].Summary.Ycsb!.ImageDigest);
+            loaded.MachineFingerprint.Should().NotBeNull();
         }
         finally
         {

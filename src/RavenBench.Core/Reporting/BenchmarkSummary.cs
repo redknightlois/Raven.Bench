@@ -26,6 +26,12 @@ public sealed class BenchmarkSummary
     public List<HistogramArtifact>? HistogramArtifacts { get; init; }
 
     /// <summary>
+    /// The machine the run executed on, collected at run start. Present on a result from the ycsb
+    /// entry point; absent from a result produced by any other command.
+    /// </summary>
+    public MachineFingerprint? MachineFingerprint { get; init; }
+
+    /// <summary>
     /// Recall@K measurement results for vector search benchmarks.
     /// Null when recall measurement is not enabled (--vector-recall-ks not specified).
     /// When efSearch sweep is used, this holds the result for the default efSearch.

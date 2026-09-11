@@ -25,4 +25,16 @@ public sealed record YcsbRunInfo
     public required string ProductName { get; init; }
     public required string ServerVersion { get; init; }
     public required DurabilityParity Durability { get; init; }
+
+    /// <summary>
+    /// The image reference that ran a containerized target. Absent for the external RavenDB
+    /// target, because that server did not run in a container the benchmark used.
+    /// </summary>
+    public string? ImageReference { get; init; }
+
+    /// <summary>
+    /// The repo digest of the image that served the run. Absent when the target did not run in a
+    /// container.
+    /// </summary>
+    public string? ImageDigest { get; init; }
 }
