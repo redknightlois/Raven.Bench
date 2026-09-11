@@ -2,10 +2,14 @@
 #
 # Runs the ycsb benchmark against one target end to end: load, C, A, B and insert-stream.
 #
-# The script starts the target from this folder's compose file when its endpoint does not already
-# answer, waits until the endpoint answers, runs the ycsb command on this folder's scenario, and
-# stops the container it started. RavenDB is an external server: the script uses the reachable
-# server and starts no container for it. The script addresses only the endpoints this file names.
+# The script is endpoint-driven. It probes the target's endpoint first. It starts a container from
+# this folder's compose file only when the caller gave no --url and the target's default localhost
+# endpoint does not answer. Every other path completes without Docker on the client, and a caller
+# endpoint is used as given.
+#
+# The external RavenDB development server is never started by this script. The five containerized
+# targets (ravendb-6, ravendb-7, postgresql, mongodb, documentdb) are started from the compose file
+# when they are needed and are stopped again only when this script started them.
 #
 # Every option other than --target is forwarded to the ycsb command unchanged. A caller-supplied
 # --scenario, --url, --database or --output-prefix replaces the script default rather than being
@@ -25,14 +29,19 @@ READY_POLL_SECONDS=2
 
 usage() {
   cat <<'EOF'
-Usage: run.sh --target <ravendb|postgresql|mongodb|documentdb> [options]
+Usage: run.sh --target <ravendb|ravendb-6|ravendb-7|postgresql|mongodb|documentdb> [options]
 
 Runs the ycsb load, C, A, B and insert-stream runs and writes one result JSON per run under
 benchmarks/ycsb/results/. Every other option is forwarded to the ycsb command unchanged.
 
+The script starts a target from benchmarks/ycsb/docker-compose.yml only when no --url was given
+and the target's default localhost endpoint does not answer. A caller-supplied --url is used as
+given and starts nothing.
+
 Examples:
   ./benchmarks/ycsb/run.sh --target ravendb
   ./benchmarks/ycsb/run.sh --target mongodb --seed 7 --doc-count 1000
+  ./benchmarks/ycsb/run.sh --target postgresql --url postgresql://bench:bench@db-host:5432/bench
 EOF
 }
 
@@ -61,23 +70,38 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TARGET" ]]; then
-  echo "error: --target is required. Valid targets: ravendb, postgresql, mongodb, documentdb." >&2
+  echo "error: --target is required. Valid targets: ravendb, ravendb-6, ravendb-7, postgresql, mongodb, documentdb." >&2
   exit 2
 fi
 
 case "$TARGET" in
-  ravendb|postgresql|mongodb|documentdb) ;;
+  ravendb|ravendb-6|ravendb-7|postgresql|mongodb|documentdb) ;;
   *)
-    echo "error: unknown target '$TARGET'. Valid targets: ravendb, postgresql, mongodb, documentdb." >&2
+    echo "error: unknown target '$TARGET'. Valid targets: ravendb, ravendb-6, ravendb-7, postgresql, mongodb, documentdb." >&2
     exit 2
     ;;
 esac
+
+# The host ports of the two containerized RavenDB services are overridable, so a database host can
+# move them and a caller can point the script's default endpoint away from a port already in use.
+RAVENDB6_PORT="${RAVENDB6_PORT:-8086}"
+RAVENDB7_PORT="${RAVENDB7_PORT:-8087}"
 
 case "$TARGET" in
   ravendb)
     DEFAULT_URL="http://localhost:8081"
     DEFAULT_PORT=8081
     COMPOSE_SERVICE=""
+    ;;
+  ravendb-6)
+    DEFAULT_URL="http://localhost:$RAVENDB6_PORT"
+    DEFAULT_PORT="$RAVENDB6_PORT"
+    COMPOSE_SERVICE="ravendb-6"
+    ;;
+  ravendb-7)
+    DEFAULT_URL="http://localhost:$RAVENDB7_PORT"
+    DEFAULT_PORT="$RAVENDB7_PORT"
+    COMPOSE_SERVICE="ravendb-7"
     ;;
   postgresql)
     DEFAULT_URL="postgresql://bench:bench@localhost:5432/bench"
@@ -156,11 +180,37 @@ probe_endpoint() {
   return 1
 }
 
+# A Docker-published port accepts a TCP connection before the server inside is ready to answer
+# HTTP, so a RavenDB target is ready only when /build/version returns an HTTP status line.
+probe_http_ready() {
+  local host="$1" port="$2"
+  (
+    exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || exit 1
+    printf 'GET /build/version HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$host" >&3 2>/dev/null || exit 1
+    local line
+    IFS= read -t 3 -r line <&3 2>/dev/null || exit 1
+    [[ "$line" == *" 200 "* ]]
+  )
+}
+
+is_ravendb_target() {
+  [[ "$TARGET" == "ravendb" || "$TARGET" == "ravendb-6" || "$TARGET" == "ravendb-7" ]]
+}
+
+probe_ready() {
+  local host="$1" port="$2"
+  if is_ravendb_target; then
+    probe_http_ready "$host" "$port"
+  else
+    probe_endpoint "$host" "$port"
+  fi
+}
+
 wait_for_endpoint() {
   local host="$1" port="$2"
   local deadline=$((SECONDS + READY_TIMEOUT))
   while (( SECONDS < deadline )); do
-    if probe_endpoint "$host" "$port"; then
+    if probe_ready "$host" "$port"; then
       return 0
     fi
     sleep "$READY_POLL_SECONDS"
@@ -168,16 +218,70 @@ wait_for_endpoint() {
   return 1
 }
 
+docker_cli_available() {
+  command -v docker >/dev/null 2>&1
+}
+
+docker_daemon_available() {
+  docker info >/dev/null 2>&1
+}
+
+# The two Docker failures have different fixes, so they never share a message. The check runs
+# before the harness build, so a user does not wait for a compile to learn Docker is unusable.
+require_docker_to_start() {
+  if ! docker_cli_available; then
+    echo "error: Docker is not installed and the script must start the '$TARGET' container." >&2
+    echo "Install Docker, or start the target on another host and rerun with --url:" >&2
+    echo "  docker compose -f benchmarks/ycsb/docker-compose.yml up -d $COMPOSE_SERVICE" >&2
+    echo "  ./benchmarks/ycsb/run.sh --target $TARGET --url <endpoint>" >&2
+    exit 1
+  fi
+
+  if ! docker_daemon_available; then
+    echo "error: Docker is installed but the daemon is not reachable, and the script must start the '$TARGET' container." >&2
+    echo "Join the 'docker' group or run with sudo, or start the target elsewhere and rerun with --url <endpoint>." >&2
+    exit 1
+  fi
+}
+
 # PostgreSQL has no lazy database creation: the transport connects to the run's database and then
-# creates its table, so a fresh run database must exist first. The local container's psql does that.
-# MongoDB and DocumentDB create the database on first write, and the RavenDB transport creates it.
+# creates its table, so a fresh run database must exist first. The client's psql creates it when
+# present; otherwise a local container that publishes the endpoint's port does; otherwise the run
+# fails and tells the user to create the database on the database host and pass --database.
 ensure_postgres_database() {
+  local database="$1"
+
+  if command -v psql >/dev/null 2>&1; then
+    create_postgres_database_with_psql "$database"
+    return 0
+  fi
+
+  if docker_cli_available && docker_daemon_available; then
+    if create_postgres_database_with_container "$database"; then
+      return 0
+    fi
+  fi
+
+  echo "error: the run database '$database' does not exist, and this client has neither 'psql' nor a usable local Docker to create it." >&2
+  echo "Create the database on the database host, then rerun with --database '$database'." >&2
+  exit 1
+}
+
+create_postgres_database_with_psql() {
+  local database="$1"
+  local exists
+  exists="$(psql "$URL" -tAc "SELECT 1 FROM pg_database WHERE datname = '$database'")"
+  if [[ "$exists" != "1" ]]; then
+    psql "$URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$database\""
+  fi
+}
+
+create_postgres_database_with_container() {
   local database="$1"
   local container
   container="$(docker ps --filter "publish=$PORT" --format '{{.ID}}' | head -n 1)"
   if [[ -z "$container" ]]; then
-    echo "error: no local PostgreSQL container publishes port $PORT, so the script cannot create database '$database'. Pass --database for an endpoint you manage." >&2
-    exit 1
+    return 1
   fi
 
   local exists
@@ -218,9 +322,14 @@ else
     echo "error: the $TARGET endpoint at $HOST:$PORT did not answer; the script does not start a local container for a caller-supplied --url." >&2
     exit 1
   fi
-  echo "Starting the $TARGET container from $COMPOSE_FILE."
-  docker compose -f "$COMPOSE_FILE" up -d "$COMPOSE_SERVICE"
+  require_docker_to_start
+  echo "Starting the $TARGET container from $COMPOSE_FILE; it will answer at $HOST:$PORT."
+  # STARTED_COMPOSE is set before the start, so the exit trap stops a partially started container.
   STARTED_COMPOSE=1
+  if ! docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout "$READY_TIMEOUT" "$COMPOSE_SERVICE"; then
+    echo "error: the $TARGET container did not become ready within ${READY_TIMEOUT}s." >&2
+    exit 1
+  fi
 fi
 
 if ! wait_for_endpoint "$HOST" "$PORT"; then

@@ -120,6 +120,45 @@ public class YcsbRunnerIntegrationTests : RavenTestDriver
         }
     }
 
+    [Theory]
+    [InlineData("ravendb-6")]
+    [InlineData("ravendb-7")]
+    public async Task A_Containerized_RavenDb_Target_Dispatches_To_The_RavenDb_Transport(string target)
+    {
+        using var store = GetDocumentStore();
+
+        var scenario = new YcsbScenario
+        {
+            Seed = 9,
+            Target = target,
+            DocumentCount = 10,
+            DocumentSize = "256B",
+            Concurrency = "2..2",
+            Distribution = "uniform",
+            Warmup = "0s",
+            Duration = "200ms"
+        };
+
+        var settings = new YcsbSettings
+        {
+            Url = store.Urls[0],
+            Database = store.Database,
+            Scenario = "unused-in-this-test.json",
+            BulkBatchSize = 5
+        };
+
+        var results = await new YcsbRunner(scenario, settings).RunAsync();
+
+        results.Should().HaveCount(5);
+        foreach (var (_, summary) in results)
+        {
+            summary.Ycsb!.ProductName.Should().Be("RavenDB");
+            summary.Ycsb.ServerVersion.Should().NotBeNullOrWhiteSpace();
+            summary.Ycsb.Durability.Setting.Should().Be("durability");
+            summary.Ycsb.ResolvedScenario.Target.Should().Be(target, "the target value reaches the resolved scenario");
+        }
+    }
+
     [Fact]
     public async Task Load_Run_Fills_The_Keyspace_The_Later_Runs_Depend_On()
     {

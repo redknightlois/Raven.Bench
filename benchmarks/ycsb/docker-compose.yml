@@ -1,9 +1,13 @@
-# Self-contained compose file for the ycsb benchmark. It defines the three containerized
-# targets; RavenDB is an external server and has no service here. Every mount is a Docker named
-# volume, so the file stands alone on a clean clone.
+# Self-contained compose file for the ycsb benchmark. It defines the five containerized targets;
+# the external RavenDB development server is not a service here. Every mount is a Docker named
+# volume, so the file stands alone on a clean clone and is the whole recipe for a database host.
 #
 # The harness records the image that actually served a run from the running container, so the
 # moving tags below are safe: the recorded repo digest pins the image.
+#
+# The two containerized RavenDB services set the server's public URL from RAVENDB_HOST, whose
+# default is localhost. On a database host that is not the client, set RAVENDB_HOST to that host's
+# name, in the operator's environment, before `docker compose up`.
 name: ravenbench-ycsb
 
 services:
@@ -42,7 +46,49 @@ services:
       - ycsb-documentdb-data:/data
     restart: unless-stopped
 
+  # The latest 6.x and 7.x RavenDB series. Each binds its own host HTTP port and its own host TCP
+  # port. The container's HTTP port is the same as the published host port, because a single node
+  # contacts itself through its advertised URL: a mismatch would refuse the connection from
+  # inside the container. The port table of this folder never addresses the other server's port.
+  ravendb-6:
+    image: ravendb/ravendb:6.2-latest
+    container_name: ycsb-ravendb-6
+    ports:
+      - "${RAVENDB6_PORT:-8086}:${RAVENDB6_PORT:-8086}"
+      - "${RAVENDB6_TCP_PORT:-38886}:${RAVENDB6_TCP_PORT:-38886}"
+    environment:
+      RAVEN_Setup_Mode: None
+      RAVEN_License_Eula_Accepted: "true"
+      RAVEN_Security_UnsecuredAccessAllowed: PublicNetwork
+      RAVEN_ServerUrl: "http://0.0.0.0:${RAVENDB6_PORT:-8086}"
+      RAVEN_PublicServerUrl: "http://${RAVENDB_HOST:-localhost}:${RAVENDB6_PORT:-8086}"
+      RAVEN_ServerUrl_Tcp: "tcp://0.0.0.0:${RAVENDB6_TCP_PORT:-38886}"
+      RAVEN_PublicServerUrl_Tcp: "tcp://${RAVENDB_HOST:-localhost}:${RAVENDB6_TCP_PORT:-38886}"
+    volumes:
+      - ycsb-ravendb6-data:/var/lib/ravendb/data
+    restart: unless-stopped
+
+  ravendb-7:
+    image: ravendb/ravendb:7.2-latest
+    container_name: ycsb-ravendb-7
+    ports:
+      - "${RAVENDB7_PORT:-8087}:${RAVENDB7_PORT:-8087}"
+      - "${RAVENDB7_TCP_PORT:-38887}:${RAVENDB7_TCP_PORT:-38887}"
+    environment:
+      RAVEN_Setup_Mode: None
+      RAVEN_License_Eula_Accepted: "true"
+      RAVEN_Security_UnsecuredAccessAllowed: PublicNetwork
+      RAVEN_ServerUrl: "http://0.0.0.0:${RAVENDB7_PORT:-8087}"
+      RAVEN_PublicServerUrl: "http://${RAVENDB_HOST:-localhost}:${RAVENDB7_PORT:-8087}"
+      RAVEN_ServerUrl_Tcp: "tcp://0.0.0.0:${RAVENDB7_TCP_PORT:-38887}"
+      RAVEN_PublicServerUrl_Tcp: "tcp://${RAVENDB_HOST:-localhost}:${RAVENDB7_TCP_PORT:-38887}"
+    volumes:
+      - ycsb-ravendb7-data:/var/lib/ravendb/data
+    restart: unless-stopped
+
 volumes:
   ycsb-postgresql-data:
   ycsb-mongodb-data:
   ycsb-documentdb-data:
+  ycsb-ravendb6-data:
+  ycsb-ravendb7-data:
