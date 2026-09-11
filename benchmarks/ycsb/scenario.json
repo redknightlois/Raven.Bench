@@ -1,0 +1,10 @@
+{
+  "Seed": 42,
+  "Target": "ravendb",
+  "DocumentCount": 100000,
+  "DocumentSize": "1KB",
+  "Concurrency": "8..64x2",
+  "Distribution": "uniform",
+  "Warmup": "10s",
+  "Duration": "30s"
+}
