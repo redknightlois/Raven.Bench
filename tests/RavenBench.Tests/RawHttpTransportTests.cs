@@ -22,7 +22,7 @@ public class RawHttpTransportTests
     {
         // INVARIANT: WriteWorkload payloads must be valid JSON objects, not double-serialized strings.
 
-        var workload = new WriteWorkload(1024);
+        var workload = new WriteWorkload(1024, seed: 42);
         var rng = new Random(42);
         var op = workload.NextOperation(rng);
 

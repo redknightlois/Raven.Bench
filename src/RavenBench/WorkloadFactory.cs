@@ -32,10 +32,10 @@ internal static class WorkloadFactory
         return opts.Profile switch
         {
             WorkloadProfile.Mixed => BuildMixedWorkload(opts, CreateDistribution()),
-            WorkloadProfile.Writes => new WriteWorkload(opts.DocumentSizeBytes, startingKey: opts.Preload, payload: PayloadFor(opts)),
+            WorkloadProfile.Writes => new WriteWorkload(opts.DocumentSizeBytes, opts.Seed, startingKey: opts.Preload, payload: PayloadFor(opts)),
             WorkloadProfile.Reads => BuildReadWorkload(opts, CreateDistribution()),
             WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
-            WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, startingKey: opts.Preload, payload: PayloadFor(opts)),
+            WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, opts.Seed, startingKey: opts.Preload, payload: PayloadFor(opts)),
             WorkloadProfile.StackOverflowRandomReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
             WorkloadProfile.StackOverflowTextSearch => BuildStackOverflowQueryWorkload(opts, stackOverflowMetadata!),
             WorkloadProfile.QueryUsersByName => BuildUsersQueryWorkload(opts, usersMetadata!),
@@ -63,7 +63,7 @@ internal static class WorkloadFactory
         var writes = opts.Writes ?? 0.0;
         var updates = opts.Updates ?? 25.0;
         var mix = WorkloadMix.FromWeights(reads, writes, updates);
-        return new MixedProfileWorkload(mix, distribution, opts.DocumentSizeBytes, initialKeyspace: opts.Preload, payload: PayloadFor(opts));
+        return new MixedProfileWorkload(mix, distribution, opts.DocumentSizeBytes, opts.Seed, initialKeyspace: opts.Preload, payload: PayloadFor(opts));
     }
 
     private static IWorkload BuildReadWorkload(RunOptions opts, IKeyDistribution distribution)

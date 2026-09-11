@@ -85,6 +85,29 @@ public class KeyDistributionTests
     }
 
     [Fact]
+    public void Zipfian_Same_Seed_Draws_The_Same_Key_Sequence()
+    {
+        // INVARIANT: the hot keys come from the run's seeded source, so a seed reproduces them.
+        var zipfian = new ZipfianDistribution();
+
+        var first = Draw(zipfian, seed: 99);
+        var second = Draw(zipfian, seed: 99);
+
+        first.Should().Equal(second);
+    }
+
+    [Fact]
+    public void Latest_Same_Seed_Draws_The_Same_Key_Sequence()
+    {
+        var latest = new LatestDistribution();
+
+        var first = Draw(latest, seed: 55);
+        var second = Draw(latest, seed: 55);
+
+        first.Should().Equal(second);
+    }
+
+    [Fact]
     public void Uniform_MaxKey_One_Returns_One()
     {
         var rng = new Random(42);
@@ -101,6 +124,12 @@ public class KeyDistributionTests
             int k = uniform.NextKey(rng, int.MaxValue);
             k.Should().BeGreaterOrEqualTo(1);
         }
+    }
+
+    private static int[] Draw(IKeyDistribution distribution, int seed)
+    {
+        var rng = new Random(seed);
+        return Enumerable.Range(0, 1000).Select(_ => distribution.NextKey(rng, 1000)).ToArray();
     }
 
     private static int[] SampleZipfian(int maxKey, int samples)

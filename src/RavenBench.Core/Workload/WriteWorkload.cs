@@ -5,12 +5,14 @@ namespace RavenBench.Core.Workload;
 public sealed class WriteWorkload : IWorkload
 {
     private readonly int _docSizeBytes;
+    private readonly int _seed;
     private readonly PayloadKind _payload;
     private long _maxKey;
 
-    public WriteWorkload(int docSizeBytes, long startingKey = 0, PayloadKind payload = PayloadKind.Json)
+    public WriteWorkload(int docSizeBytes, int seed, long startingKey = 0, PayloadKind payload = PayloadKind.Json)
     {
         _docSizeBytes = docSizeBytes;
+        _seed = seed;
         _payload = payload;
         _maxKey = startingKey;
     }
@@ -19,7 +21,6 @@ public sealed class WriteWorkload : IWorkload
     {
         var keyValue = Interlocked.Increment(ref _maxKey);
         var id = BenchIds.IdFor(keyValue);
-        return PayloadGenerator.InsertOperationFor(_payload, _docSizeBytes, rng, id);
+        return PayloadGenerator.InsertOperationFor(_payload, _seed, id, _docSizeBytes);
     }
 }
-
