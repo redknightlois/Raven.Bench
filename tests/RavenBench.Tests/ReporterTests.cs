@@ -21,7 +21,7 @@ public class ReporterTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = WorkloadProfile.Reads,
+            Profile = WorkloadProfile.QueryById,
             Dataset = "stackoverflow",
             Transport = TransportKind.Raw,
             QueryProfile = QueryProfile.VoronEquality
@@ -55,7 +55,7 @@ public class ReporterTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = WorkloadProfile.Reads
+            Profile = WorkloadProfile.QueryById
         };
         var options2 = new RunOptions
         {
@@ -91,7 +91,7 @@ public class ReporterTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = WorkloadProfile.Reads
+            Profile = WorkloadProfile.QueryById
         };
         var options2 = new RunOptions
         {
@@ -224,7 +224,7 @@ public class ReporterTests
             {
                 Url = "http://localhost:8080",
                 Database = "test",
-                Profile = WorkloadProfile.Reads,
+                Profile = WorkloadProfile.QueryById,
                 Dataset = "test",
                 Transport = TransportKind.Raw,
                 QueryProfile = QueryProfile.VoronEquality

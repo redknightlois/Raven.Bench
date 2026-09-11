@@ -322,7 +322,6 @@ public class IntegrationTests
     {
         Url = "http://localhost:8080",
         Database = "test", 
-        Writes = 100,
         Distribution = KeyDistributionKind.Uniform,
         Compression = CompressionMode.Identity,
         DocumentSizeBytes = 1024,

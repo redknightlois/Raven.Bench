@@ -56,7 +56,8 @@ public class HistogramExportTests : RavenTestDriver, IDisposable
         {
             Url = store.Urls[0],
             Database = "test",
-            Profile = WorkloadProfile.Writes,
+            Profile = WorkloadProfile.QueryById,
+            Preload = 10,
             DocumentSizeBytes = 128,
             Warmup = TimeSpan.FromMilliseconds(100),
             Duration = TimeSpan.FromMilliseconds(200),
@@ -106,7 +107,8 @@ public class HistogramExportTests : RavenTestDriver, IDisposable
         {
             Url = store.Urls[0],
             Database = "test",
-            Profile = WorkloadProfile.Writes,
+            Profile = WorkloadProfile.QueryById,
+            Preload = 10,
             DocumentSizeBytes = 128,
             Warmup = TimeSpan.FromMilliseconds(100),
             Duration = TimeSpan.FromMilliseconds(200),
@@ -159,7 +161,8 @@ public class HistogramExportTests : RavenTestDriver, IDisposable
         {
             Url = store.Urls[0],
             Database = "test",
-            Profile = WorkloadProfile.Writes,
+            Profile = WorkloadProfile.QueryById,
+            Preload = 10,
             DocumentSizeBytes = 128,
             Warmup = TimeSpan.FromMilliseconds(100),
             Duration = TimeSpan.FromMilliseconds(200),
@@ -190,7 +193,8 @@ public class HistogramExportTests : RavenTestDriver, IDisposable
         {
             Url = store.Urls[0],
             Database = "test",
-            Profile = WorkloadProfile.Writes,
+            Profile = WorkloadProfile.QueryById,
+            Preload = 10,
             DocumentSizeBytes = 128,
             Warmup = TimeSpan.FromMilliseconds(100),
             Duration = TimeSpan.FromMilliseconds(200),
@@ -222,7 +226,8 @@ public class HistogramExportTests : RavenTestDriver, IDisposable
         {
             Url = store.Urls[0],
             Database = "test",
-            Profile = WorkloadProfile.Writes,
+            Profile = WorkloadProfile.QueryById,
+            Preload = 10,
             DocumentSizeBytes = 128,
             Warmup = TimeSpan.FromMilliseconds(100),
             Duration = TimeSpan.FromMilliseconds(200),

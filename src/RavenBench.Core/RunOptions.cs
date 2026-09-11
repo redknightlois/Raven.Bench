@@ -134,11 +134,6 @@ public sealed record RunOptions
     public StepPlan Step { get; init; } = new StepPlan(8, 512, 2.0);
     public LoadShape Shape { get; init; }
 
-    // Mix defined only via numeric flags (weights or percents)
-    public double? Reads { get; init; }
-    public double? Writes { get; init; }
-    public double? Updates { get; init; }
-
     // Vector search options
     public int VectorTopK { get; init; } = 10;
     public VectorQuantization VectorQuantization { get; init; } = VectorQuantization.None;
@@ -232,7 +227,6 @@ public enum WorkloadProfile
     Unspecified = 0,
     Mixed,
     Writes,
-    Reads,
     QueryById,
     BulkWrites,
     StackOverflowRandomReads,
