@@ -161,6 +161,24 @@ public class RawHttpTransportTests
         policy.Should().Be(HttpVersionPolicy.RequestVersionOrLower);
     }
 
+    [Fact]
+    public async Task Operation_The_Transport_Cannot_Execute_Is_A_Definite_Failure()
+    {
+        // INVARIANT: an unhandled operation type must not be counted as a successful operation
+        // with zero bytes, which would report throughput for work that never left the process.
+        using var transport = new RawHttpTransport("http://localhost:1", "unused", CompressionMode.Identity, HttpVersion.Version11);
+
+        var result = await transport.ExecuteAsync(new UnsupportedOperation(), CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Cancelled.Should().BeFalse();
+        result.ErrorDetails.Should().Contain(nameof(UnsupportedOperation));
+    }
+
+    private sealed class UnsupportedOperation : OperationBase
+    {
+    }
+
     private sealed class CancelledTransport : StubTransport
     {
         public override Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
