@@ -38,4 +38,10 @@ public sealed class BenchmarkSummary
     /// Null when --vector-recall-ef-sweep is not specified.
     /// </summary>
     public Dictionary<int, RecallResult>? RecallSweep { get; set; }
+
+    /// <summary>
+    /// Present only on a result from the ycsb entry point: which run of the sequence this is, the
+    /// resolved scenario, and the target that ran it.
+    /// </summary>
+    public YcsbRunInfo? Ycsb { get; init; }
 }
