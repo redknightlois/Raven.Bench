@@ -28,7 +28,7 @@ public static class LoadGeneratorExecution
     /// When <paramref name="expectedIntervalMicros"/> &gt; 0, HDRHistogram backfills omitted samples.
     /// </summary>
     public static async Task<WorkItemResult> ExecuteOperationAsync(
-        ITransport transport,
+        IYcsbTransport transport,
         OperationBase operation,
         LatencyRecorder latencyRecorder,
         long startTimestamp,

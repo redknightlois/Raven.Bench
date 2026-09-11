@@ -64,7 +64,7 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
         public OperationBase NextOperation(Random rng) => new ReadOperation { Id = "users/1" };
     }
 
-    private sealed class VariableLatencyTransport : ITransport
+    private sealed class VariableLatencyTransport : IYcsbTransport
     {
         private int _latencyMs;
 
@@ -79,6 +79,8 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
             _latencyMs = Math.Max(0, latencyMs);
         }
 
+        public string ProductName => "Stub";
+
         public bool ReportsWireBytes => true;
 
         public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
@@ -92,16 +94,7 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
         public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
         public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;
         public Task<long> GetDocumentCountAsync(string idPrefix) => Task.FromResult(0L);
-        public Task<int?> GetServerMaxCoresAsync() => Task.FromResult<int?>(null);
-        public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(new ServerMetrics());
-        public Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null) => Task.FromResult(new SnmpSample());
         public Task<string> GetServerVersionAsync() => Task.FromResult("test");
-        public Task<string> GetServerLicenseTypeAsync() => Task.FromResult("test");
-        public Task ValidateClientAsync() => Task.CompletedTask;
-        public Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default) =>
-            Task.FromResult(new CalibrationResult(0, 0, 0, new Version(1, 0)));
-
-        public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints() => Array.Empty<(string, string)>();
 
         public void Dispose()
         {

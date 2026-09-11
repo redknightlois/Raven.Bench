@@ -16,7 +16,7 @@ namespace RavenBench.Core
     /// </summary>
     public sealed class RateLoadGenerator : ILoadGenerator
     {
-        private readonly ITransport _transport;
+        private readonly IYcsbTransport _transport;
         private readonly IWorkload _workload;
         private readonly double _targetRps;
         private readonly int _maxConcurrency;
@@ -26,7 +26,7 @@ namespace RavenBench.Core
         public double? TargetThroughput => _targetRps;
 
         public RateLoadGenerator(
-            ITransport transport,
+            IYcsbTransport transport,
             IWorkload workload,
             double targetRps,
             int maxConcurrency,

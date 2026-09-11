@@ -34,6 +34,8 @@ public sealed class RawHttpTransport : ITransport
     public string EffectiveCompressionMode => _acceptEncoding;
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
+    public string ProductName => "RavenDB";
+
     // Wire-accurate only without transparent decompression; gzip/brotli/deflate are measured post-inflate.
     public bool ReportsWireBytes => _compression is CompressionMode.Identity or CompressionMode.Zstd;
 
