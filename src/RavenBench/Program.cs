@@ -30,6 +30,9 @@ internal static class Program
             cfg.AddCommand<IndexBuildCommand>("index-build")
                 .WithDescription("Build a static index from scratch and report build time and docs/s. Leaves the database indexed for reuse.")
                 .WithExample("index-build", "--url", "http://localhost:10101", "--dataset", "stackoverflow", "--dataset-profile", "small", "--index-kind", "fanout");
+            cfg.AddCommand<YcsbCommand>("ycsb")
+                .WithDescription("Run the ycsb scenario's load, C, A, B and insert-stream sequence, one result per run.")
+                .WithExample("ycsb", "--url", "http://localhost:10101", "--database", "ycsb", "--scenario", "benchmarks/ycsb/scenario.json");
 
         });
 

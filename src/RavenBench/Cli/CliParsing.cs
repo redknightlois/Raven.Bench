@@ -167,7 +167,7 @@ internal static class CliParsing
         };
     }
 
-    private static TransportKind ParseTransport(string transport)
+    internal static TransportKind ParseTransport(string transport)
     {
         return transport.Trim().ToLowerInvariant() switch
         {
@@ -178,7 +178,7 @@ internal static class CliParsing
         };
     }
 
-    private static KeyDistributionKind ParseDistribution(string distribution)
+    internal static KeyDistributionKind ParseDistribution(string distribution)
     {
         return distribution.Trim().ToLowerInvariant() switch
         {
@@ -189,7 +189,7 @@ internal static class CliParsing
         };
     }
 
-    private static CompressionMode ParseCompression(string compression)
+    internal static CompressionMode ParseCompression(string compression)
     {
         return compression.Trim().ToLowerInvariant() switch
         {
