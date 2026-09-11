@@ -38,8 +38,11 @@ public sealed class MixedProfileWorkload : IWorkload
             return NextInsert();
 
         var id = BenchIds.IdFor(_distribution.NextKey(rng, (int)Math.Min(maxKey, int.MaxValue)));
-        var payload = PayloadGenerator.Generate(_seed, id, _docSizeBytes);
-        return new UpdateOperation<string> { Id = id, Payload = payload };
+        var fieldName = PayloadGenerator.FieldName(rng.Next(PayloadGenerator.FieldCount));
+        // The replacement has the width of the field it replaces, so a long run of updates does
+        // not drift the document size.
+        var value = PayloadGenerator.GenerateFieldValue(PayloadGenerator.FieldWidth(_docSizeBytes), rng);
+        return new UpdateFieldOperation { Id = id, FieldName = fieldName, Value = value };
     }
 
     private OperationBase NextInsert()

@@ -251,10 +251,17 @@ public class InsertOperation<T> : OperationBase
     public required T Payload { get; init; }
 }
 
-public class UpdateOperation<T> : OperationBase
+/// <summary>
+/// Sets one named field of one document to a new value. The field name and the value are data on
+/// the operation, not a script and not a query string, so every product can express it. A product
+/// that can only serve it by rewriting the whole document reports that, rather than doing it
+/// silently, because the row would then measure a replace instead of an update.
+/// </summary>
+public class UpdateFieldOperation : OperationBase
 {
     public required string Id { get; init; }
-    public required T Payload { get; init; }
+    public required string FieldName { get; init; }
+    public required string Value { get; init; }
 }
 
 public class BulkInsertOperation<T> : OperationBase

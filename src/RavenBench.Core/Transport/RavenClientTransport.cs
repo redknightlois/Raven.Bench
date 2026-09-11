@@ -118,12 +118,26 @@ public sealed class RavenClientTransport : ITransport
                     long headerBytes = EstimateHeaderSize("PUT", $"/databases/{_db}/docs?id={Uri.EscapeDataString(insertOp.Id)}", outBytes);
                     return new TransportResult(headerBytes + outBytes, 256);
                 }
-                case UpdateOperation<string> updateOp:
+                case UpdateFieldOperation updateFieldOp:
                 {
-                    await PutRawJsonAsync(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false);
-                    var updateOutBytes = updateOp.Payload?.Length ?? 0;
-                    long headerBytes = EstimateHeaderSize("PUT", $"/databases/{_db}/docs?id={Uri.EscapeDataString(updateOp.Id)}", updateOutBytes);
-                    return new TransportResult(headerBytes + updateOutBytes, 256);
+                    // The script is fixed; the field name and the value travel as patch arguments.
+                    var operation = new Raven.Client.Documents.Operations.PatchOperation(
+                        updateFieldOp.Id,
+                        changeVector: null,
+                        new Raven.Client.Documents.Operations.PatchRequest
+                        {
+                            Script = "this[args.field] = args.value;",
+                            Values = new Dictionary<string, object>
+                            {
+                                ["field"] = updateFieldOp.FieldName,
+                                ["value"] = updateFieldOp.Value
+                            }
+                        });
+                    await _store.Operations.SendAsync(operation, token: ct).ConfigureAwait(false);
+
+                    long payloadBytes = updateFieldOp.FieldName.Length + updateFieldOp.Value.Length + 64;
+                    long headerBytes = EstimateHeaderSize("PATCH", $"/databases/{_db}/docs?id={Uri.EscapeDataString(updateFieldOp.Id)}", payloadBytes);
+                    return new TransportResult(headerBytes + payloadBytes, 256);
                 }
                 case StreamQueryOperation streamOp:
                 {

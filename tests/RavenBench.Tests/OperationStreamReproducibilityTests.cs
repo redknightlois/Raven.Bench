@@ -100,7 +100,7 @@ public class OperationStreamReproducibilityTests
     {
         ReadOperation read => ("read", read.Id, null, null),
         InsertOperation<string> insert => ("insert", insert.Id, null, insert.Payload),
-        UpdateOperation<string> update => ("update", update.Id, null, update.Payload),
+        UpdateFieldOperation update => ("update", update.Id, update.FieldName, update.Value),
         _ => throw new InvalidOperationException($"Unexpected operation kind {op.GetType().Name}.")
     };
 }
