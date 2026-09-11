@@ -33,7 +33,7 @@ public class ClosedLoopRampTests
         };
 
         using var transport = new TestTransport(baseLatencyMs: 1);
-        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024);
+        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024, seed: 42);
         using var serverTracker = new ServerMetricsTracker(transport, opts);
         var executor = new BenchmarkExecutor(opts, transport, workload, new ProcessCpuTracker(), serverTracker);
         var rng = new Random(42);

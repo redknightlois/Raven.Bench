@@ -61,7 +61,7 @@ public class QueryStatsTests
 
         // An index that returns zero rows is the failure mode result-count guards against.
         using var transport = new TestTransport(baseLatencyMs: 1, indexName: "Auto/Questions", resultCount: 0, isStale: true);
-        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(100, 0, 0), new UniformDistribution(), 1024);
+        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(100, 0, 0), new UniformDistribution(), 1024, seed: 42);
         var executor = new BenchmarkExecutor(opts, transport, workload, new ProcessCpuTracker());
         var generator = new ClosedLoopLoadGenerator(transport, workload, concurrency: 4, new Random(42));
 

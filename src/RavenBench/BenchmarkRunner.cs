@@ -565,8 +565,7 @@ public class BenchmarkRunner(RunOptions opts)
                 try
                 {
                     var id = BenchIds.IdFor(i);
-                    var rng = new Random(opts.Seed + i);
-                    await transport.PutAsync(id, PayloadGenerator.Generate(docSize, rng));
+                    await transport.PutAsync(id, PayloadGenerator.Generate(opts.Seed, id, docSize));
                 }
                 catch (Exception ex)
                 {

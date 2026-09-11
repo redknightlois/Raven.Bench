@@ -7,12 +7,14 @@ public sealed class BulkWriteWorkload : IWorkload
 {
     private readonly int _docSizeBytes;
     private readonly int _batchSize;
+    private readonly int _seed;
     private long _maxKey;
 
-    public BulkWriteWorkload(int docSizeBytes, int batchSize, long startingKey = 0)
+    public BulkWriteWorkload(int docSizeBytes, int batchSize, int seed, long startingKey = 0)
     {
         _docSizeBytes = docSizeBytes;
         _batchSize = batchSize;
+        _seed = seed;
         _maxKey = startingKey;
     }
 
@@ -23,7 +25,7 @@ public sealed class BulkWriteWorkload : IWorkload
         {
             var keyValue = Interlocked.Increment(ref _maxKey);
             var id = BenchIds.IdFor(keyValue);
-            var payload = PayloadGenerator.Generate(_docSizeBytes, rng);
+            var payload = PayloadGenerator.Generate(_seed, id, _docSizeBytes);
             documents.Add(new DocumentToWrite<string> { Id = id, Document = payload });
         }
 

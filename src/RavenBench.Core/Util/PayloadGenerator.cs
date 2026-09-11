@@ -1,122 +1,91 @@
 using System.Text;
-using System.Text.Json;
-using System.Collections.Concurrent;
 
 namespace RavenBench.Core;
 
+/// <summary>
+/// Generates the YCSB record: ten equal-width string fields named after their ordinal position.
+/// The content of a document is a pure function of (seed, document id, requested size), so the
+/// same triple yields byte-identical output in any process, at any concurrency, and whatever was
+/// generated before it. Every loader and every workload must obtain a document from here, and no
+/// caller may pass a <see cref="Random"/> whose position in a stream could change the result.
+/// </summary>
 public static class PayloadGenerator
 {
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    private static readonly ConcurrentDictionary<int, string[]> _payloadCache = new();
-    private const int CacheSize = 1000; // Pre-generate 1000 payloads per size
-    
-    public static string Generate(int sizeBytes, Random rng)
+
+    /// <summary>
+    /// Number of string fields in the record. Ten fields of one width is what the reference YCSB
+    /// tool stores, and a comparable row depends on storing the same record.
+    /// </summary>
+    public const int FieldCount = 10;
+
+    // {"field0":"..",..,"field9":".."}: two braces, the commas between fields, and for each field
+    // a colon, two quotes around the key and two around the value, plus the key itself.
+    private static readonly int JsonOverheadBytes =
+        2 + (FieldCount - 1) + Enumerable.Range(0, FieldCount).Sum(i => FieldName(i).Length + 5);
+
+    /// <summary>
+    /// The wire key of one field. The same names are used on every product.
+    /// </summary>
+    public static string FieldName(int index) => $"field{index}";
+
+    /// <summary>
+    /// The width shared by all ten fields at this document size. Equal width wins over hitting the
+    /// requested size exactly, so the serialised document lands within <see cref="FieldCount"/>
+    /// bytes below the requested size. Below the JSON overhead no positive share is left and the
+    /// width floors at one character per field, which keeps the record ten equal-width fields at
+    /// every size instead of truncating the field count.
+    /// </summary>
+    public static int FieldWidth(int sizeBytes) => Math.Max(1, (sizeBytes - JsonOverheadBytes) / FieldCount);
+
+    /// <summary>
+    /// Builds the document that the run seeded with <paramref name="seed"/> stores at
+    /// <paramref name="documentId"/>.
+    /// </summary>
+    public static string Generate(int seed, string documentId, int sizeBytes)
     {
-        // Use cached payloads to avoid constant allocation
-        var cachedPayloads = _payloadCache.GetOrAdd(sizeBytes, size => GeneratePayloadCache(size));
-        return cachedPayloads[rng.Next(cachedPayloads.Length)];
-    }
-    
-    private static string[] GeneratePayloadCache(int sizeBytes)
-    {
-        var payloads = new string[CacheSize];
-        var rng = new Random(42); // Fixed seed for reproducible payloads
-        
-        for (int i = 0; i < CacheSize; i++)
+        int width = FieldWidth(sizeBytes);
+        var rng = DocumentRandom(seed, documentId);
+
+        var json = new StringBuilder(JsonOverheadBytes + FieldCount * width);
+        json.Append('{');
+        for (int i = 0; i < FieldCount; i++)
         {
-            payloads[i] = GenerateUncached(sizeBytes, rng);
-        }
-        
-        return payloads;
-    }
-    
-    private static string GenerateUncached(int sizeBytes, Random rng)
-    {
-        // Generate YCSB-compatible JSON document with 10 fields (field0-field9)
-        // Calculate accurate JSON overhead for: {"field0":"value","field1":"value",...,"field9":"value"}
-        const int jsonOverhead = 2 +       // Opening and closing braces: {}
-                                 9 +       // 9 commas between fields
-                                 10 * 2 +  // 10 sets of quotes around values: ""
-                                 10 * 1 +  // 10 colons and quotes around field names: ":"
-                                 10 * 8;   // Field names: "field0" through "field9" total chars
-
-        var document = new YcsbDocument();
-
-        if (sizeBytes <= jsonOverhead)
-        {
-            for (int i = 0; i < 10; i++)
-            {
-                document.SetField(i, "x"); // 1 character per field
-            }
-        }
-        else
-        {
-            var availableContentSize = sizeBytes - jsonOverhead;
-            var fieldsToFill = Math.Min(10, Math.Max(1, availableContentSize / 10));
-            var fieldSize = availableContentSize / fieldsToFill;
-
-            for (int i = 0; i < fieldsToFill; i++)
-            {
-                var currentFieldSize = fieldSize;
-                if (i == fieldsToFill - 1)
-                {
-                    var usedContent = i * fieldSize;
-                    currentFieldSize = availableContentSize - usedContent;
-                }
-
-                document.SetField(i, GenerateRandomString(Math.Max(1, currentFieldSize), rng));
-            }
-
-            for (int i = fieldsToFill; i < 10; i++)
-            {
-                document.SetField(i, "");
-            }
+            if (i > 0)
+                json.Append(',');
+            json.Append('"').Append(FieldName(i)).Append("\":\"").Append(GenerateFieldValue(width, rng)).Append('"');
         }
 
-        return JsonSerializer.Serialize(document, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        return json.Append('}').ToString();
     }
-    
-    private static string GenerateRandomString(int length, Random rng) =>
-        string.Create(length, rng, static (span, random) =>
+
+    /// <summary>
+    /// Draws one field's worth of characters from the caller's own source. The alphabet needs no
+    /// JSON escaping, so a field's character count is also its byte count on the wire.
+    /// </summary>
+    public static string GenerateFieldValue(int width, Random rng) =>
+        string.Create(width, rng, static (span, random) =>
         {
             for (int i = 0; i < span.Length; i++)
-            {
                 span[i] = Alphabet[random.Next(Alphabet.Length)];
-            }
         });
-    
-    private sealed class YcsbDocument
+
+    /// <summary>
+    /// Mixes the run seed and the document id into one document source with FNV-1a. Addition would
+    /// alias, making (seed + 1, id) draw what (seed, id + 1) draws, and <c>string.GetHashCode</c>
+    /// is randomised per process, which would break reproducibility across runs.
+    /// </summary>
+    private static Random DocumentRandom(int seed, string documentId)
     {
-        public string Field0 { get; set; } = string.Empty;
-        public string Field1 { get; set; } = string.Empty;
-        public string Field2 { get; set; } = string.Empty;
-        public string Field3 { get; set; } = string.Empty;
-        public string Field4 { get; set; } = string.Empty;
-        public string Field5 { get; set; } = string.Empty;
-        public string Field6 { get; set; } = string.Empty;
-        public string Field7 { get; set; } = string.Empty;
-        public string Field8 { get; set; } = string.Empty;
-        public string Field9 { get; set; } = string.Empty;
-        
-        public void SetField(int index, string value)
-        {
-            switch (index)
-            {
-                case 0: Field0 = value; break;
-                case 1: Field1 = value; break;
-                case 2: Field2 = value; break;
-                case 3: Field3 = value; break;
-                case 4: Field4 = value; break;
-                case 5: Field5 = value; break;
-                case 6: Field6 = value; break;
-                case 7: Field7 = value; break;
-                case 8: Field8 = value; break;
-                case 9: Field9 = value; break;
-            }
-        }
+        const ulong offsetBasis = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+
+        ulong hash = offsetBasis;
+        for (int shift = 0; shift < 32; shift += 8)
+            hash = (hash ^ (byte)(seed >> shift)) * prime;
+        foreach (var c in documentId)
+            hash = (hash ^ c) * prime;
+
+        return new Random(unchecked((int)(hash ^ (hash >> 32))));
     }
 }
-
