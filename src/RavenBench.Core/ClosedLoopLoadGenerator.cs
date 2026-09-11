@@ -94,6 +94,10 @@ namespace RavenBench.Core
             long scheduledCount = 0;
             while (stopwatch.Elapsed < endTime && cancellationToken.IsCancellationRequested == false)
             {
+                // One producer thread draws every operation from the one run-seeded source; the
+                // concurrency decides how many are drawn before the step ends and which worker runs
+                // each one, never the sequence itself. System.Random is not thread-safe, so only
+                // this thread touches the source.
                 var operation = _workload.NextOperation(_rng);
                 scheduledCount++;
                 await channel.Writer.WriteAsync(operation, cancellationToken);
