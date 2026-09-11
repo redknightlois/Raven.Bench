@@ -161,7 +161,7 @@ public sealed class RawHttpTransport : ITransport
                 case VectorSearchOperation vectorOp:
                     return await PostVectorSearchAsync(vectorOp, ct).ConfigureAwait(false);
                 default:
-                    return new TransportResult(0, 0);
+                    throw new NotSupportedException($"{nameof(RawHttpTransport)} cannot execute operation type {op.GetType().Name}.");
             }
         }
         catch (Exception ex)

@@ -322,7 +322,7 @@ public sealed class RavenClientTransport : ITransport
                     }
                 }
                 default:
-                    return new TransportResult(0, 0);
+                    throw new NotSupportedException($"{nameof(RavenClientTransport)} cannot execute operation type {op.GetType().Name}.");
             }
         }
         catch (Exception ex)
