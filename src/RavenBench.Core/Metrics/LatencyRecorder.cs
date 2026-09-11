@@ -47,7 +47,8 @@ public sealed class LatencyRecorder : IDisposable
                 lowestDiscernibleValue: 1,
                 highestTrackableValue: MaxTrackableMicros,  // 60 seconds in microseconds
                 numberOfSignificantValueDigits: 3,
-                histogramFactory: (instanceId, low, high, digits) => new LongHistogram(low, high, digits));
+                // Every worker thread records concurrently, so the histogram must be thread-safe.
+                histogramFactory: (instanceId, low, high, digits) => new LongConcurrentHistogram(low, high, digits));
 
             _maxMicros = 0;
         }
