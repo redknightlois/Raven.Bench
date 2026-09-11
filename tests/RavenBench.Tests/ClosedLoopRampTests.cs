@@ -54,16 +54,16 @@ public class ClosedLoopRampTests
     [Fact]
     public async Task Bulk_Load_Throughput_Counts_Documents_Not_Batches()
     {
+        const int documents = 1000;
         const int batchSize = 100;
 
         using var transport = new TestTransport(baseLatencyMs: 0);
-        var workload = new BulkWriteWorkload(docSizeBytes: 1024, batchSize, seed: 42);
+        var workload = new BulkWriteWorkload(docSizeBytes: 1024, batchSize, seed: 42, targetCount: documents);
         var generator = new ClosedLoopLoadGenerator(transport, workload, concurrency: 4, new Random(42));
 
-        var (_, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(200), CancellationToken.None);
+        var (_, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
 
-        metrics.OperationsCompleted.Should().BeGreaterThan(0);
-        (metrics.Throughput * metrics.Duration.TotalSeconds)
-            .Should().BeApproximately(metrics.OperationsCompleted * batchSize, 1);
+        metrics.OperationsCompleted.Should().Be(documents / batchSize);
+        (metrics.Throughput * metrics.Duration.TotalSeconds).Should().BeApproximately(documents, 1);
     }
 }

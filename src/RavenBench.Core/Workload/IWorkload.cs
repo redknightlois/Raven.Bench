@@ -5,6 +5,13 @@ namespace RavenBench.Core.Workload;
 public interface IWorkload
 {
     OperationBase NextOperation(Random rng);
+
+    /// <summary>
+    /// True when the workload has produced every operation it will produce. A bounded workload,
+    /// such as the ycsb load fill, sets this so a generator stops instead of overshooting the
+    /// count; an unbounded workload leaves it false.
+    /// </summary>
+    bool IsExhausted => false;
 }
 
 public abstract class OperationBase
