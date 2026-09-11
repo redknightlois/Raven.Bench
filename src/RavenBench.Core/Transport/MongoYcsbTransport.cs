@@ -208,30 +208,8 @@ public sealed class MongoYcsbTransport : IYcsbTransport
     /// user, host, port and options. The authority bounds the search, so a credential-free string
     /// is returned unchanged even when its query carries an <c>@</c>.
     /// </summary>
-    internal static string RedactConnectionString(string connectionString)
-    {
-        const string schemeSeparator = "://";
-        var schemeEnd = connectionString.IndexOf(schemeSeparator, StringComparison.Ordinal);
-        if (schemeEnd < 0)
-            return connectionString;
-
-        var userInfoStart = schemeEnd + schemeSeparator.Length;
-        var authorityEnd = connectionString.IndexOfAny(['/', '?', '#'], userInfoStart);
-        if (authorityEnd < 0)
-            authorityEnd = connectionString.Length;
-        if (authorityEnd <= userInfoStart)
-            return connectionString;
-
-        var at = connectionString.LastIndexOf('@', authorityEnd - 1);
-        if (at < userInfoStart)
-            return connectionString;
-
-        var colon = connectionString.IndexOf(':', userInfoStart, at - userInfoStart);
-        if (colon < 0)
-            return connectionString;
-
-        return string.Concat(connectionString.AsSpan(0, colon + 1), "***", connectionString.AsSpan(at));
-    }
+    internal static string RedactConnectionString(string connectionString) =>
+        ConnectionStringRedaction.Redact(connectionString);
 
     private async Task<TransportResult> ReadAsync(ReadOperation read, CancellationToken ct)
     {
