@@ -27,7 +27,7 @@ public sealed record YcsbScenario
 {
     public required int Seed { get; init; }
 
-    /// <summary>Product this scenario targets. Only "ravendb" has a transport today.</summary>
+    /// <summary>Product this scenario targets: "ravendb", "mongodb" or "documentdb".</summary>
     public required string Target { get; init; }
 
     /// <summary>Size of the keyspace the load run fills and the C/A/B/insert-stream runs address.</summary>
