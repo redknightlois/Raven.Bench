@@ -12,6 +12,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="Apex.PgClient" Version="0.1.0-preview.3" />
         <PackageReference Include="HdrHistogram" Version="2.5.0" />
         <PackageReference Include="Lextm.SharpSnmpLib" Version="10.0.0" />
         <PackageReference Include="MongoDB.Driver" Version="2.30.0" />

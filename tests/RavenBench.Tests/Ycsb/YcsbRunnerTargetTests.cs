@@ -27,7 +27,7 @@ public class YcsbRunnerTargetTests
         var scenario = new YcsbScenario
         {
             Seed = 1,
-            Target = "postgresql",
+            Target = "cockroachdb",
             DocumentCount = 10,
             DocumentSize = "256B",
             Concurrency = "2..2",
@@ -39,7 +39,7 @@ public class YcsbRunnerTargetTests
 
         var act = () => new YcsbRunner(scenario, settings).RunAsync();
 
-        await act.Should().ThrowAsync<YcsbScenarioException>().WithMessage("*postgresql*");
+        await act.Should().ThrowAsync<YcsbScenarioException>().WithMessage("*cockroachdb*");
     }
 
     [RequiresMongoFact]
@@ -49,6 +49,48 @@ public class YcsbRunnerTargetTests
     [RequiresDocumentDbFact]
     public Task A_DocumentDb_Target_Completes_And_Records_A_Redacted_Endpoint() =>
         RunDispatchedSequence(MongoTestEndpoints.DocumentDbConnectionString, MongoYcsbTransport.DocumentDbTarget, MongoYcsbTransport.DocumentDbProductName);
+
+    [RequiresPostgreSqlFact]
+    public Task A_PostgreSql_Target_Completes_And_Records_Its_Durability() => RunPostgreSqlSequence();
+
+    [Theory]
+    [InlineData("2..2", 2)]
+    [InlineData("8..64x2", 64)]
+    public void The_Concurrency_Ceiling_Follows_The_Resolved_Step_Plan(string concurrency, int expected)
+    {
+        var scenario = new YcsbScenario
+        {
+            Seed = 1,
+            Target = PostgresYcsbTransport.Target,
+            DocumentCount = 10,
+            DocumentSize = "256B",
+            Concurrency = concurrency,
+            Distribution = "uniform",
+            Warmup = "0s",
+            Duration = "200ms"
+        };
+
+        YcsbRunner.ResolveConcurrencyCeiling(scenario, "unused", "unused").Should().Be(expected);
+    }
+
+    [Fact]
+    public void A_Rate_Scenario_Keeps_At_Least_The_Closed_Loop_Concurrency()
+    {
+        var scenario = new YcsbScenario
+        {
+            Seed = 1,
+            Target = PostgresYcsbTransport.Target,
+            DocumentCount = 10,
+            DocumentSize = "256B",
+            Concurrency = "4..16x2",
+            Rate = 500,
+            Distribution = "uniform",
+            Warmup = "0s",
+            Duration = "200ms"
+        };
+
+        YcsbRunner.ResolveConcurrencyCeiling(scenario, "unused", "unused").Should().BeGreaterThanOrEqualTo(16);
+    }
 
     private static async Task RunDispatchedSequence(string connectionString, string target, string expectedProductName)
     {
@@ -115,6 +157,68 @@ public class YcsbRunnerTargetTests
         {
             using var cleanup = new MongoYcsbTransport(connectionString, database, target);
             await cleanup.Documents.Database.Client.DropDatabaseAsync(database);
+        }
+    }
+
+    private static async Task RunPostgreSqlSequence()
+    {
+        await using var schema = await PgTestSchema.CreateAsync();
+        var scenario = new YcsbScenario
+        {
+            Seed = 1,
+            Target = PostgresYcsbTransport.Target,
+            DocumentCount = 10,
+            DocumentSize = "256B",
+            Concurrency = "2..2",
+            Distribution = "uniform",
+            Warmup = "0s",
+            Duration = "200ms"
+        };
+
+        // The RavenDB-only options would abort against a PostgreSQL endpoint, so a PostgreSQL run
+        // that reached HTTP negotiation would fail before issuing an operation.
+        var settings = new YcsbSettings
+        {
+            Url = schema.ConnectionString,
+            Database = PostgreSqlTestEndpoints.Database,
+            Scenario = "unused.json",
+            BulkBatchSize = 5,
+            Transport = "client",
+            Compression = "gzip",
+            HttpVersion = "3.0",
+            StrictHttpVersion = true
+        };
+
+        var results = await new YcsbRunner(scenario, settings).RunAsync();
+
+        results.Select(r => r.Kind).Should().Equal(
+            YcsbRunKind.Load, YcsbRunKind.WorkloadC, YcsbRunKind.WorkloadA, YcsbRunKind.WorkloadB, YcsbRunKind.InsertStream);
+
+        foreach (var (_, summary) in results)
+        {
+            summary.Ycsb!.ProductName.Should().Be("PostgreSQL");
+            summary.Ycsb.ServerVersion.Should().NotBeNullOrWhiteSpace();
+            summary.Ycsb.Durability.Setting.Should().Be("synchronous_commit");
+            summary.Ycsb.Durability.Value.Should().Be("on");
+            summary.Options.Url.Should().NotContain("bench:bench", "no result field may carry the connection-string password");
+            summary.Steps.Should().OnlyContain(step => step.NetworkBytesMeasured == false, "the driver does not expose the socket");
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), $"ycsb-pg-dispatch-{Guid.NewGuid():N}.json");
+        try
+        {
+            JsonResultsWriter.Write(path, results[0].Summary);
+            File.ReadAllText(path).Should().NotContain("bench:bench");
+
+            var loaded = await SummaryLoader.LoadAsync(path);
+            loaded.SchemaVersion.Should().Be(SummaryLoader.ExpectedSchemaVersion);
+            loaded.Ycsb!.ProductName.Should().Be("PostgreSQL");
+            loaded.Ycsb.Durability.Setting.Should().Be("synchronous_commit");
+            loaded.Ycsb.Durability.Value.Should().Be("on");
+        }
+        finally
+        {
+            File.Delete(path);
         }
     }
 }
