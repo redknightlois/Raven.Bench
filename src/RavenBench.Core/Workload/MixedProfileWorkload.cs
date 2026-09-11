@@ -23,21 +23,18 @@ public sealed class MixedProfileWorkload : IWorkload
 
     public OperationBase NextOperation(Random rng)
     {
+        // The mix alone decides the operation kind: an empty or short keyspace never substitutes
+        // another kind. A run that needs a non-empty keyspace checks it before the run starts.
         // Reads and updates may target keys from in-flight inserts; the overshoot is bounded by concurrency.
         var p = rng.Next(0, 100);
-        long maxKey = Volatile.Read(ref _maxKey);
-        if (p < _mix.ReadPercent && maxKey > 0)
-        {
-            var k = _distribution.NextKey(rng, (int)Math.Min(maxKey, int.MaxValue));
-            return new ReadOperation { Id = BenchIds.IdFor(k) };
-        }
+        var bound = (int)Math.Min(Volatile.Read(ref _maxKey), int.MaxValue);
+        if (p < _mix.ReadPercent)
+            return new ReadOperation { Id = BenchIds.IdFor(_distribution.NextKey(rng, bound)) };
+
         if (p < _mix.ReadPercent + _mix.WritePercent)
             return NextInsert();
 
-        if (maxKey == 0)
-            return NextInsert();
-
-        var id = BenchIds.IdFor(_distribution.NextKey(rng, (int)Math.Min(maxKey, int.MaxValue)));
+        var id = BenchIds.IdFor(_distribution.NextKey(rng, bound));
         var fieldName = PayloadGenerator.FieldName(rng.Next(PayloadGenerator.FieldCount));
         // The replacement has the width of the field it replaces, so a long run of updates does
         // not drift the document size.
