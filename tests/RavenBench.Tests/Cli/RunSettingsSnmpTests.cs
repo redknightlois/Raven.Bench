@@ -14,7 +14,7 @@ public class RunSettingsSnmpTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "mixed",
+            Profile = "query-by-id",
             SnmpEnabled = true
         };
 
@@ -30,7 +30,7 @@ public class RunSettingsSnmpTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "mixed"
+            Profile = "query-by-id"
         };
 
         var options = settings.ToRunOptions();
@@ -45,7 +45,7 @@ public class RunSettingsSnmpTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "mixed",
+            Profile = "query-by-id",
             SnmpEnabled = true,
             SnmpPort = 161
         };
@@ -62,7 +62,7 @@ public class RunSettingsSnmpTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "mixed",
+            Profile = "query-by-id",
             SnmpEnabled = true
         };
 
@@ -78,7 +78,7 @@ public class RunSettingsSnmpTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "mixed",
+            Profile = "query-by-id",
             SnmpEnabled = true,
             SnmpInterval = "10s"
         };
@@ -95,7 +95,7 @@ public class RunSettingsSnmpTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "mixed",
+            Profile = "query-by-id",
             SnmpEnabled = true
         };
 

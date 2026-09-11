@@ -35,9 +35,6 @@ internal static class CliParsing
         {
             Url = RequiredString(settings.Url!, "--url"),
             Database = database,
-            Reads = ParseNullableWeight(settings.Reads),
-            Writes = ParseNullableWeight(settings.Writes),
-            Updates = ParseNullableWeight(settings.Updates),
             VectorTopK = settings.VectorTopK,
             VectorQuantization = ParseVectorQuantization(settings.VectorQuantization),
             VectorExactSearch = settings.VectorExactSearch,
@@ -111,15 +108,11 @@ internal static class CliParsing
     private static WorkloadProfile ParseProfile(string profile)
     {
         if (string.IsNullOrWhiteSpace(profile))
-            throw new ArgumentException("--profile is required. Valid options: mixed, writes, reads, query-by-id, query-users-by-name, vector-search, vector-search-exact");
+            throw new ArgumentException("--profile is required. Valid options: query-by-id, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact, patch, attachments");
 
         return profile.Trim().ToLowerInvariant() switch
         {
-            "mixed" => WorkloadProfile.Mixed,
-            "writes" or "write" => WorkloadProfile.Writes,
-            "reads" or "read" => WorkloadProfile.Reads,
             "query-by-id" or "querybyid" => WorkloadProfile.QueryById,
-            "bulk-writes" or "bulkwrites" => WorkloadProfile.BulkWrites,
             "stackoverflow-random-reads" or "so-random-reads" => WorkloadProfile.StackOverflowRandomReads,
             "stackoverflow-text-search" or "so-text-search" => WorkloadProfile.StackOverflowTextSearch,
             "query-users-by-name" or "queryusersbyname" => WorkloadProfile.QueryUsersByName,
@@ -127,7 +120,7 @@ internal static class CliParsing
             "vector-search-exact" or "vectorsearchexact" => WorkloadProfile.VectorSearchExact,
             "patch" => WorkloadProfile.Patch,
             "attachments" or "attachment" => WorkloadProfile.Attachments,
-            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact, patch, attachments")
+            _ => throw new ArgumentException($"Invalid profile: {profile}. Valid options: query-by-id, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact, patch, attachments")
         };
     }
 
@@ -220,8 +213,6 @@ internal static class CliParsing
         return value;
     }
 
-    private static double? ParseNullableWeight(string s) => string.IsNullOrWhiteSpace(s) ? null : ParseWeight(s);
-
     public static StepPlan ParseStepPlan(string s)
     {
         var parts = s.Split("..", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -272,14 +263,6 @@ internal static class CliParsing
         if (value > 100.0)
             throw new ArgumentException($"Invalid percentage: {s}. Use a fraction (0.05), a percent (5%), or a bare number up to 100.");
         return value / 100.0;
-    }
-
-    public static double ParseWeight(string s)
-    {
-        s = s.Trim();
-        if (s.EndsWith("%"))
-            return double.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture);
-        return double.Parse(s, CultureInfo.InvariantCulture);
     }
 
     private static LatencyDisplayType ParseLatencyDisplayType(string latencies)

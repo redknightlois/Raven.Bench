@@ -14,19 +14,6 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("Target database name")]
     public string? Database { get; init; }
 
-    // Preferred numeric weights
-    [CommandOption("--reads")]
-    [Description("Read operation weight (percentage or count)")]
-    public string? Reads { get; init; }
-
-    [CommandOption("--writes")]
-    [Description("Write operation weight (percentage or count)")]
-    public string? Writes { get; init; }
-
-    [CommandOption("--updates")]
-    [Description("Update operation weight (percentage or count)")]
-    public string? Updates { get; init; }
-
     // Vector search options
     [CommandOption("--vector-topk")]
     [Description("Number of nearest neighbors to return (default: 10)")]
@@ -69,7 +56,7 @@ public abstract class BaseRunSettings : CommandSettings
     public string? VectorRecallEfSweep { get; init; }
 
     [CommandOption("--profile")]
-    [Description("Required. Operation profile: mixed, writes, reads, query-by-id, bulk-writes, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact, patch, attachments")]
+    [Description("Required. Operation profile: query-by-id, stackoverflow-random-reads, stackoverflow-text-search, query-users-by-name, vector-search, vector-search-exact, patch, attachments")]
     public string? Profile { get; init; }
 
     [CommandOption("--query-profile")]

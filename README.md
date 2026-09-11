@@ -12,7 +12,7 @@ This README is written for engineers who don’t need all the internals — just
 - Closed-loop ramp: `C = start .. end x factor` until knee.
 - Two transports: `raw` HTTP and `client` (official RavenDB .NET client).
 - Compression modes: identity, gzip, zstd (via client), brotli/deflate (raw).
-- Workload mixes: `--reads/--writes/--updates` by weights or percents.
+- YCSB document workloads: `ycsb` runs the load, C, A, B and insert-stream blends from a scenario file.
 - Key distributions: `uniform`, `zipfian`, `latest`.
 - Metrics per step: throughput, p50/p90/p95/p99 (raw and RTT-normalized), error rate, bytes in/out, client CPU, network utilization, and server metrics (when available).
 - Knee detection: the knee is the last step before the quality score (throughput / p99.9 latency) degrades or stagnates once p50 enters the danger zone (≥100 ms), or before errors exceed `--max-errors`.
@@ -43,9 +43,8 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `--warmup <duration>` and `--duration <duration>`: per-step timing, e.g., `20s`, `60s`.
   - `--distribution <uniform|zipfian|latest>`: key selection strategy (default: `uniform`).
   - `--doc-size <bytes|KB|MB>`: payload size for writes/updates (default: `1KB`).
-  - `--profile <mixed|writes|reads|query-by-id|bulk-writes|stackoverflow-random-reads|stackoverflow-text-search|query-users-by-name>`: required. Selects which workload to run.
+  - `--profile <query-by-id|stackoverflow-random-reads|stackoverflow-text-search|query-users-by-name|vector-search|vector-search-exact|patch|attachments>`: required. Selects which workload to run.
    - `--query-profile <voron-equality|index-equality|range|text-prefix|text-search|text-search-rare|text-search-common|text-search-mixed>`: query type for query workloads (default: `voron-equality`). Only valid with query profiles. `voron-equality` uses direct Voron document lookup via `id()`, while `index-equality` uses index-based field lookup.
-  - `--reads/--writes/--updates <weight|percent>`: only valid with `--profile mixed`; values normalize to 100%.
   - `--dataset <stackoverflow>`: Auto-downloads and imports dataset before benchmark (optional, required for StackOverflow profiles).
   - `--dataset-profile <small|half|full>`: Predefined dataset sizes with automatic database naming:
     - `small`: ~5GB data → database `StackOverflow-5GB`
@@ -81,24 +80,20 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 
 
 **Quick Starts**
-- Expose the hose (identity raw HTTP)
-  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25 --distribution uniform --transport raw --compression identity --concurrency 8..512x2 --duration 60s --out results.json --out-csv steps.csv`
+- Expose the hose (identity raw HTTP, read-by-id)
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution uniform --transport raw --compression identity --concurrency 8..512x2 --duration 60s --out results.json --out-csv steps.csv`
 - Realistic client with compression
-  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile mixed --transport client --compression zstd --reads 75 --writes 25 --concurrency 8..1024x2 --duration 60s --latencies both`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --transport client --compression zstd --concurrency 8..1024x2 --duration 60s --latencies both`
 - Zipfian reads and small docs
-  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile mixed --reads 90 --writes 10 --distribution zipfian --doc-size 512B --duration 45s`
-- Write-only profile
-  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile writes --concurrency 16..256x2 --duration 60s`
-- Read-only with preload
-  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile reads --preload 100000 --distribution zipfian --concurrency 8..512x2`
+  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution zipfian --doc-size 512B --duration 45s`
+- YCSB document blends (load, C, A, B, insert-stream)
+  - `Raven.Bench ycsb --url http://localhost:8080 --database ycsb --scenario benchmarks/ycsb/scenario.json --output-prefix results/ycsb`
 - Query-by-id profile
   - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution uniform --concurrency 8..256x2`
-- Bulk writes (100 docs per batch)
-  - `Raven.Bench closed --url http://localhost:8080 --database ycsb --profile bulk-writes --bulk-batch-size 100 --concurrency 4..64x2`
 - StackOverflow random reads with small dataset (auto-imports to StackOverflow-5GB)
   - `Raven.Bench closed --url http://localhost:8080 --profile stackoverflow-random-reads --dataset stackoverflow --dataset-profile small --concurrency 8..256x2 --duration 60s`
 - Rate-based benchmark (constant RPS steps)
-  - `Raven.Bench rate --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25 --distribution uniform --transport raw --compression identity --step 200..20000x1.5 --duration 60s --out results.json --out-csv steps.csv`
+  - `Raven.Bench rate --url http://localhost:8080 --database ycsb --profile query-by-id --preload 100000 --distribution uniform --transport raw --compression identity --step 200..20000x1.5 --duration 60s --out results.json --out-csv steps.csv`
 - StackOverflow text search with half dataset (auto-imports to StackOverflow-20GB)
   - `Raven.Bench closed --url http://localhost:8080 --profile stackoverflow-text-search --dataset stackoverflow --dataset-profile half --concurrency 8..128x2`
 - StackOverflow with custom size (auto-imports to StackOverflow-12GB with 10 post dumps)
@@ -114,22 +109,16 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - Auto (default): `--http-version auto`
 
 **Workloads and Distributions**
-- Mix
-  - Requires `--profile mixed` and `--preload N`.
-  - Provide `--reads/--writes/--updates` as either weights or percents; values normalize to 100%.
-  - Defaults to 75% reads, 25% updates (no writes).
-  - Reads and updates operate on preloaded documents; writes (if specified) grow the keyspace beyond preload.
+- Document blends
+  - The `ycsb` command is the only document mechanism. It runs the load, C, A, B and insert-stream blends from one scenario file.
+  - C is 100% read; A is 50% read and 50% one-field update; B is 95% read and 5% one-field update; insert-stream is 100% single-document insert; load fills the keyspace through the bulk path.
 - Key distributions for reads.
   - `uniform`: equal probability across existing keys.
   - `zipfian`: favors smaller (older) keys.
   - `latest`: favors the most recently inserted portion of the keyspace.
 
-- Profiles (v0 + v1):
-  - `--profile mixed`: YCSB-style mix honoring `--reads/--writes/--updates` (defaults to 75% reads, 25% updates when omitted). Requires `--preload N` to seed data.
-  - `--profile writes`: single-document inserts only. Ids are sequential `bench/00000001+`. Payload uses YCSB-like fields sized to `--doc-size`.
-  - `--profile reads`: read-by-id only. Requires `--preload N` to seed the keyspace; distribution applies.
+- Profiles:
   - `--profile query-by-id`: parameterized query by id only. Requires `--preload N`. Raw HTTP posts to `/databases/<db>/queries` with `from @all_docs where id() = $id`. Measures query endpoint overhead vs. direct reads.
-  - `--profile bulk-writes`: bulk insert batches via `/bulk_docs` endpoint. Use `--bulk-batch-size` (default: 100) and `--bulk-depth` (default: 1) to control batch size and parallelism. Mirrors `batch-writes.lua` behavior.
   - `--profile stackoverflow-random-reads` (or `so-random-reads`): Random reads from StackOverflow dataset: 50% `questions/{sampled-ids}`, 50% `users/{sampled-ids}`. Automatically samples existing document IDs from the database. Requires StackOverflow dataset. Mirrors `full-random-reads.lua`.
    - `--profile stackoverflow-text-search` (or `so-text-search`): Parameterized queries against questions collection. Use `--query-profile` to select query type (voron-equality for direct id() lookup, index-equality for index-based lookup, text-prefix, text-search variants for different selectivity). Requires StackOverflow dataset.
   - `--profile query-users-by-name`: Parameterized queries against users collection. Use `--query-profile` to select query type (voron-equality, index-equality, or range by reputation). Requires StackOverflow dataset.
@@ -188,7 +177,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `dotnet build -c Release`
   - `dotnet test`
 - Running locally
-  - `dotnet run --project src/RavenBench -- run --url http://localhost:8080 --database ycsb --profile mixed --reads 75 --writes 25`
+  - `dotnet run --project src/RavenBench -- ycsb --url http://localhost:8080 --database ycsb --scenario benchmarks/ycsb/scenario.json`
 
 **Notes and Limitations**
 - v1 supports `closed` and `rate` commands.

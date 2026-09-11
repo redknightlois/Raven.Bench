@@ -8,15 +8,7 @@ internal static class WorkloadFactory
     internal static IWorkload BuildWorkload(RunOptions opts, StackOverflowWorkloadMetadata? stackOverflowMetadata, StackOverflowUsersWorkloadMetadata? usersMetadata, VectorWorkloadMetadata? vectorMetadata)
     {
         if (opts.Profile == WorkloadProfile.Unspecified)
-            throw new InvalidOperationException("Workload profile is required. Specify --profile mixed|writes|reads|query-by-id|query-users-by-name.");
-
-        if (opts.Profile != WorkloadProfile.Mixed)
-        {
-            if (opts.Reads.HasValue || opts.Writes.HasValue || opts.Updates.HasValue)
-            {
-                throw new InvalidOperationException("--reads/--writes/--updates are only supported with --profile mixed.");
-            }
-        }
+            throw new InvalidOperationException("Workload profile is required. Specify --profile query-by-id|stackoverflow-random-reads|stackoverflow-text-search|query-users-by-name|vector-search|vector-search-exact|patch|attachments.");
 
         IKeyDistribution CreateDistribution()
         {
@@ -31,11 +23,7 @@ internal static class WorkloadFactory
 
         return opts.Profile switch
         {
-            WorkloadProfile.Mixed => BuildMixedWorkload(opts, CreateDistribution()),
-            WorkloadProfile.Writes => new WriteWorkload(opts.DocumentSizeBytes, opts.Seed, startingKey: opts.Preload),
-            WorkloadProfile.Reads => BuildReadWorkload(opts, CreateDistribution()),
             WorkloadProfile.QueryById => BuildQueryWorkload(opts, CreateDistribution()),
-            WorkloadProfile.BulkWrites => new BulkWriteWorkload(opts.DocumentSizeBytes, opts.BulkBatchSize, opts.Seed, startingKey: opts.Preload),
             WorkloadProfile.StackOverflowRandomReads => new StackOverflowReadWorkload(stackOverflowMetadata!),
             WorkloadProfile.StackOverflowTextSearch => BuildStackOverflowQueryWorkload(opts, stackOverflowMetadata!),
             WorkloadProfile.QueryUsersByName => BuildUsersQueryWorkload(opts, usersMetadata!),
@@ -45,26 +33,6 @@ internal static class WorkloadFactory
             WorkloadProfile.Attachments => new AttachmentWorkload(CreateDistribution(), opts.Preload, opts.AttachmentOp, opts.DocumentSizeBytes, opts.Seed),
             _ => throw new NotSupportedException($"Unsupported profile: {opts.Profile}")
         };
-    }
-
-    private static IWorkload BuildMixedWorkload(RunOptions opts, IKeyDistribution distribution)
-    {
-        if (opts.Preload <= 0)
-            throw new InvalidOperationException("Mixed profile requires preloaded documents. Use --preload to seed data.");
-
-        // Default: 75% reads, 25% updates (no writes - operate on existing data)
-        var reads = opts.Reads ?? 75.0;
-        var writes = opts.Writes ?? 0.0;
-        var updates = opts.Updates ?? 25.0;
-        var mix = WorkloadMix.FromWeights(reads, writes, updates);
-        return new MixedProfileWorkload(mix, distribution, opts.DocumentSizeBytes, opts.Seed, initialKeyspace: opts.Preload);
-    }
-
-    private static IWorkload BuildReadWorkload(RunOptions opts, IKeyDistribution distribution)
-    {
-        if (opts.Preload <= 0)
-            throw new InvalidOperationException("Read profile requires --preload to seed the keyspace before the run.");
-        return new ReadWorkload(distribution, opts.Preload);
     }
 
     private static IWorkload BuildQueryWorkload(RunOptions opts, IKeyDistribution distribution)
@@ -136,8 +104,6 @@ internal static class WorkloadFactory
     {
         return profile switch
         {
-            WorkloadProfile.Mixed => true,
-            WorkloadProfile.Reads => true,
             WorkloadProfile.QueryById => true,
             WorkloadProfile.Patch => true,
             WorkloadProfile.Attachments => true,
