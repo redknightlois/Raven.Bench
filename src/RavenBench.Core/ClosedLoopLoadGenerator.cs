@@ -92,7 +92,7 @@ namespace RavenBench.Core
             }
 
             long scheduledCount = 0;
-            while (stopwatch.Elapsed < endTime && cancellationToken.IsCancellationRequested == false)
+            while (stopwatch.Elapsed < endTime && cancellationToken.IsCancellationRequested == false && _workload.IsExhausted == false)
             {
                 // One producer thread draws every operation from the one run-seeded source; the
                 // concurrency decides how many are drawn before the step ends and which worker runs

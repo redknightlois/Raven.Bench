@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
+using RavenBench.Core;
 using RavenBench.Core.Ycsb;
 using RavenBench.Core.Workload;
 using Xunit;
@@ -82,5 +86,41 @@ public class YcsbWorkloadSequenceTests
 
         ops.Should().OnlyContain(op => op is InsertOperation<string>);
         ops.Select(op => ((InsertOperation<string>)op).Id).Should().OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public async Task Load_Stops_At_The_Scenario_Document_Count()
+    {
+        // INVARIANT: the bulk load produces exactly the document count and no more. A load that
+        // ran for its whole step duration would overshoot the keyspace, and the insert-stream
+        // would then overwrite documents the load had already stored.
+        var bounded = new BulkWriteWorkload(DocumentSize, batchSize: 5, Seed, targetCount: 12, startingKey: 0);
+        var recording = new RecordingBulkWorkload(bounded);
+        var generator = new ClosedLoopLoadGenerator(new TestTransport(baseLatencyMs: 0), recording, concurrency: 2, new Random(1));
+
+        var (_, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        recording.Ids.Should().Equal(Enumerable.Range(1, 12).Select(i => BenchIds.IdFor(i)));
+        metrics.OperationsCompleted.Should().Be(3);
+        bounded.IsExhausted.Should().BeTrue();
+    }
+
+    private sealed class RecordingBulkWorkload : IWorkload
+    {
+        private readonly IWorkload _inner;
+        private readonly List<string> _ids = new();
+
+        public RecordingBulkWorkload(IWorkload inner) => _inner = inner;
+
+        public IReadOnlyList<string> Ids => _ids;
+
+        public bool IsExhausted => _inner.IsExhausted;
+
+        public OperationBase NextOperation(Random rng)
+        {
+            var operation = _inner.NextOperation(rng);
+            _ids.AddRange(((BulkInsertOperation<string>)operation).Documents.Select(d => d.Id));
+            return operation;
+        }
     }
 }
