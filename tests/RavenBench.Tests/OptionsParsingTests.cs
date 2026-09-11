@@ -21,7 +21,7 @@ public class CliParsingTests
             Database = "ycsb",
             Concurrency = "16..256x1.5",
             MaxErrors = "1%",
-            Profile = "mixed"
+            Profile = "query-by-id"
         };
 
         var opts = settings.ToRunOptions();
@@ -31,26 +31,6 @@ public class CliParsingTests
         opts.Step.Start.Should().Be(16);
         opts.Step.End.Should().Be(256);
         opts.Step.Factor.Should().Be(1.5);
-    }
-
-    [Fact]
-    public void Converts_Weight_Based_Mix_Flags()
-    {
-        var settings = new ClosedSettings
-        {
-            Url = "http://localhost:10101",
-            Database = "ycsb",
-            Reads = "3",
-            Writes = "1",
-            Updates = "0",
-            Profile = "mixed"
-        };
-
-        var opts = settings.ToRunOptions();
-
-        opts.Reads.Should().Be(3);
-        opts.Writes.Should().Be(1);
-        opts.Updates.Should().Be(0);
     }
 
     [Fact]
@@ -250,7 +230,7 @@ public class CliParsingTests
         {
             Url = "http://localhost:8080",
             Database = "test",
-            Profile = "mixed",
+            Profile = "query-by-id",
             SearchEngine = "sphinx"
         };
 
@@ -267,7 +247,7 @@ public class CliParsingTests
             Url = "http://localhost:10101",
             Database = "ycsb",
             Step = "32..1024x1.5",
-            Profile = "mixed"
+            Profile = "query-by-id"
         };
 
         var opts = settings.ToRunOptions();
@@ -286,7 +266,7 @@ public class CliParsingTests
             Url = "http://localhost:10101",
             Database = "ycsb",
             Step = "200..20000x1.5",
-            Profile = "mixed"
+            Profile = "query-by-id"
         };
 
         var opts = settings.ToRunOptions();

@@ -51,7 +51,7 @@ public class CompareCommandTests
         // Different workload profiles should be incompatible
         var summaries = new List<BenchmarkSummary>
         {
-            CreateSummary(WorkloadProfile.Reads),
+            CreateSummary(WorkloadProfile.QueryById),
             CreateSummary(WorkloadProfile.Writes)
         };
         var labels = new List<string> { "Reads", "Writes" };
@@ -82,8 +82,8 @@ public class CompareCommandTests
     {
         // INVARIANT: Different HTTP versions (HTTP/1 vs HTTP/2/3) should be comparable
         // as long as the workload profile and dataset are the same.
-        var summary1 = CreateSummaryWithHttpVersion(WorkloadProfile.Reads, "1.1");
-        var summary2 = CreateSummaryWithHttpVersion(WorkloadProfile.Reads, "2.0");
+        var summary1 = CreateSummaryWithHttpVersion(WorkloadProfile.QueryById, "1.1");
+        var summary2 = CreateSummaryWithHttpVersion(WorkloadProfile.QueryById, "2.0");
         var summaries = new List<BenchmarkSummary> { summary1, summary2 };
         var labels = new List<string> { "HTTP/1.1", "HTTP/2.0" };
 
@@ -357,7 +357,7 @@ public class CompareCommandTests
         var summaries = new List<BenchmarkSummary>();
         for (int i = 0; i < count; i++)
         {
-            summaries.Add(CreateSummary(WorkloadProfile.Reads));
+            summaries.Add(CreateSummary(WorkloadProfile.QueryById));
         }
         return summaries;
     }
@@ -439,7 +439,7 @@ public class CompareCommandTests
             {
                 Url = "http://localhost:8080",
                 Database = "test",
-                Profile = WorkloadProfile.Reads,
+                Profile = WorkloadProfile.QueryById,
                 Dataset = "test",
                 Transport = TransportKind.Raw,
                 QueryProfile = QueryProfile.VoronEquality

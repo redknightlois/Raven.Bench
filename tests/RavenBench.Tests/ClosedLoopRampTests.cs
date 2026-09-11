@@ -22,7 +22,6 @@ public class ClosedLoopRampTests
         {
             Url = "http://localhost:10101",
             Database = "ycsb",
-            Writes = 100,
             Distribution = KeyDistributionKind.Uniform,
             Transport = TransportKind.Raw,
             Compression = CompressionMode.Identity,
