@@ -146,8 +146,8 @@ public sealed class RawHttpTransport : ITransport
                     return await GetAsync(readOp.Id, ct).ConfigureAwait(false);
                 case InsertOperation<string> insertOp:
                     return await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false);
-                case UpdateOperation<string> updateOp:
-                    return await PutAsyncInternal(updateOp.Id, updateOp.Payload, ct).ConfigureAwait(false);
+                case UpdateFieldOperation updateFieldOp:
+                    return await UpdateFieldAsync(updateFieldOp, ct).ConfigureAwait(false);
                 case StreamQueryOperation streamOp:
                     return await PostStreamQueryAsync(streamOp, ct).ConfigureAwait(false);
                 case QueryOperation queryOp:
@@ -372,13 +372,26 @@ public sealed class RawHttpTransport : ITransport
         }).ConfigureAwait(false);
     });
 
-    private Task<TransportResult> PatchDocumentAsync(DocumentPatchOperation patchOp, CancellationToken ct) => SendAsync(ct, async () =>
+    private Task<TransportResult> PatchDocumentAsync(DocumentPatchOperation patchOp, CancellationToken ct) =>
+        SendPatchAsync(patchOp.Id, new { Script = patchOp.Script, Values = new { } }, ct);
+
+    /// <summary>
+    /// Maps the field update to a patch whose script is fixed: the field name and the value travel
+    /// as patch arguments, so the server sees one script for every update and the operation itself
+    /// carries no RavenDB syntax.
+    /// </summary>
+    private Task<TransportResult> UpdateFieldAsync(UpdateFieldOperation updateOp, CancellationToken ct) =>
+        SendPatchAsync(
+            updateOp.Id,
+            new { Script = "this[args.field] = args.value;", Values = new { field = updateOp.FieldName, value = updateOp.Value } },
+            ct);
+
+    private Task<TransportResult> SendPatchAsync(string id, object patch, CancellationToken ct) => SendAsync(ct, async () =>
     {
-        var url = $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(patchOp.Id)}";
+        var url = $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(id)}";
         using var req = NewRequest(HttpMethod.Patch, url);
 
-        var payload = new { Patch = new { Script = patchOp.Script, Values = new { } } };
-        var jsonPayload = JsonSerializer.Serialize(payload);
+        var jsonPayload = JsonSerializer.Serialize(new { Patch = patch });
         req.Content = CreateJsonContent(jsonPayload);
 
         return await SendCoreAsync(req, ct, ResponseReadDeadline.Capped, async (resp, readCt) =>

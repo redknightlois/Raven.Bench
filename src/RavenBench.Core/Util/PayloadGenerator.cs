@@ -87,15 +87,6 @@ public static class PayloadGenerator
     };
 
     /// <summary>
-    /// The whole-document update for one document, in the form the transport driving the run consumes.
-    /// </summary>
-    public static OperationBase UpdateOperationFor(PayloadKind kind, int seed, string documentId, int sizeBytes) => kind switch
-    {
-        PayloadKind.Entity => new UpdateOperation<YcsbRecord> { Id = documentId, Payload = GenerateRecord(seed, documentId, sizeBytes) },
-        _ => new UpdateOperation<string> { Id = documentId, Payload = Generate(seed, documentId, sizeBytes) }
-    };
-
-    /// <summary>
     /// Draws one field's worth of characters from the caller's own source. The alphabet needs no
     /// JSON escaping, so a field's character count is also its byte count on the wire.
     /// </summary>
