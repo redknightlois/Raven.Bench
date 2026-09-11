@@ -86,3 +86,13 @@ public sealed class RequiresMongoAndDocumentDbFactAttribute : FactAttribute
             Skip = "Both MongoDB and DocumentDB are required for this test.";
     }
 }
+
+/// <summary>Skips the test unless MongoDB, DocumentDB and PostgreSQL all answer on their ports.</summary>
+public sealed class RequiresMongoDocumentDbAndPostgreSqlFactAttribute : FactAttribute
+{
+    public RequiresMongoDocumentDbAndPostgreSqlFactAttribute()
+    {
+        if (MongoAvailability.IsAvailable == false || DocumentDbAvailability.IsAvailable == false || PostgreSqlAvailability.IsAvailable == false)
+            Skip = "MongoDB, DocumentDB and PostgreSQL are all required for this test.";
+    }
+}

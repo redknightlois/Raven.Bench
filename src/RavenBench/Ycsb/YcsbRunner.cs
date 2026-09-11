@@ -37,7 +37,10 @@ public sealed class YcsbRunner
         var url = RequiredString(_settings.Url, "--url");
         var database = RequiredString(_settings.Database, "--database");
 
-        var context = await BuildContextAsync(url, database);
+        var (loadStep, loadShape) = ResolveLoadStepPlan(_scenario);
+        var (workStep, workShape) = ResolveStepPlan(_scenario);
+
+        var context = await BuildContextAsync(url, database, ResolveConcurrencyCeiling(_scenario, url, database));
         using var transport = context.Transport;
 
         await transport.EnsureDatabaseExistsAsync(database);
@@ -87,7 +90,6 @@ public sealed class YcsbRunner
             }
         };
 
-        var (loadStep, loadShape) = ResolveLoadStepPlan(_scenario);
         var loadOpts = BaseOptions(WorkloadProfile.BulkWrites, loadStep, loadShape) with { Warmup = TimeSpan.Zero };
         var loadWorkload = new BulkWriteWorkload(docSizeBytes, loadOpts.BulkBatchSize, seed, _scenario.DocumentCount, startingKey: 0);
         var loadExecutor = new BenchmarkExecutor(loadOpts, transport, loadWorkload, cpuTracker);
@@ -101,8 +103,6 @@ public sealed class YcsbRunner
                 $"The keyspace holds {loadedCount} documents but the scenario requires DocumentCount={_scenario.DocumentCount}. " +
                 "C, A, B and insert-stream do not run against a short keyspace, and do not load it themselves.");
         }
-
-        var (workStep, workShape) = ResolveStepPlan(_scenario);
 
         foreach (var (kind, mix) in new[]
                  {
@@ -132,7 +132,7 @@ public sealed class YcsbRunner
     /// carries the facts the result records for the target that actually ran. An unknown target
     /// fails naming the value rather than falling back to a default.
     /// </summary>
-    private async Task<RunContext> BuildContextAsync(string url, string database)
+    private async Task<RunContext> BuildContextAsync(string url, string database, int maxConcurrency)
     {
         if (string.Equals(_scenario.Target, "ravendb", StringComparison.OrdinalIgnoreCase))
             return await BuildRavenContextAsync(url, database);
@@ -153,8 +153,28 @@ public sealed class YcsbRunner
                 StrictHttpVersion: false);
         }
 
+        if (string.Equals(_scenario.Target, PostgresYcsbTransport.Target, StringComparison.OrdinalIgnoreCase))
+        {
+            var transport = new PostgresYcsbTransport(url, database, maxConcurrency);
+            return new RunContext(
+                transport,
+                transport.RecordedEndpoint,
+                ClientCompression: "n/a",
+                EffectiveHttpVersion: "n/a",
+                // PostgreSQL writes at synchronous_commit=on, the parity setting recorded for the target.
+                Durability: new DurabilityParity
+                {
+                    Setting = PostgresYcsbTransport.DurabilitySetting,
+                    Value = PostgresYcsbTransport.DurabilityValue
+                },
+                TransportKind: TransportKind.Raw,
+                Compression: CompressionMode.Identity,
+                HttpVersion: "auto",
+                StrictHttpVersion: false);
+        }
+
         throw new YcsbScenarioException(
-            $"Scenario key 'Target' is '{_scenario.Target}'; valid targets are 'ravendb', '{MongoYcsbTransport.MongoDbTarget}' and '{MongoYcsbTransport.DocumentDbTarget}'.");
+            $"Scenario key 'Target' is '{_scenario.Target}'; valid targets are 'ravendb', '{MongoYcsbTransport.MongoDbTarget}', '{MongoYcsbTransport.DocumentDbTarget}' and '{PostgresYcsbTransport.Target}'.");
     }
 
     private async Task<RunContext> BuildRavenContextAsync(string url, string database)
@@ -178,8 +198,8 @@ public sealed class YcsbRunner
             RecordedUrl: url,
             ClientCompression: clientCompression,
             EffectiveHttpVersion: HttpHelper.FormatHttpVersion(negotiatedHttpVersion),
-            // RavenDB writes with its own default durability; PostgreSQL and Mongo record
-            // synchronous_commit=on and j=true when their transports land.
+            // RavenDB writes with its own default durability; the PostgreSQL and Mongo dispatchers
+            // record their own setting and value.
             Durability: new DurabilityParity { Setting = "durability", Value = "ravendb-default" },
             TransportKind: transportKind,
             Compression: compression,
@@ -229,6 +249,26 @@ public sealed class YcsbRunner
         }
 
         return (CliParsing.ParseStepPlan(scenario.Concurrency).Normalize(), LoadShape.Closed);
+    }
+
+    /// <summary>
+    /// The largest concurrency the resolved scenario reaches, which sizes a transport's per-worker
+    /// connection set. The closed-loop plan gives it directly. A rate run holds one in-flight
+    /// operation per worker, so its ceiling is the rate planner's own estimate at the run's
+    /// fallback service time (the ycsb runs carry no measured baseline), and the load run's
+    /// closed-loop plan is counted too because it runs first at the scenario's concurrency.
+    /// </summary>
+    internal static int ResolveConcurrencyCeiling(YcsbScenario scenario, string url, string database)
+    {
+        var closedEnd = CliParsing.ParseStepPlan(scenario.Concurrency).Normalize().End;
+        if (scenario.Rate.HasValue == false)
+            return closedEnd;
+
+        var rate = (int)Math.Max(1, Math.Round(scenario.Rate.Value));
+        var rateWorkers = RateWorkerPlanner.ResolveRateWorkerCount(
+            new RunOptions { Url = url, Database = database }, rate, baselineLatencyMicros: 0);
+
+        return Math.Max(closedEnd, rateWorkers);
     }
 
     private static ITransport BuildRavenDbTransport(TransportKind kind, string url, string database, CompressionMode compression, Version httpVersion) => kind switch
