@@ -451,6 +451,10 @@ public class BenchmarkRunner(RunOptions opts)
             LogStepResult(steps.Count, stepResult);
             maxNetUtil = Math.Max(maxNetUtil, stepResult.NetworkUtilization);
 
+            // A bounded workload ends the ramp when it has produced its last operation.
+            if (workload.IsExhausted)
+                break;
+
             if (stepResult.ErrorRate > Math.Max(opts.MaxErrorRate, 0.05))
             {
                 Console.WriteLine("[Raven.Bench] High error rate; stopping ramp.");

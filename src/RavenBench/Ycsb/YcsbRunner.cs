@@ -101,9 +101,9 @@ public sealed class YcsbRunner
             }
         };
 
-        var (loadStep, loadShape) = ResolveStepPlan(_scenario);
-        var loadOpts = BaseOptions(WorkloadProfile.BulkWrites, loadStep, loadShape);
-        var loadWorkload = new BulkWriteWorkload(docSizeBytes, loadOpts.BulkBatchSize, seed, startingKey: 0);
+        var (loadStep, loadShape) = ResolveLoadStepPlan(_scenario);
+        var loadOpts = BaseOptions(WorkloadProfile.BulkWrites, loadStep, loadShape) with { Warmup = TimeSpan.Zero };
+        var loadWorkload = new BulkWriteWorkload(docSizeBytes, loadOpts.BulkBatchSize, seed, _scenario.DocumentCount, startingKey: 0);
         var loadExecutor = new BenchmarkExecutor(loadOpts, transport, loadWorkload, cpuTracker);
         var loadRamp = await BenchmarkRunner.RunRampAsync(loadOpts, transport, loadExecutor, loadWorkload, startupCalibration: null, rng);
         results.Add((YcsbRunKind.Load, Summary(loadOpts, loadRamp, YcsbRunKind.Load)));
@@ -142,9 +142,18 @@ public sealed class YcsbRunner
     }
 
     /// <summary>
-    /// The scenario's own concurrency step plan drives every run of the sequence: one field, one
-    /// meaning, per the scenario's parameter table. A scenario rate switches every run to the
-    /// rate load shape, at a fixed target (no ramp) sized by the rate value itself.
+    /// The load run fills exactly the scenario's document count, so it uses the closed-loop
+    /// generator at the scenario's concurrency and no warmup: a fill has no steady state to warm,
+    /// and the bounded workload ends the step once the keyspace holds every document.
+    /// </summary>
+    private static (StepPlan Step, LoadShape Shape) ResolveLoadStepPlan(YcsbScenario scenario)
+        => (CliParsing.ParseStepPlan(scenario.Concurrency).Normalize(), LoadShape.Closed);
+
+    /// <summary>
+    /// The scenario's own concurrency step plan drives the C, A and B runs: one field, one
+    /// meaning, per the scenario's parameter table. A scenario rate switches those runs to the
+    /// rate load shape, at a fixed target (no ramp) sized by the rate value itself. The load run
+    /// resolves its own plan, because a bounded fill holds no rate.
     /// </summary>
     private static (StepPlan Step, LoadShape Shape) ResolveStepPlan(YcsbScenario scenario)
     {
