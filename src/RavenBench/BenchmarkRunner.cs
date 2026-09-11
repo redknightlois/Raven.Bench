@@ -187,10 +187,6 @@ public class BenchmarkRunner(RunOptions opts)
         var steps = new List<StepResult>();
         var histogramArtifacts = new List<HistogramArtifact>();
 
-        var stepPlan = opts.Step.Normalize();
-        var currentValue = stepPlan.Start;
-        var endValue = stepPlan.End;
-
         var cpuTracker = new ProcessCpuTracker();
         using var serverTracker = new ServerMetricsTracker(transport, opts);
         var maxNetUtil = 0.0;
@@ -301,6 +297,54 @@ public class BenchmarkRunner(RunOptions opts)
 
         var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker);
 
+        var rampResult = await RunRampAsync(opts, transport, executor, workload, startupCalibration, _rng);
+        steps = rampResult.Steps;
+        histogramArtifacts = rampResult.HistogramArtifacts;
+        maxNetUtil = rampResult.MaxNetworkUtilization;
+
+        if (opts.Verbose)
+        {
+            VerboseErrorTracker.PrintSummary();
+        }
+
+        var serverMetricsHistory = serverTracker.GetHistory();
+
+        return new BenchmarkRun
+        {
+            Steps = steps,
+            MaxNetworkUtilization = maxNetUtil,
+            ClientCompression = clientCompression,
+            EffectiveHttpVersion = httpVersion,
+            StartupCalibration = startupCalibration,
+            ServerMetricsHistory = serverMetricsHistory.Count > 0 ? serverMetricsHistory : null,
+            HistogramArtifacts = histogramArtifacts.Count > 0 ? histogramArtifacts : null,
+            VectorMetadata = vectorMetadata,
+            EffectiveDatabase = effectiveDatabase
+        };
+    }
+
+    /// <summary>
+    /// The result of driving a step plan through its full ramp: the load, C, A, B and
+    /// insert-stream runs of a ycsb scenario each drive one call of this, at a fixed step plan
+    /// (a single value or a ramp), so no second ramp loop exists anywhere in the codebase.
+    /// </summary>
+    internal readonly record struct RampResult(List<StepResult> Steps, double MaxNetworkUtilization, List<HistogramArtifact> HistogramArtifacts);
+
+    internal static async Task<RampResult> RunRampAsync(
+        RunOptions opts,
+        IYcsbTransport transport,
+        BenchmarkExecutor executor,
+        IWorkload workload,
+        StartupCalibration? startupCalibration,
+        Random rng)
+    {
+        var steps = new List<StepResult>();
+        var histogramArtifacts = new List<HistogramArtifact>();
+        var stepPlan = opts.Step.Normalize();
+        var currentValue = stepPlan.Start;
+        var endValue = stepPlan.End;
+        var maxNetUtil = 0.0;
+
         double? observedServiceTimeSeconds = null;
         int? previousAutoRateWorkers = null;
 
@@ -323,9 +367,9 @@ public class BenchmarkRunner(RunOptions opts)
 
             ILoadGenerator loadGenerator = opts.Shape switch
             {
-                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, _rng),
-                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng),
-                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, _rng)
+                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, rng),
+                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, rng),
+                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, rng)
             };
 
             LogStepStart(opts.Shape, steps.Count + 1, (int)currentValue, rateWorkerCount, opts);
@@ -447,25 +491,7 @@ public class BenchmarkRunner(RunOptions opts)
             currentValue = stepPlan.Next(currentValue);
         }
 
-        if (opts.Verbose)
-        {
-            VerboseErrorTracker.PrintSummary();
-        }
-
-        var serverMetricsHistory = serverTracker.GetHistory();
-
-        return new BenchmarkRun
-        {
-            Steps = steps,
-            MaxNetworkUtilization = maxNetUtil,
-            ClientCompression = clientCompression,
-            EffectiveHttpVersion = httpVersion,
-            StartupCalibration = startupCalibration,
-            ServerMetricsHistory = serverMetricsHistory.Count > 0 ? serverMetricsHistory : null,
-            HistogramArtifacts = histogramArtifacts.Count > 0 ? histogramArtifacts : null,
-            VectorMetadata = vectorMetadata,
-            EffectiveDatabase = effectiveDatabase
-        };
+        return new RampResult(steps, maxNetUtil, histogramArtifacts);
     }
 
     private static void LogStepStart(LoadShape shape, int stepNumber, int currentValue, int rateWorkerCount, RunOptions opts)
