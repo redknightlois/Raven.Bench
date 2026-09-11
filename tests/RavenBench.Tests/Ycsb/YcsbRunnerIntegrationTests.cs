@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -68,6 +69,54 @@ public class YcsbRunnerIntegrationTests : RavenTestDriver
             summary.Ycsb.ServerVersion.Should().NotBeNullOrEmpty();
             summary.Ycsb.Durability.Setting.Should().Be("durability");
             summary.Ycsb.ResolvedScenario.Should().Be(scenario);
+            summary.MachineFingerprint.Should().NotBeNull();
+            summary.MachineFingerprint!.DatabaseInDocker.Should().BeFalse("the RavenDB target is external");
+            summary.MachineFingerprint.DatabaseImage.Should().BeNull();
+            summary.Ycsb.ImageReference.Should().BeNull();
+            summary.Ycsb.ImageDigest.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task Full_Sequence_Leaves_Distinct_Histogram_And_Csv_Artifacts()
+    {
+        using var store = GetDocumentStore();
+
+        var scenario = new YcsbScenario
+        {
+            Seed = 3,
+            Target = "ravendb",
+            DocumentCount = 15,
+            DocumentSize = "256B",
+            Concurrency = "2..2",
+            Distribution = "uniform",
+            Warmup = "0s",
+            Duration = "300ms"
+        };
+
+        var settings = new YcsbSettings
+        {
+            Url = store.Urls[0],
+            Database = store.Database,
+            Scenario = "unused-in-this-test.json",
+            BulkBatchSize = 5
+        };
+
+        var results = await new YcsbRunner(scenario, settings).RunAsync();
+
+        results.Select(r => r.Summary.Ycsb!.Run).Should().OnlyHaveUniqueItems();
+
+        var artifacts = results.SelectMany(r => r.Summary.HistogramArtifacts!).ToList();
+        artifacts.Should().NotBeEmpty();
+
+        var paths = artifacts.SelectMany(a => new[] { a.HlogPath, a.CsvPath }).ToList();
+        paths.Should().NotContainNulls("every ycsb step writes both artifacts");
+        paths.Should().OnlyHaveUniqueItems("the run identity keeps the five runs' artifacts apart");
+
+        foreach (var path in paths)
+        {
+            File.Exists(path).Should().BeTrue($"the result names '{path}'");
+            new FileInfo(path!).Length.Should().BeGreaterThan(0);
         }
     }
 

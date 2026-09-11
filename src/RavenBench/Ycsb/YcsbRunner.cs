@@ -1,5 +1,6 @@
 using RavenBench.Cli;
 using RavenBench.Core;
+using RavenBench.Core.Diagnostics;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
@@ -19,11 +20,19 @@ public sealed class YcsbRunner
 {
     private readonly YcsbScenario _scenario;
     private readonly YcsbSettings _settings;
+    private readonly DockerDatabaseContainerLocator _containerLocator;
+    private readonly NativeMachineFingerprintSource _fingerprintSource;
+
+    // Distinguishes the default histogram directory of two runners in one process, so parallel
+    // gated tests never share an artifact path when neither supplies an output prefix.
+    private readonly string _runToken = Guid.NewGuid().ToString("N")[..8];
 
     public YcsbRunner(YcsbScenario scenario, YcsbSettings settings)
     {
         _scenario = scenario;
         _settings = settings;
+        _containerLocator = new DockerDatabaseContainerLocator();
+        _fingerprintSource = new NativeMachineFingerprintSource();
     }
 
     public async Task<List<(YcsbRunKind Kind, BenchmarkSummary Summary)>> RunAsync()
@@ -46,7 +55,11 @@ public sealed class YcsbRunner
         await transport.EnsureDatabaseExistsAsync(database);
         var serverVersion = await transport.GetServerVersionAsync();
 
-        RunOptions BaseOptions(WorkloadProfile profile, StepPlan step, LoadShape shape) => new()
+        var repositoryRoot = RepositoryRootLocator.Find();
+        var databaseContainer = ResolveDatabaseContainer(context.RecordedUrl);
+        var machineFingerprint = new MachineFingerprintCollector(_fingerprintSource).Collect(repositoryRoot, databaseContainer);
+
+        RunOptions BaseOptions(WorkloadProfile profile, StepPlan step, LoadShape shape, string runName) => new()
         {
             Url = context.RecordedUrl,
             Database = database,
@@ -65,7 +78,11 @@ public sealed class YcsbRunner
             BulkBatchSize = _settings.BulkBatchSize,
             BulkDepth = _settings.BulkDepth,
             MaxErrorRate = CliParsing.ParsePercent(_settings.MaxErrors),
-            LinkMbps = _settings.LinkMbps
+            LinkMbps = _settings.LinkMbps,
+            LatencyHistogramsDir = HistogramPrefixFor(runName),
+            // A ycsb run always exports both the HdrHistogram log and the CSV, so the result
+            // names two artifacts that exist for every step and the two runs never collide.
+            LatencyHistogramsFormat = HistogramExportFormat.Both
         };
 
         var cpuTracker = new ProcessCpuTracker();
@@ -80,17 +97,20 @@ public sealed class YcsbRunner
             ClientCompression = context.ClientCompression,
             EffectiveHttpVersion = context.EffectiveHttpVersion,
             HistogramArtifacts = ramp.HistogramArtifacts.Count > 0 ? ramp.HistogramArtifacts : null,
+            MachineFingerprint = machineFingerprint,
             Ycsb = new YcsbRunInfo
             {
                 Run = kind.ToResultName(),
                 ResolvedScenario = _scenario,
                 ProductName = transport.ProductName,
                 ServerVersion = serverVersion,
-                Durability = context.Durability
+                Durability = context.Durability,
+                ImageReference = databaseContainer?.ImageReference,
+                ImageDigest = databaseContainer?.ImageDigest
             }
         };
 
-        var loadOpts = BaseOptions(WorkloadProfile.BulkWrites, loadStep, loadShape) with { Warmup = TimeSpan.Zero };
+        var loadOpts = BaseOptions(WorkloadProfile.BulkWrites, loadStep, loadShape, YcsbRunKind.Load.ToResultName()) with { Warmup = TimeSpan.Zero };
         var loadWorkload = new BulkWriteWorkload(docSizeBytes, loadOpts.BulkBatchSize, seed, _scenario.DocumentCount, startingKey: 0);
         var loadExecutor = new BenchmarkExecutor(loadOpts, transport, loadWorkload, cpuTracker);
         var loadRamp = await BenchmarkRunner.RunRampAsync(loadOpts, transport, loadExecutor, loadWorkload, startupCalibration: null, rng);
@@ -111,14 +131,14 @@ public sealed class YcsbRunner
                      (YcsbRunKind.WorkloadB, YcsbRunKinds.WorkloadB)
                  })
         {
-            var opts = BaseOptions(WorkloadProfile.Mixed, workStep, workShape) with { Preload = _scenario.DocumentCount };
+            var opts = BaseOptions(WorkloadProfile.Mixed, workStep, workShape, kind.ToResultName()) with { Preload = _scenario.DocumentCount };
             var workload = new MixedProfileWorkload(mix, distribution, docSizeBytes, seed, initialKeyspace: _scenario.DocumentCount);
             var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker);
             var ramp = await BenchmarkRunner.RunRampAsync(opts, transport, executor, workload, startupCalibration: null, rng);
             results.Add((kind, Summary(opts, ramp, kind)));
         }
 
-        var insertOpts = BaseOptions(WorkloadProfile.Writes, workStep, workShape);
+        var insertOpts = BaseOptions(WorkloadProfile.Writes, workStep, workShape, YcsbRunKind.InsertStream.ToResultName());
         var insertWorkload = new WriteWorkload(docSizeBytes, seed, startingKey: _scenario.DocumentCount);
         var insertExecutor = new BenchmarkExecutor(insertOpts, transport, insertWorkload, cpuTracker);
         var insertRamp = await BenchmarkRunner.RunRampAsync(insertOpts, transport, insertExecutor, insertWorkload, startupCalibration: null, rng);
@@ -210,6 +230,52 @@ public sealed class YcsbRunner
     private static bool IsMongoTarget(string target) =>
         string.Equals(target, MongoYcsbTransport.MongoDbTarget, StringComparison.OrdinalIgnoreCase)
         || string.Equals(target, MongoYcsbTransport.DocumentDbTarget, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The container that serves the target, for the three containerized targets, so the result
+    /// records the image that actually ran. The external RavenDB target did not run in a container
+    /// the benchmark used, so it has none.
+    /// </summary>
+    private DatabaseContainerInfo? ResolveDatabaseContainer(string recordedUrl)
+    {
+        if (IsMongoTarget(_scenario.Target) == false &&
+            string.Equals(_scenario.Target, PostgresYcsbTransport.Target, StringComparison.OrdinalIgnoreCase) == false)
+            return null;
+
+        return _containerLocator.Locate(ResolveHostPort(recordedUrl));
+    }
+
+    // The container is matched by the port the caller's endpoint names. Without a port the
+    // container that serves the endpoint cannot be identified, so the run fails rather than
+    // guessing a default that may belong to another server.
+    private int ResolveHostPort(string recordedUrl)
+    {
+        if (Uri.TryCreate(recordedUrl, UriKind.Absolute, out var uri) && uri.Port > 0)
+            return uri.Port;
+
+        throw new YcsbScenarioException(
+            $"The '{_scenario.Target}' endpoint does not carry a port, so the container that serves it cannot be identified. Name the port in --url.");
+    }
+
+    /// <summary>
+    /// The per-run histogram prefix. It carries the run identity so the five runs never share an
+    /// artifact path, and it sits next to the result when the caller named an output prefix. With
+    /// no output prefix, a unique directory keeps two runs in one process apart.
+    /// </summary>
+    private string HistogramPrefixFor(string runName)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.OutputDir) == false)
+            return $"{_settings.OutputDir}-{runName}";
+
+        if (string.IsNullOrWhiteSpace(_settings.OutJson) == false)
+        {
+            var directory = Path.GetDirectoryName(_settings.OutJson) ?? ".";
+            var name = Path.GetFileNameWithoutExtension(_settings.OutJson);
+            return Path.Combine(directory, $"{name}-{runName}");
+        }
+
+        return Path.Combine(Path.GetTempPath(), "raven-bench-ycsb", _runToken, runName);
+    }
 
     /// <summary>
     /// What the run records about its target that the run sequence itself does not compute. The

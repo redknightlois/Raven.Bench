@@ -40,13 +40,31 @@ public class YcsbResultCompatibilityTests
             Verdict = "ycsb",
             ClientCompression = "identity",
             EffectiveHttpVersion = "1.1",
+            MachineFingerprint = new MachineFingerprint
+            {
+                CpuModel = "Test CPU 9000",
+                PhysicalCoreCount = 4,
+                LogicalCoreCount = 8,
+                SmT = true,
+                RamBytes = 16L * 1024 * 1024 * 1024,
+                Os = "Test OS 1.0",
+                Kernel = "1.2.3-test",
+                StorageDevice = "/dev/test0",
+                Filesystem = "testfs",
+                DotNetVersion = "10.0.0-test",
+                HarnessCommit = "0123456789abcdef0123456789abcdef01234567",
+                DatabaseInDocker = true,
+                DatabaseImage = "mongo:8.0"
+            },
             Ycsb = new YcsbRunInfo
             {
                 Run = "C",
                 ResolvedScenario = scenario,
-                ProductName = "RavenDB",
-                ServerVersion = "7.2.5",
-                Durability = new DurabilityParity { Setting = "durability", Value = "ravendb-default" }
+                ProductName = "MongoDB Community",
+                ServerVersion = "8.0.30",
+                Durability = new DurabilityParity { Setting = "writeConcern", Value = "j=true" },
+                ImageReference = "mongo:8.0",
+                ImageDigest = "mongo:8.0@sha256:4a0f30875898413139bec44c73c02a05fed172578de65b644dcdcee143ae7306"
             }
         };
 
@@ -59,6 +77,13 @@ public class YcsbResultCompatibilityTests
         loaded.Ycsb.Should().NotBeNull();
         loaded.Ycsb!.Run.Should().Be("C");
         loaded.Ycsb.ResolvedScenario.Should().Be(scenario);
+        loaded.Ycsb.ImageReference.Should().Be("mongo:8.0");
+        loaded.Ycsb.ImageDigest.Should().Contain("@sha256:", "the recorded digest is the image's repo digest, not only its hash");
+        loaded.MachineFingerprint.Should().NotBeNull();
+        loaded.MachineFingerprint!.CpuModel.Should().Be("Test CPU 9000");
+        loaded.MachineFingerprint.SmT.Should().BeTrue();
+        loaded.MachineFingerprint.DatabaseInDocker.Should().BeTrue();
+        loaded.MachineFingerprint.DatabaseImage.Should().Be("mongo:8.0");
     }
 
     [Fact]
@@ -77,5 +102,6 @@ public class YcsbResultCompatibilityTests
         JsonResultsWriter.Write(path, summary);
 
         File.ReadAllText(path).Should().NotContain("\"Ycsb\"");
+        File.ReadAllText(path).Should().NotContain("\"MachineFingerprint\"");
     }
 }
