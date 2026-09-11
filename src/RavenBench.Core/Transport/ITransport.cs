@@ -63,8 +63,19 @@ public readonly struct CalibrationResult(double ttfbMs, double totalMs, long byt
     public string? ErrorDetails { get; } = errorDetails;
 }
 
-public interface ITransport : IDisposable
+/// <summary>
+/// Everything a ycsb-style workload needs from a product: execute a typed operation, load a
+/// document outside the measured path, prepare the target database or collection, count the
+/// seeded documents, and identify the product and its version. A product with no notion of
+/// SNMP, of a license or of RavenDB calibration implements this alone.
+/// </summary>
+public interface IYcsbTransport : IDisposable
 {
+    /// <summary>
+    /// The product this transport drives (for example "RavenDB"), as the result row names the target.
+    /// </summary>
+    string ProductName { get; }
+
     /// <summary>
     /// True when reported byte counts are actual on-the-wire sizes. False when they are estimated
     /// (e.g. the client library hides the socket, or transparent decompression obscures wire size),
@@ -73,10 +84,23 @@ public interface ITransport : IDisposable
     bool ReportsWireBytes { get; }
 
     Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct);
+
+    /// <summary>
+    /// Writes one document outside the measured path; used to fill the keyspace before a run.
+    /// </summary>
     Task PutAsync<T>(string id, T document);
+
     Task EnsureDatabaseExistsAsync(string databaseName);
     Task<long> GetDocumentCountAsync(string idPrefix);
+    Task<string> GetServerVersionAsync();
+}
 
+/// <summary>
+/// The RavenDB capability set: the ycsb contract plus the server metrics, SNMP, license and
+/// calibration surface that only RavenDB exposes.
+/// </summary>
+public interface ITransport : IYcsbTransport
+{
     Task<int?> GetServerMaxCoresAsync();
     Task<ServerMetrics> GetServerMetricsAsync();
 
@@ -86,7 +110,6 @@ public interface ITransport : IDisposable
     /// </summary>
     Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null);
 
-    Task<string> GetServerVersionAsync();
     Task<string> GetServerLicenseTypeAsync();
     Task ValidateClientAsync();
     Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default);

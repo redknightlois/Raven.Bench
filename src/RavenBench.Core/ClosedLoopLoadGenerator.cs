@@ -16,7 +16,7 @@ namespace RavenBench.Core
     /// </summary>
     public sealed class ClosedLoopLoadGenerator : ILoadGenerator
     {
-        private readonly ITransport _transport;
+        private readonly IYcsbTransport _transport;
         private readonly IWorkload _workload;
         private readonly int _concurrency;
         private readonly Random _rng;
@@ -26,7 +26,7 @@ namespace RavenBench.Core
         public double? TargetThroughput => null; // Closed-loop doesn't target specific throughput
 
         public ClosedLoopLoadGenerator(
-            ITransport transport,
+            IYcsbTransport transport,
             IWorkload workload,
             int concurrency,
             Random rng)

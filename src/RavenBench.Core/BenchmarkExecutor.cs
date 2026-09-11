@@ -20,14 +20,14 @@ namespace RavenBench.Core
     public sealed class BenchmarkExecutor
     {
         private readonly RunOptions _options;
-        private readonly ITransport _transport;
+        private readonly IYcsbTransport _transport;
         private readonly IWorkload _workload;
         private readonly ProcessCpuTracker _cpuTracker;
         private readonly ServerMetricsTracker? _serverTracker;
 
         public BenchmarkExecutor(
             RunOptions options,
-            ITransport transport,
+            IYcsbTransport transport,
             IWorkload workload,
             ProcessCpuTracker cpuTracker,
             ServerMetricsTracker? serverTracker = null)

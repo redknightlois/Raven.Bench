@@ -173,24 +173,15 @@ public class RawHttpTransportTests
             => Task.FromResult(new TransportResult(0, 0, "boom"));
     }
 
-    private abstract class StubTransport : ITransport
+    private abstract class StubTransport : IYcsbTransport
     {
+        public string ProductName => "Stub";
         public bool ReportsWireBytes => true;
         public abstract Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct);
         public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
         public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;
         public Task<long> GetDocumentCountAsync(string idPrefix) => Task.FromResult(0L);
-        public Task<int?> GetServerMaxCoresAsync() => Task.FromResult<int?>(null);
-        public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(new ServerMetrics());
-        public Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
-            => Task.FromResult(new SnmpSample());
         public Task<string> GetServerVersionAsync() => Task.FromResult("test");
-        public Task<string> GetServerLicenseTypeAsync() => Task.FromResult("test");
-        public Task ValidateClientAsync() => Task.CompletedTask;
-        public Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default)
-            => Task.FromResult(new CalibrationResult(0, 0, 0, HttpVersion.Version11));
-        public System.Collections.Generic.IReadOnlyList<(string name, string path)> GetCalibrationEndpoints()
-            => Array.Empty<(string, string)>();
         public void Dispose() { }
     }
 }

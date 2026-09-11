@@ -539,7 +539,7 @@ public class BenchmarkRunner(RunOptions opts)
         }
     }
 
-    private static async Task PreloadAsync(ITransport transport, RunOptions opts, int count, int docSize)
+    private static async Task PreloadAsync(IYcsbTransport transport, RunOptions opts, int count, int docSize)
     {
         var existingCount = await transport.GetDocumentCountAsync("bench/");
 
@@ -647,7 +647,7 @@ public class BenchmarkRunner(RunOptions opts)
             var serverVersion = await transport.GetServerVersionAsync();
             var licenseType = await transport.GetServerLicenseTypeAsync();
             var maxCores = await transport.GetServerMaxCoresAsync();
-            Console.WriteLine($"[Raven.Bench] RavenDB Server Version: {serverVersion}");
+            Console.WriteLine($"[Raven.Bench] {transport.ProductName} Server Version: {serverVersion}");
             Console.WriteLine($"[Raven.Bench] License Type: {licenseType}");
             Console.WriteLine($"[Raven.Bench] Max CPU Cores: {(maxCores?.ToString() ?? "unlimited")}");
 

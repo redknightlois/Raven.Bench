@@ -41,6 +41,8 @@ public sealed class RavenClientTransport : ITransport
     public string EffectiveCompressionMode => _compression.ToWireFormat();
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
+    public string ProductName => "RavenDB";
+
     // The client library abstracts the socket, so byte counts are estimated, not measured on the wire.
     public bool ReportsWireBytes => false;
 

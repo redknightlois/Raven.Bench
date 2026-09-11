@@ -45,6 +45,8 @@ public sealed class TestTransport : ITransport
         };
     }
 
+    public string ProductName => "TestProduct";
+
     public bool ReportsWireBytes => true;
 
     public void Dispose() { }
