@@ -27,7 +27,11 @@ public sealed record YcsbScenario
 {
     public required int Seed { get; init; }
 
-    /// <summary>Product this scenario targets: "ravendb", "postgresql", "mongodb" or "documentdb".</summary>
+    /// <summary>
+    /// Product this scenario targets: "ravendb" (the external development server), "ravendb-6"
+    /// and "ravendb-7" (the containerized RavenDB services), "postgresql", "mongodb" or
+    /// "documentdb". The three RavenDB values select the same transport.
+    /// </summary>
     public required string Target { get; init; }
 
     /// <summary>Size of the keyspace the load run fills and the C/A/B/insert-stream runs address.</summary>

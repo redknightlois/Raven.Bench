@@ -32,19 +32,20 @@ public sealed class DatabaseContainerLocatorException : Exception
 /// <summary>
 /// Locates a database container through the Docker CLI. The container is matched by the host port
 /// it publishes, so it does not matter whether the benchmark script started it or found it
-/// already running. Returns null when the Docker daemon answers but no container maps the port,
-/// and throws when the Docker CLI or daemon cannot be read, so a fingerprint never records a
-/// placeholder for an unknown container state.
+/// already running. Returns null when the Docker CLI or daemon is not usable, or when the daemon
+/// answers but no container maps the port: a client with no Docker records no image instead of
+/// failing, and never invents one. Throws when a container that does map the port has an
+/// unreadable image or repo digest, so a run never records a half-read image.
 /// </summary>
 public sealed class DockerDatabaseContainerLocator
 {
     public DatabaseContainerInfo? Locate(int hostPort)
     {
-        var containers = RunDocker("ps", "--no-trunc", "--format", "{{.ID}}\t{{.Image}}\t{{.Ports}}");
-        if (containers.ExitCode != 0)
-            throw new DatabaseContainerLocatorException($"The Docker daemon did not list containers: {Describe(containers)}");
+        var containers = TryRunDocker("ps", "--no-trunc", "--format", "{{.ID}}\t{{.Image}}\t{{.Ports}}");
+        if (containers == null || containers.Value.ExitCode != 0)
+            return null;
 
-        foreach (var line in containers.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var line in containers.Value.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var fields = line.Split('\t');
             if (fields.Length < 3)
@@ -115,6 +116,20 @@ public sealed class DockerDatabaseContainerLocator
         catch (System.ComponentModel.Win32Exception ex)
         {
             throw new DatabaseContainerLocatorException("The Docker CLI is not available, so the run cannot identify the container that serves its target.", ex);
+        }
+    }
+
+    // Docker is optional on the client. A CLI that cannot be started and a daemon that does not
+    // answer are both "no readable container", not a run failure: the result records no image.
+    private static HostCommand.Result? TryRunDocker(params string[] arguments)
+    {
+        try
+        {
+            return HostCommand.Run("docker", arguments);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
         }
     }
 

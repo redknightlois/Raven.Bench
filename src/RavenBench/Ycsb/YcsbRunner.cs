@@ -18,6 +18,15 @@ namespace RavenBench.Ycsb;
 /// </summary>
 public sealed class YcsbRunner
 {
+    /// <summary>The external RavenDB development server target; the benchmark script never starts it.</summary>
+    public const string RavendbTarget = "ravendb";
+
+    /// <summary>The containerized RavenDB 6.x series target.</summary>
+    public const string Ravendb6Target = "ravendb-6";
+
+    /// <summary>The containerized RavenDB 7.x series target.</summary>
+    public const string Ravendb7Target = "ravendb-7";
+
     private readonly YcsbScenario _scenario;
     private readonly YcsbSettings _settings;
     private readonly DockerDatabaseContainerLocator _containerLocator;
@@ -154,7 +163,7 @@ public sealed class YcsbRunner
     /// </summary>
     private async Task<RunContext> BuildContextAsync(string url, string database, int maxConcurrency)
     {
-        if (string.Equals(_scenario.Target, "ravendb", StringComparison.OrdinalIgnoreCase))
+        if (IsRavenTarget(_scenario.Target))
             return await BuildRavenContextAsync(url, database);
 
         if (IsMongoTarget(_scenario.Target))
@@ -194,7 +203,7 @@ public sealed class YcsbRunner
         }
 
         throw new YcsbScenarioException(
-            $"Scenario key 'Target' is '{_scenario.Target}'; valid targets are 'ravendb', '{MongoYcsbTransport.MongoDbTarget}', '{MongoYcsbTransport.DocumentDbTarget}' and '{PostgresYcsbTransport.Target}'.");
+            $"Scenario key 'Target' is '{_scenario.Target}'; valid targets are '{RavendbTarget}', '{Ravendb6Target}', '{Ravendb7Target}', '{PostgresYcsbTransport.Target}', '{MongoYcsbTransport.MongoDbTarget}' and '{MongoYcsbTransport.DocumentDbTarget}'.");
     }
 
     private async Task<RunContext> BuildRavenContextAsync(string url, string database)
@@ -227,19 +236,31 @@ public sealed class YcsbRunner
             StrictHttpVersion: _settings.StrictHttpVersion);
     }
 
+    private static bool IsRavenTarget(string target) =>
+        string.Equals(target, RavendbTarget, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(target, Ravendb6Target, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(target, Ravendb7Target, StringComparison.OrdinalIgnoreCase);
+
     private static bool IsMongoTarget(string target) =>
         string.Equals(target, MongoYcsbTransport.MongoDbTarget, StringComparison.OrdinalIgnoreCase)
         || string.Equals(target, MongoYcsbTransport.DocumentDbTarget, StringComparison.OrdinalIgnoreCase);
 
+    // The targets that run in a container the benchmark can read: the two containerized RavenDB
+    // services, PostgreSQL, MongoDB and DocumentDB. The external RavenDB server is not one of them.
+    private static bool IsContainerizedTarget(string target) =>
+        IsMongoTarget(target)
+        || string.Equals(target, PostgresYcsbTransport.Target, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(target, Ravendb6Target, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(target, Ravendb7Target, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// The container that serves the target, for the three containerized targets, so the result
+    /// The container that serves the target, for the five containerized targets, so the result
     /// records the image that actually ran. The external RavenDB target did not run in a container
-    /// the benchmark used, so it has none.
+    /// the benchmark used, so it has none. A client with no usable Docker records none either.
     /// </summary>
     private DatabaseContainerInfo? ResolveDatabaseContainer(string recordedUrl)
     {
-        if (IsMongoTarget(_scenario.Target) == false &&
-            string.Equals(_scenario.Target, PostgresYcsbTransport.Target, StringComparison.OrdinalIgnoreCase) == false)
+        if (IsContainerizedTarget(_scenario.Target) == false)
             return null;
 
         return _containerLocator.Locate(ResolveHostPort(recordedUrl));

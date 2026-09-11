@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Raven.Client.Documents;
+using Raven.Client.ServerWide.Operations;
 using RavenBench.Cli;
 using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
@@ -54,6 +56,14 @@ public class YcsbRunnerTargetTests
 
     [RequiresPostgreSqlFact]
     public Task A_PostgreSql_Target_Completes_And_Records_Its_Durability() => RunPostgreSqlSequence();
+
+    [RequiresRavenDbFact(8086)]
+    public Task A_Containerized_RavenDb_6_Target_Records_The_Image_That_Served_It() =>
+        RunContainerizedRavenDbSequence(YcsbRunner.Ravendb6Target, "http://localhost:8086", "6.");
+
+    [RequiresRavenDbFact(8087)]
+    public Task A_Containerized_RavenDb_7_Target_Records_The_Image_That_Served_It() =>
+        RunContainerizedRavenDbSequence(YcsbRunner.Ravendb7Target, "http://localhost:8087", "7.");
 
     [Theory]
     [InlineData("2..2", 2)]
@@ -194,6 +204,53 @@ public class YcsbRunnerTargetTests
         {
             using var cleanup = new MongoYcsbTransport(connectionString, database, target);
             await cleanup.Documents.Database.Client.DropDatabaseAsync(database);
+        }
+    }
+
+    private static async Task RunContainerizedRavenDbSequence(string target, string url, string expectedVersionPrefix)
+    {
+        var database = "ycsb_ravendb_" + Guid.NewGuid().ToString("N");
+        var scenario = new YcsbScenario
+        {
+            Seed = 1,
+            Target = target,
+            DocumentCount = 10,
+            DocumentSize = "256B",
+            Concurrency = "2..2",
+            Distribution = "uniform",
+            Warmup = "0s",
+            Duration = "200ms"
+        };
+
+        var settings = new YcsbSettings
+        {
+            Url = url,
+            Database = database,
+            Scenario = "unused.json",
+            BulkBatchSize = 5
+        };
+
+        try
+        {
+            var results = await new YcsbRunner(scenario, settings).RunAsync();
+
+            results.Should().HaveCount(5);
+            foreach (var (_, summary) in results)
+            {
+                summary.Ycsb!.ProductName.Should().Be("RavenDB");
+                summary.Ycsb.ServerVersion.Should().StartWith(expectedVersionPrefix, $"the {target} server reports the series the target names");
+                summary.Ycsb.ImageReference.Should().NotBeNullOrWhiteSpace("a containerized RavenDB target records the image that served it");
+                summary.Ycsb.ImageDigest.Should().NotBeNullOrWhiteSpace();
+                summary.MachineFingerprint!.DatabaseInDocker.Should().BeTrue();
+                summary.MachineFingerprint.DatabaseImage.Should().Be(summary.Ycsb.ImageReference);
+                summary.Options.Url.Should().Contain(new Uri(url).Port.ToString());
+            }
+        }
+        finally
+        {
+            using var store = new DocumentStore { Urls = new[] { url } };
+            store.Initialize();
+            await store.Maintenance.Server.SendAsync(new DeleteDatabasesOperation(database, hardDelete: true));
         }
     }
 
