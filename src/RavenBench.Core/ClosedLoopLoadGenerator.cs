@@ -61,8 +61,9 @@ namespace RavenBench.Core
             var bufferSize = Math.Max(_concurrency, 1);
             var channel = Channel.CreateBounded<OperationBase>(bufferSize);
             var counters = new LoadGeneratorCounters();
+            // The warmup recorder is written by every worker thread, so its histogram must be thread-safe.
             Recorder? warmupRecorder = isWarmup
-                ? new Recorder(1, 60_000_000, 3, (instanceId, low, high, digits) => new LongHistogram(low, high, digits))
+                ? new Recorder(1, 60_000_000, 3, (instanceId, low, high, digits) => new LongConcurrentHistogram(low, high, digits))
                 : null;
 
             var stopwatch = Stopwatch.StartNew();
