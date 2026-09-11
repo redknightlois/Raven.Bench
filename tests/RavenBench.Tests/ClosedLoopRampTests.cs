@@ -33,7 +33,7 @@ public class ClosedLoopRampTests
         };
 
         using var transport = new TestTransport(baseLatencyMs: 1);
-        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024);
+        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(0, 100, 0), new UniformDistribution(), 1024, seed: 42);
         using var serverTracker = new ServerMetricsTracker(transport, opts);
         var executor = new BenchmarkExecutor(opts, transport, workload, new ProcessCpuTracker(), serverTracker);
         var rng = new Random(42);
@@ -58,7 +58,7 @@ public class ClosedLoopRampTests
         const int batchSize = 100;
 
         using var transport = new TestTransport(baseLatencyMs: 0);
-        var workload = new BulkWriteWorkload(docSizeBytes: 1024, batchSize);
+        var workload = new BulkWriteWorkload(docSizeBytes: 1024, batchSize, seed: 42);
         var generator = new ClosedLoopLoadGenerator(transport, workload, concurrency: 4, new Random(42));
 
         var (_, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(200), CancellationToken.None);

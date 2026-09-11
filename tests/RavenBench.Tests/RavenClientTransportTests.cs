@@ -66,7 +66,7 @@ public class RavenClientTransportTests : RavenTestDriver
         using var store = GetDocumentStore();
         using var mapped = new RavenClientTransport(store.Urls[0], store.Database, CompressionMode.Identity, HttpVersion.Version11, mapEntities: true);
 
-        var record = PayloadGenerator.GenerateRecord(1024, new Random(42));
+        var record = PayloadGenerator.GenerateRecord(seed: 42, documentId: "bench/1", sizeBytes: 1024);
         var result = await mapped.ExecuteAsync(new InsertOperation<YcsbRecord> { Id = "bench/1", Payload = record }, CancellationToken.None);
 
         result.IsSuccess.Should().BeTrue(result.ErrorDetails);

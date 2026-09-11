@@ -99,7 +99,8 @@ public class IntegrationTests
         var workload = new MixedProfileWorkload(
             WorkloadMix.FromWeights(0, 100, 0),
             distribution,
-            2048 // 2KB documents
+            2048, // 2KB documents
+            seed: 42
         );
 
         var rng = new Random(42);

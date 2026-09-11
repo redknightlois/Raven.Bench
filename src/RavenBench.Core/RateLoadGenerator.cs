@@ -129,6 +129,9 @@ namespace RavenBench.Core
             var workers = new Task[_maxConcurrency];
             for (int i = 0; i < _maxConcurrency; i++)
             {
+                // Each worker's source is a successive draw from the run-seeded source, in worker
+                // order; never seed + workerIndex, which lets two runs share a worker stream.
+                // The draws fix the order of operations only: content comes from (seed, id, size).
                 var workerRng = new Random(_rng.Next());
                 workers[i] = Task.Run(async () =>
                 {
