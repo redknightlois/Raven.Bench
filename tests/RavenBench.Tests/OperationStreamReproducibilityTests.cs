@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench.Core;
@@ -80,6 +81,89 @@ public class OperationStreamReproducibilityTests
         }
 
         readHeavyReads.Should().BeGreaterThan(balancedReads);
+    }
+
+    [Fact]
+    public async Task Closed_Loop_Operation_Sequence_Does_Not_Depend_On_Concurrency()
+    {
+        // INVARIANT: one producer thread draws every operation from one shared source, so the
+        // sequence is the same at any concurrency; only which worker executes an operation changes.
+        var low = await DrawClosedLoop(concurrency: 1, seed: 42);
+        var high = await DrawClosedLoop(concurrency: 8, seed: 42);
+
+        low.Should().NotBeEmpty();
+        high.Should().NotBeEmpty();
+        var (shorter, longer) = low.Count <= high.Count ? (low, high) : (high, low);
+        longer.Take(shorter.Count).Should().Equal(shorter);
+    }
+
+    [Fact]
+    public async Task Rate_Workers_Seed_From_The_Run_Source_Reproducibly()
+    {
+        // INVARIANT: each worker's source is a successive draw from the run-seeded source, in
+        // worker order, so the same configuration at the same worker count replays each worker's
+        // stream. An unseeded source or a seed + workerIndex derivation fails this.
+        var first = await DrawRateWorkerSeeds(seed: 42, workers: 3);
+        var second = await DrawRateWorkerSeeds(seed: 42, workers: 3);
+
+        first.Should().HaveCount(3);
+        first.Should().Equal(second);
+    }
+
+    private static async Task<IReadOnlyList<(string Kind, string Id, string? Field, string? Value)>> DrawClosedLoop(int concurrency, int seed)
+    {
+        var recording = new RecordingWorkload(NewMixedWorkload(WorkloadMix.FromWeights(40, 30, 30), seed));
+        var generator = new ClosedLoopLoadGenerator(new TestTransport(baseLatencyMs: 0), recording, concurrency, new Random(seed));
+        await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(250), CancellationToken.None);
+        return recording.Drawn;
+    }
+
+    private static async Task<IReadOnlyList<int>> DrawRateWorkerSeeds(int seed, int workers)
+    {
+        var source = new RecordingRandom(seed);
+        var generator = new RateLoadGenerator(new TestTransport(baseLatencyMs: 0), new ConstantReadWorkload(), targetRps: 100, maxConcurrency: workers, source);
+        await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(50), CancellationToken.None);
+        return source.Draws;
+    }
+
+    private sealed class RecordingWorkload : IWorkload
+    {
+        private readonly IWorkload _inner;
+        private readonly List<(string Kind, string Id, string? Field, string? Value)> _drawn = new();
+
+        public RecordingWorkload(IWorkload inner) => _inner = inner;
+
+        public IReadOnlyList<(string Kind, string Id, string? Field, string? Value)> Drawn => _drawn;
+
+        public OperationBase NextOperation(Random rng)
+        {
+            var operation = _inner.NextOperation(rng);
+            _drawn.Add(Describe(operation));
+            return operation;
+        }
+    }
+
+    private sealed class ConstantReadWorkload : IWorkload
+    {
+        public OperationBase NextOperation(Random rng) => new ReadOperation { Id = "bench/00000001" };
+    }
+
+    private sealed class RecordingRandom : Random
+    {
+        private readonly List<int> _draws = new();
+
+        public RecordingRandom(int seed) : base(seed)
+        {
+        }
+
+        public IReadOnlyList<int> Draws => _draws;
+
+        public override int Next()
+        {
+            var value = base.Next();
+            _draws.Add(value);
+            return value;
+        }
     }
 
     private static IWorkload NewMixedWorkload(WorkloadMix mix, int seed) =>
