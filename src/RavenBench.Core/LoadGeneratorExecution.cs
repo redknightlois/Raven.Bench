@@ -100,6 +100,7 @@ public static class LoadGeneratorExecution
         return new WorkItemResult
         {
             IsError = isError,
+            RecordCount = operation.RecordCount,
             ErrorDetails = errorDetails,
             BytesOut = bytesOut,
             BytesIn = bytesIn,
@@ -120,9 +121,10 @@ public static class LoadGeneratorExecution
         var completed = counters.OperationsCompleted;
         var errorCount = counters.ErrorCount;
         var errorRate = completed > 0 ? (double)errorCount / completed : 0.0;
-        // Goodput: successful operations only. Failed requests (often rejected fast) must not inflate throughput.
+        // Goodput: documents carried by the operations that succeeded. Failed requests (often
+        // rejected fast) must not inflate throughput, and a bulk batch counts its documents.
         var throughput = duration.TotalSeconds > 0
-            ? (completed - errorCount) / duration.TotalSeconds
+            ? counters.RecordsCompleted / duration.TotalSeconds
             : 0;
         var bytesOut = counters.BytesOut;
         var bytesIn = counters.BytesIn;
@@ -170,6 +172,9 @@ public readonly struct WorkItemResult
     public long BytesOut { get; init; }
     public long BytesIn { get; init; }
     public long LatencyMicros { get; init; }
+
+    /// <summary>Documents the operation carried; one for every operation but a bulk batch.</summary>
+    public int RecordCount { get; init; }
     public string? IndexName { get; init; }
     public int? ResultCount { get; init; }
     public bool? IsStale { get; init; }
@@ -179,6 +184,7 @@ public sealed class LoadGeneratorCounters
 {
     private readonly QueryStats _query = new();
     private long _operations;
+    private long _records;
     private long _errors;
     private long _bytesOut;
     private long _bytesIn;
@@ -195,6 +201,8 @@ public sealed class LoadGeneratorCounters
             return;
         }
 
+        Interlocked.Add(ref _records, result.RecordCount);
+
         if (result.BytesOut != 0)
             Interlocked.Add(ref _bytesOut, result.BytesOut);
         if (result.BytesIn != 0)
@@ -204,6 +212,9 @@ public sealed class LoadGeneratorCounters
     }
 
     public long OperationsCompleted => Volatile.Read(ref _operations);
+
+    /// <summary>Documents written or read by the operations that succeeded.</summary>
+    public long RecordsCompleted => Volatile.Read(ref _records);
     public long ErrorCount => Volatile.Read(ref _errors);
     public long BytesOut => Volatile.Read(ref _bytesOut);
     public long BytesIn => Volatile.Read(ref _bytesIn);

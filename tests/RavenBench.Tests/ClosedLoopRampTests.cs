@@ -51,4 +51,20 @@ public class ClosedLoopRampTests
         steps.All(s => s.ErrorRate >= 0 && s.ErrorRate <= 1).Should().BeTrue();
         steps.All(s => s.NetworkUtilization >= 0 && s.NetworkUtilization <= 1).Should().BeTrue();
     }
+
+    [Fact]
+    public async Task Bulk_Load_Throughput_Counts_Documents_Not_Batches()
+    {
+        const int batchSize = 100;
+
+        using var transport = new TestTransport(baseLatencyMs: 0);
+        var workload = new BulkWriteWorkload(docSizeBytes: 1024, batchSize);
+        var generator = new ClosedLoopLoadGenerator(transport, workload, concurrency: 4, new Random(42));
+
+        var (_, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(200), CancellationToken.None);
+
+        metrics.OperationsCompleted.Should().BeGreaterThan(0);
+        (metrics.Throughput * metrics.Duration.TotalSeconds)
+            .Should().BeApproximately(metrics.OperationsCompleted * batchSize, 1);
+    }
 }

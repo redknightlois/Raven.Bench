@@ -9,6 +9,11 @@ public interface IWorkload
 
 public abstract class OperationBase
 {
+    /// <summary>
+    /// Documents the operation carries. Throughput counts records, not requests, so a batch that
+    /// writes many documents reports the documents it wrote.
+    /// </summary>
+    public virtual int RecordCount => 1;
 }
 
 public class ReadOperation : OperationBase
@@ -260,4 +265,6 @@ public class UpdateOperation<T> : OperationBase
 public class BulkInsertOperation<T> : OperationBase
 {
     public required List<DocumentToWrite<T>> Documents { get; init; }
+
+    public override int RecordCount => Documents.Count;
 }
