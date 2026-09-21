@@ -1,5 +1,6 @@
 using Raven.Client.Documents;
 using Raven.Client.Documents.Commands;
+using Raven.Client.Documents.Commands.Batches;
 using Raven.Client.Documents.Session;
 using Raven.Client.Http;
 using Raven.Client.ServerWide.Operations;
@@ -231,15 +232,17 @@ public sealed class RavenClientTransport : ITransport
                 {
                     var requestExecutor = _store.GetRequestExecutor();
                     using (requestExecutor.ContextPool.AllocateOperationContext(out JsonOperationContext context))
-                    using (var bulkInsert = _store.BulkInsert(token: ct))
+                    using (var session = _store.OpenAsyncSession())
                     {
                         foreach (var docToWrite in bulkOp.Documents)
                         {
                             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(docToWrite.Document));
-                            // Blittable entities pass through the bulk-insert serializer unchanged.
+                            // Blittable entities pass through the session serializer unchanged.
                             var document = await context.ReadForMemoryAsync(stream, docToWrite.Id).ConfigureAwait(false);
-                            await bulkInsert.StoreAsync(document, docToWrite.Id).ConfigureAwait(false);
+                            session.Advanced.Defer(new BlittablePut(docToWrite.Id, document));
                         }
+
+                        await session.SaveChangesAsync(ct).ConfigureAwait(false);
                     }
                     var bulkOutBytes = bulkOp.Documents.Sum(d => (d.Document?.Length ?? 0) + 50);
                     long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/bulk_docs", bulkOutBytes);
@@ -513,4 +516,14 @@ public sealed class RavenClientTransport : ITransport
         return size;
     }
 
+    /// <summary>
+    /// Puts the payload bytes as the document body, unchanged, in the session's single batch request.
+    /// </summary>
+    private sealed class BlittablePut(string id, BlittableJsonReaderObject document)
+        : PutCommandDataBase<BlittableJsonReaderObject>(id, changeVector: null, originalChangeVector: null, document)
+    {
+        public override void OnBeforeSaveChanges(InMemoryDocumentSessionOperations session)
+        {
+        }
+    }
 }
