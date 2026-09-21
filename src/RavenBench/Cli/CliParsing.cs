@@ -173,7 +173,8 @@ internal static class CliParsing
         {
             "raw" => TransportKind.Raw,
             "client" => TransportKind.Client,
-            _ => throw new ArgumentException($"Invalid transport: {transport}. Valid options: raw, client")
+            "client-entity" => TransportKind.ClientEntity,
+            _ => throw new ArgumentException($"Invalid transport: {transport}. Valid options: raw, client, client-entity")
         };
     }
 

@@ -125,7 +125,7 @@ public abstract class BaseRunSettings : CommandSettings
     public string DocSize { get; init; } = "1KB";
 
     [CommandOption("--transport")]
-    [Description("Transport mode: raw (HTTP direct), client (RavenDB .NET client) (default: raw)")]
+    [Description("Transport mode: raw (HTTP direct), client (RavenDB .NET client), client-entity (the client with documents mapped to and from entities) (default: raw)")]
     public string Transport { get; init; } = "raw";
 
     [CommandOption("--compression")]

@@ -38,6 +38,7 @@ public sealed class RavenClientTransport : ITransport
     private readonly string _db;
     private readonly CompressionMode _compression;
     private readonly Version _httpVersion;
+    private readonly bool _mapEntities;
 
     public string EffectiveCompressionMode => _compression.ToWireFormat();
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
@@ -46,11 +47,17 @@ public sealed class RavenClientTransport : ITransport
     public bool ReportsWireBytes => false;
 
 
-    public RavenClientTransport(string url, string database, CompressionMode compression, Version httpVersion)
+    /// <param name="mapEntities">
+    /// When true every document crosses the client's object mapper, the way an application's code
+    /// does. When false the payload bytes are handed to the client already parsed, which is the
+    /// same document without the mapper in the path.
+    /// </param>
+    public RavenClientTransport(string url, string database, CompressionMode compression, Version httpVersion, bool mapEntities = false)
     {
         _db = database;
         _compression = compression;
         _httpVersion = httpVersion;
+        _mapEntities = mapEntities;
 
         _store = HttpHelper.Create(url, database, _httpVersion, configure: ConfigureCompression);
 
@@ -104,11 +111,40 @@ public sealed class RavenClientTransport : ITransport
                 {
                     using (var s = _store.OpenAsyncSession(new SessionOptions { NoTracking = true }))
                     {
-                        var doc = await s.LoadAsync<BlittableJsonReaderObject>(readOp.Id, ct).ConfigureAwait(false);
-                        long bytesIn = doc?.Size ?? 0;
                         long headerBytes = EstimateHeaderSize("GET", $"/databases/{_db}/docs?id={Uri.EscapeDataString(readOp.Id)}");
-                        return new TransportResult(headerBytes, bytesIn);
+                        if (_mapEntities)
+                        {
+                            var record = await s.LoadAsync<YcsbRecord>(readOp.Id, ct).ConfigureAwait(false);
+                            return new TransportResult(headerBytes, record?.EstimateJsonSize() ?? 0);
+                        }
+
+                        var doc = await s.LoadAsync<BlittableJsonReaderObject>(readOp.Id, ct).ConfigureAwait(false);
+                        return new TransportResult(headerBytes, doc?.Size ?? 0);
                     }
+                }
+                case InsertOperation<YcsbRecord> recordInsert:
+                {
+                    await SaveRecordsAsync([new DocumentToWrite<YcsbRecord> { Id = recordInsert.Id, Document = recordInsert.Payload }], ct).ConfigureAwait(false);
+
+                    long payloadBytes = recordInsert.Payload.EstimateJsonSize();
+                    long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/bulk_docs", payloadBytes);
+                    return new TransportResult(headerBytes + payloadBytes, 256);
+                }
+                case UpdateOperation<YcsbRecord> recordUpdate:
+                {
+                    await SaveRecordsAsync([new DocumentToWrite<YcsbRecord> { Id = recordUpdate.Id, Document = recordUpdate.Payload }], ct).ConfigureAwait(false);
+
+                    long payloadBytes = recordUpdate.Payload.EstimateJsonSize();
+                    long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/bulk_docs", payloadBytes);
+                    return new TransportResult(headerBytes + payloadBytes, 256);
+                }
+                case BulkInsertOperation<YcsbRecord> recordBulk:
+                {
+                    await SaveRecordsAsync(recordBulk.Documents, ct).ConfigureAwait(false);
+
+                    long bulkBytes = recordBulk.Documents.Sum(d => d.Document.EstimateJsonSize() + 50);
+                    long headerBytes = EstimateHeaderSize("POST", $"/databases/{_db}/bulk_docs", bulkBytes);
+                    return new TransportResult(headerBytes + bulkBytes, 256 * recordBulk.Documents.Count);
                 }
                 case InsertOperation<string> insertOp:
                 {
@@ -514,6 +550,21 @@ public sealed class RavenClientTransport : ITransport
 
         size += Encoding.UTF8.GetByteCount("}}");
         return size;
+    }
+
+    /// <summary>
+    /// Stores entities in one session, so the client maps every document and the batch leaves as a
+    /// single save.
+    /// </summary>
+    private async Task SaveRecordsAsync(IReadOnlyList<DocumentToWrite<YcsbRecord>> documents, CancellationToken ct)
+    {
+        using (var session = _store.OpenAsyncSession())
+        {
+            foreach (var docToWrite in documents)
+                await session.StoreAsync(docToWrite.Document, docToWrite.Id, ct).ConfigureAwait(false);
+
+            await session.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

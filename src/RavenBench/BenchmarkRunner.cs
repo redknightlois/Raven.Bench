@@ -532,8 +532,10 @@ public class BenchmarkRunner(RunOptions opts)
                 Console.WriteLine($"[Raven.Bench] Transport: Raw HTTP with {opts.Compression} compression");
                 return new RawHttpTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint);
             case TransportKind.Client:
-                Console.WriteLine($"[Raven.Bench] Transport: RavenDB Client with {opts.Compression} compression");
-                return new RavenClientTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion);
+            case TransportKind.ClientEntity:
+                var mapEntities = opts.Transport == TransportKind.ClientEntity;
+                Console.WriteLine($"[Raven.Bench] Transport: RavenDB Client with {opts.Compression} compression, entities {(mapEntities ? "mapped" : "not mapped")}");
+                return new RavenClientTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion, mapEntities);
             default:
                 throw new ArgumentOutOfRangeException(nameof(opts.Transport), opts.Transport, null);
         }

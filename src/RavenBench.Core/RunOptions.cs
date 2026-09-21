@@ -83,7 +83,10 @@ public enum LoadShape
 public enum TransportKind
 {
     Raw,
-    Client
+    Client,
+
+    /// <summary>The client with every document crossing its object mapper.</summary>
+    ClientEntity
 }
 
 public enum KeyDistributionKind
