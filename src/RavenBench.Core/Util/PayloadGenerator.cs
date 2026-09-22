@@ -98,21 +98,8 @@ public static class PayloadGenerator
         });
 
     /// <summary>
-    /// Mixes the run seed and the document id into one document source with FNV-1a. Addition would
-    /// alias, making (seed + 1, id) draw what (seed, id + 1) draws, and <c>string.GetHashCode</c>
-    /// is randomised per process, which would break reproducibility across runs.
+    /// One document source per (seed, document id), through the shared non-aliasing mix, so
+    /// (seed + 1, id) never draws what (seed, the next id) draws.
     /// </summary>
-    private static Random DocumentRandom(int seed, string documentId)
-    {
-        const ulong offsetBasis = 14695981039346656037UL;
-        const ulong prime = 1099511628211UL;
-
-        ulong hash = offsetBasis;
-        for (int shift = 0; shift < 32; shift += 8)
-            hash = (hash ^ (byte)(seed >> shift)) * prime;
-        foreach (var c in documentId)
-            hash = (hash ^ c) * prime;
-
-        return new Random(unchecked((int)(hash ^ (hash >> 32))));
-    }
+    private static Random DocumentRandom(int seed, string documentId) => new(SeedMixer.Derive(seed, documentId));
 }
