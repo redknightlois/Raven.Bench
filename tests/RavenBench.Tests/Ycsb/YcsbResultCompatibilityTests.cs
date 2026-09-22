@@ -59,6 +59,11 @@ public class YcsbResultCompatibilityTests
             Ycsb = new YcsbRunInfo
             {
                 Run = "C",
+                Shape = "closed",
+                Distribution = "uniform",
+                Repetition = 1,
+                IsRowMedian = true,
+                MedianStatistic = YcsbMedianSelector.StatisticName,
                 ResolvedScenario = scenario,
                 ProductName = "MongoDB Community",
                 ServerVersion = "8.0.30",

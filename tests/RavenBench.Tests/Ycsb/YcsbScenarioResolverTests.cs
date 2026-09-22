@@ -93,4 +93,61 @@ public class YcsbScenarioResolverTests
 
         resolved.Concurrency.Should().Be("16..16").And.NotBe(Scenario.Concurrency);
     }
+
+    [Fact]
+    public void The_File_Names_The_Set_When_The_Command_Line_Does_Not()
+    {
+        var scenario = Scenario with { Rates = new[] { 700.0 }, Distributions = new[] { "uniform", "latest" }, Repetitions = 4 };
+        var args = new[] { "ycsb", "--url", "http://localhost:8081", "--database", "ycsb", "--scenario", "scenario.json" };
+
+        var resolved = YcsbScenarioResolver.Resolve(scenario, DefaultSettings(), args);
+
+        resolved.ResolvedRates.Should().Equal(scenario.ResolvedRates);
+        resolved.ResolvedDistributions.Should().Equal(scenario.ResolvedDistributions);
+        resolved.ResolvedRepetitions.Should().Be(scenario.ResolvedRepetitions);
+    }
+
+    [Fact]
+    public void Command_Line_Set_Keys_Beat_The_File()
+    {
+        var scenario = Scenario with { Rates = new[] { 700.0 }, Distributions = new[] { "uniform" }, Repetitions = 4 };
+        var settings = new YcsbSettings
+        {
+            Url = "http://localhost:8081",
+            Database = "ycsb",
+            Scenario = "scenario.json",
+            Rates = "100,250",
+            Distributions = "zipfian,latest",
+            Repetitions = 2
+        };
+        var args = new[] { "ycsb", "--rates", "100,250", "--distributions", "zipfian,latest", "--repetitions", "2" };
+
+        var resolved = YcsbScenarioResolver.Resolve(scenario, settings, args);
+
+        resolved.ResolvedRates.Should().Equal(100.0, 250.0).And.NotEqual(scenario.ResolvedRates);
+        resolved.ResolvedDistributions.Should().Equal("zipfian", "latest");
+        resolved.ResolvedRepetitions.Should().Be(2).And.NotBe(scenario.ResolvedRepetitions);
+    }
+
+    [Fact]
+    public void An_Empty_Rates_Override_Means_No_Fixed_Rate_Run()
+    {
+        var scenario = Scenario with { Rate = 700 };
+        var settings = new YcsbSettings { Url = "http://localhost:8081", Database = "ycsb", Scenario = "scenario.json", Rates = "" };
+
+        var resolved = YcsbScenarioResolver.Resolve(scenario, settings, new[] { "ycsb", "--rates", "" });
+
+        resolved.ResolvedRates.Should().BeEmpty();
+        resolved.Rate.Should().BeNull("a rates override replaces both spellings the file may carry");
+    }
+
+    [Fact]
+    public void A_Resolved_Value_Outside_Its_Domain_Fails_Naming_The_Key()
+    {
+        var settings = new YcsbSettings { Url = "http://localhost:8081", Database = "ycsb", Scenario = "scenario.json", Repetitions = 0 };
+
+        var act = () => YcsbScenarioResolver.Resolve(Scenario, settings, new[] { "ycsb", "--repetitions", "0" });
+
+        act.Should().Throw<YcsbScenarioException>().WithMessage("*Repetitions*");
+    }
 }

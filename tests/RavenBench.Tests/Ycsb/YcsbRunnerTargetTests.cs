@@ -104,7 +104,7 @@ public class YcsbRunnerTargetTests
         YcsbRunner.ResolveConcurrencyCeiling(scenario, "unused", "unused").Should().BeGreaterThanOrEqualTo(16);
     }
 
-    private static void AssertProvenance(List<(YcsbRunKind Kind, BenchmarkSummary Summary)> results)
+    private static void AssertProvenance(List<YcsbRunResult> results)
     {
         results.Select(r => r.Summary.Ycsb!.Run).Should().OnlyHaveUniqueItems();
 

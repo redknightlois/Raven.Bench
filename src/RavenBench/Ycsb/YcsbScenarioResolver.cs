@@ -1,3 +1,4 @@
+using System.Globalization;
 using RavenBench.Cli;
 using RavenBench.Core.Ycsb;
 
@@ -12,9 +13,12 @@ namespace RavenBench.Ycsb;
 /// </summary>
 internal static class YcsbScenarioResolver
 {
+    /// <summary>The separator a list-valued override uses on the command line, as <c>--vector-recall-ks</c> does.</summary>
+    private const char ListSeparator = ',';
+
     public static YcsbScenario Resolve(YcsbScenario scenario, YcsbSettings settings, string[] commandLineArgs)
     {
-        return scenario with
+        var resolved = scenario with
         {
             Seed = IsExplicit(commandLineArgs, "--seed") ? settings.Seed : scenario.Seed,
             Target = settings.Target ?? scenario.Target,
@@ -23,9 +27,26 @@ internal static class YcsbScenarioResolver
             Concurrency = settings.Step ?? scenario.Concurrency,
             Distribution = IsExplicit(commandLineArgs, "--distribution") ? settings.Distribution : scenario.Distribution,
             Warmup = IsExplicit(commandLineArgs, "--warmup") ? settings.Warmup : scenario.Warmup,
-            Duration = IsExplicit(commandLineArgs, "--duration") ? settings.Duration : scenario.Duration
+            Duration = IsExplicit(commandLineArgs, "--duration") ? settings.Duration : scenario.Duration,
+            // A rates override replaces both spellings the file may carry, so the resolved scenario
+            // never names Rate and Rates at once.
+            Rate = settings.Rates == null ? scenario.Rate : null,
+            Rates = settings.Rates == null ? scenario.Rates : ParseRates(settings.Rates),
+            Distributions = settings.Distributions == null ? scenario.Distributions : SplitList(settings.Distributions),
+            Repetitions = settings.Repetitions ?? scenario.Repetitions
         };
+
+        resolved.Validate();
+        return resolved;
     }
+
+    private static string[] SplitList(string value) =>
+        value.Split(ListSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static double[] ParseRates(string value) =>
+        SplitList(value).Select(part => double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate)
+            ? rate
+            : throw new YcsbScenarioException($"Option '--rates' holds '{part}', which is not a number.")).ToArray();
 
     internal static bool IsExplicit(string[] args, string optionName) =>
         args.Any(a => a == optionName || a.StartsWith(optionName + "=", StringComparison.Ordinal));

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Runs the ycsb benchmark against one target end to end: load, C, A, B and insert-stream.
+# Runs the ycsb benchmark against one target end to end: the load run, then the whole set the
+# scenario names (the closed-loop ramp, every fixed rate, every distribution, every repetition).
 #
 # The script is endpoint-driven. It probes the target's endpoint first. It starts a container from
 # this folder's compose file only when the caller gave no --url and the target's default localhost
@@ -31,7 +32,7 @@ usage() {
   cat <<'EOF'
 Usage: run.sh --target <ravendb|ravendb-6|ravendb-7|postgresql|mongodb|documentdb> [options]
 
-Runs the ycsb load, C, A, B and insert-stream runs and writes one result JSON per run under
+Runs the ycsb load run and every workload run the scenario names, and writes one result JSON per run under
 benchmarks/ycsb/results/. Every other option is forwarded to the ycsb command unchanged.
 
 The script starts a target from benchmarks/ycsb/docker-compose.yml only when no --url was given
@@ -373,4 +374,4 @@ RUN_ARGS+=("${PASSTHROUGH[@]}")
 echo "Running the ycsb sequence against $TARGET."
 PATH="$HOME/.dotnet:$PATH" dotnet run --project "$REPO_ROOT/src/RavenBench/RavenBench.csproj" -c Release -- "${RUN_ARGS[@]}"
 
-echo "Results: ${RESULT_PREFIX}-{load,C,A,B,insert-stream}.json"
+echo "Results: ${RESULT_PREFIX}-<run>-<closed|rate<rate>>-<distribution>-rep<n>.json"

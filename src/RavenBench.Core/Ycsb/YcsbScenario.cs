@@ -43,14 +43,87 @@ public sealed record YcsbScenario
     /// <summary>Concurrency, in the format <c>--step</c> accepts: a ramp "8..64x2" or a fixed "32..32".</summary>
     public required string Concurrency { get; init; }
 
-    /// <summary>Optional fixed request rate; when set, every run uses the rate load shape.</summary>
+    /// <summary>
+    /// The one-element spelling of <see cref="Rates"/>: a scenario carries one or the other,
+    /// never both.
+    /// </summary>
     public double? Rate { get; init; }
+
+    /// <summary>
+    /// The fixed rates to run after the closed-loop ramp, in operations per second. Every value is
+    /// greater than zero. An absent or empty list means no fixed-rate run.
+    /// </summary>
+    public double[]? Rates { get; init; }
+
+    /// <summary>
+    /// The distributions workload C runs under: a non-empty list of "uniform", "zipfian" and
+    /// "latest". The first value is the one every run other than C uses. An absent list means the
+    /// single <see cref="Distribution"/> value alone.
+    /// </summary>
+    public string[]? Distributions { get; init; }
+
+    /// <summary>
+    /// How many times every workload row is repeated. One or more. Every repetition is kept as its
+    /// own result and exactly one of them is marked as the median of its row.
+    /// </summary>
+    public int? Repetitions { get; init; }
 
     public required string Distribution { get; init; }
 
     public required string Warmup { get; init; }
 
     public required string Duration { get; init; }
+
+    /// <summary>The rates the invocation runs after the ramp, with the single-rate key mapped onto the list.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<double> ResolvedRates =>
+        Rates ?? (Rate.HasValue ? new[] { Rate.Value } : Array.Empty<double>());
+
+    /// <summary>The distributions workload C runs under; the first is the one every other run uses.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> ResolvedDistributions => Distributions ?? new[] { Distribution };
+
+    /// <summary>How many repetitions every workload row runs; one when the scenario names none.</summary>
+    [JsonIgnore]
+    public int ResolvedRepetitions => Repetitions ?? 1;
+
+    /// <summary>
+    /// Rejects a value outside the domain of the key that carries it, naming the key. A scenario
+    /// resolved against the command line passes through this too, so an override is held to the
+    /// same domain the file is.
+    /// </summary>
+    public void Validate()
+    {
+        if (Rate.HasValue && Rates != null)
+            throw new YcsbScenarioException("Scenario keys 'Rate' and 'Rates' are both named; 'Rate' is the one-element spelling of 'Rates', so name one of them.");
+
+        if (Rate is <= 0)
+            throw new YcsbScenarioException($"Scenario key 'Rate' is '{Rate}'; a rate is an operations-per-second value greater than zero.");
+
+        if (Rates != null)
+        {
+            foreach (var rate in Rates)
+            {
+                if (rate <= 0 || double.IsNaN(rate))
+                    throw new YcsbScenarioException($"Scenario key 'Rates' holds '{rate}'; every rate is an operations-per-second value greater than zero.");
+            }
+        }
+
+        if (Distributions != null)
+        {
+            if (Distributions.Length == 0)
+                throw new YcsbScenarioException("Scenario key 'Distributions' is empty; name at least one distribution or leave the key out.");
+
+            foreach (var distribution in Distributions)
+            {
+                if (Enum.TryParse<KeyDistributionKind>(distribution, ignoreCase: true, out _) == false)
+                    throw new YcsbScenarioException($"Scenario key 'Distributions' holds '{distribution}'; valid distributions are uniform, zipfian and latest.");
+            }
+        }
+
+        if (Repetitions is < 1)
+            throw new YcsbScenarioException($"Scenario key 'Repetitions' is '{Repetitions}'; a row repeats at least once.");
+    }
 
     private static readonly JsonSerializerOptions ReadOptions = new()
     {
@@ -64,8 +137,10 @@ public sealed record YcsbScenario
 
         try
         {
-            return JsonSerializer.Deserialize<YcsbScenario>(File.ReadAllText(path), ReadOptions)
-                   ?? throw new YcsbScenarioException($"Scenario file '{path}' holds no object.");
+            var scenario = JsonSerializer.Deserialize<YcsbScenario>(File.ReadAllText(path), ReadOptions)
+                           ?? throw new YcsbScenarioException($"Scenario file '{path}' holds no object.");
+            scenario.Validate();
+            return scenario;
         }
         catch (JsonException ex)
         {

@@ -16,4 +16,16 @@ public sealed class YcsbSettings : BaseRunSettings
     [CommandOption("--doc-count")]
     [Description("Overrides the scenario's document count.")]
     public int? DocumentCount { get; init; }
+
+    [CommandOption("--rates")]
+    [Description("Overrides the scenario's fixed rates, in operations per second: a comma-separated list, or empty for no fixed-rate run.")]
+    public string? Rates { get; init; }
+
+    [CommandOption("--distributions")]
+    [Description("Overrides the distributions workload C runs under: a comma-separated list of uniform, zipfian and latest.")]
+    public string? Distributions { get; init; }
+
+    [CommandOption("--repetitions")]
+    [Description("Overrides how many times every workload row is repeated.")]
+    public int? Repetitions { get; init; }
 }
