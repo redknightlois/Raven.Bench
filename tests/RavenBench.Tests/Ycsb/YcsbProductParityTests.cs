@@ -1,20 +1,16 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Net.Http;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Apex.SqlClient;
 using FluentAssertions;
-using MongoDB.Bson;
 using MongoDB.Driver;
 using Raven.Embedded;
 using Raven.TestDriver;
 using RavenBench.Core;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
+using RavenBench.Core.Ycsb;
 using RavenBench.Tests.Infrastructure;
 using Xunit;
 
@@ -76,28 +72,21 @@ public class YcsbProductParityTests : EmbeddedRavenTestBase
             (await documentDb.GetDocumentCountAsync("bench/")).Should().Be(DocumentCount);
             (await postgres.GetDocumentCountAsync("bench/")).Should().Be(DocumentCount);
 
-            using var http = new HttpClient();
             for (int i = 1; i <= DocumentCount; i++)
             {
                 var id = BenchIds.IdFor(i);
-                var expected = BsonDocument.Parse(PayloadGenerator.Generate(Seed, id, DocumentSize));
-                var fromMongo = await mongo.Documents.Find(MongoYcsbTransport.ReadFilter(id)).FirstOrDefaultAsync();
-                var fromDocumentDb = await documentDb.Documents.Find(MongoYcsbTransport.ReadFilter(id)).FirstOrDefaultAsync();
-                var fromPostgres = await ReadPostgresFieldsAsync(postgres, id);
-                var fromRaven = await ReadRavenFieldsAsync(http, store.Urls[0], store.Database, id);
+                var expected = YcsbParityCheck.ExpectedFields(Seed, id, DocumentSize);
 
-                fromMongo.Should().NotBeNull("MongoDB must store {0}", id);
-                fromDocumentDb.Should().NotBeNull("DocumentDB must store {0}", id);
-                fromPostgres.Should().NotBeNull("PostgreSQL must store {0}", id);
-
-                for (int field = 0; field < PayloadGenerator.FieldCount; field++)
+                // Each product is read back through its own transport, and the shared comparison
+                // rule decides agreement.
+                foreach (var (product, transport) in new (string, IInspectsStoredDocuments)[]
+                         {
+                             ("RavenDB", raven), ("MongoDB", mongo), ("DocumentDB", documentDb), ("PostgreSQL", postgres)
+                         })
                 {
-                    var name = PayloadGenerator.FieldName(field);
-                    var value = expected[name].AsString;
-                    fromMongo![name].AsString.Should().Be(value, "MongoDB field {0} of {1}", name, id);
-                    fromDocumentDb![name].AsString.Should().Be(value, "DocumentDB field {0} of {1}", name, id);
-                    fromPostgres![name].Should().Be(value, "PostgreSQL field {0} of {1}", name, id);
-                    fromRaven[name].Should().Be(value, "RavenDB field {0} of {1}", name, id);
+                    var stored = await transport.ReadStoredFieldsAsync(id, CancellationToken.None);
+                    YcsbParityCheck.DescribeDifference(id, expected, stored)
+                        .Should().BeNull("{0} must store the seeded fields of {1}", product, id);
                 }
             }
         }
@@ -108,37 +97,4 @@ public class YcsbProductParityTests : EmbeddedRavenTestBase
         }
     }
 
-    private static Task<Dictionary<string, string>?> ReadPostgresFieldsAsync(PostgresYcsbTransport transport, string id) =>
-        transport.ReadWithMeasuredConnectionAsync(async connection =>
-        {
-            var rows = await connection.QueryAsync(PostgresYcsbTransport.ReadSql, SqlParameters.Create(id), CancellationToken.None);
-            if (rows.Count == 0)
-                return (Dictionary<string, string>?)null;
-
-            using var stored = JsonDocument.Parse(rows[0].Get<string>(0));
-            var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
-            for (int i = 0; i < PayloadGenerator.FieldCount; i++)
-            {
-                var name = PayloadGenerator.FieldName(i);
-                fields[name] = stored.RootElement.GetProperty(name).GetString()!;
-            }
-
-            return fields;
-        });
-
-    private static async Task<Dictionary<string, string>> ReadRavenFieldsAsync(HttpClient http, string url, string database, string id)
-    {
-        var body = await http.GetStringAsync($"{url}/databases/{database}/docs?id={Uri.EscapeDataString(id)}");
-        using var response = JsonDocument.Parse(body);
-        var stored = response.RootElement.GetProperty("Results")[0];
-
-        var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
-        for (int i = 0; i < PayloadGenerator.FieldCount; i++)
-        {
-            var name = PayloadGenerator.FieldName(i);
-            fields[name] = stored.GetProperty(name).GetString()!;
-        }
-
-        return fields;
-    }
 }
