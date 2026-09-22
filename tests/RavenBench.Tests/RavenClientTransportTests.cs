@@ -11,23 +11,13 @@ using RavenBench.Core;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
 using Sparrow.Json;
+using RavenBench.Tests.Infrastructure;
 using Xunit;
 
 namespace RavenBench.Tests;
 
-public class RavenClientTransportTests : RavenTestDriver
+public class RavenClientTransportTests : EmbeddedRavenTestBase
 {
-    static RavenClientTransportTests()
-    {
-        ConfigureServer(new TestServerOptions
-        {
-            Licensing = new ServerOptions.LicensingOptions
-            {
-                ThrowOnInvalidOrMissingLicense = false
-            }
-        });
-    }
-
     [Fact]
     public async Task Bulk_Batch_Stores_Every_Document_With_Its_Payload_Unchanged()
     {

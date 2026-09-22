@@ -8,23 +8,13 @@ using Raven.Embedded;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Reporting;
 using RavenBench.Core;
+using RavenBench.Tests.Infrastructure;
 using Xunit;
 
 namespace RavenBench.Tests;
 
-public class HistogramExportTests : RavenTestDriver, IDisposable
+public class HistogramExportTests : EmbeddedRavenTestBase, IDisposable
 {
-    static HistogramExportTests()
-    {
-        ConfigureServer(new TestServerOptions
-        {
-            Licensing = new ServerOptions.LicensingOptions
-            {
-                ThrowOnInvalidOrMissingLicense = false
-            }
-        });
-    }
-
     private readonly string _tempDir;
 
     public HistogramExportTests()
