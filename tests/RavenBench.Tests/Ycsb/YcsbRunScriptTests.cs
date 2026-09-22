@@ -196,7 +196,12 @@ public class YcsbRunScriptTests
                     "--doc-count", "10",
                     "--duration", "1s",
                     "--warmup", "0s",
-                    "--step", "2..2"
+                    "--step", "2..2",
+                    // The set is narrowed to the five runs this test reads back: one repetition,
+                    // one distribution, no fixed rate.
+                    "--rates", "",
+                    "--distributions", "uniform",
+                    "--repetitions", "1"
                 },
                 new Dictionary<string, string> { ["PATH"] = path });
 

@@ -12,6 +12,7 @@ using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
 using RavenBench.Tests.Infrastructure;
 using RavenBench.Cli;
+using RavenBench.Core;
 using RavenBench.Core.Ycsb;
 using RavenBench.Ycsb;
 using Xunit;
@@ -336,5 +337,155 @@ public class YcsbRunnerIntegrationTests : EmbeddedRavenTestBase
         stated.Bytes.Should().BeNull("a fabricated zero is worse than the named fact");
         stated.Metric.Should().BeNull();
         stated.Unavailable.Should().Contain("SomeProduct").And.Contain("no on-disk size");
+    }
+
+    // The set one invocation produces, and what each result of it says about itself.
+
+    private static YcsbScenario SetScenario(string target, int documentCount) => Scenario(target, documentCount) with
+    {
+        Seed = 11,
+        Duration = "300ms",
+        Rates = new[] { 50.0 },
+        Distributions = new[] { "uniform", "zipfian" },
+        Repetitions = 2
+    };
+
+    private static int ExpectedResultCount(YcsbScenario scenario) =>
+        1 + scenario.ResolvedRepetitions * (scenario.ResolvedDistributions.Count + 3 + scenario.ResolvedRates.Count);
+
+    [Fact]
+    public async Task One_Invocation_Produces_The_Set_The_Scenario_Names()
+    {
+        using var store = GetDocumentStore();
+
+        var scenario = SetScenario("ravendb", 20);
+        var results = await new YcsbRunner(scenario, Settings(store.Urls[0], store.Database)).RunAsync();
+
+        results.Should().HaveCount(ExpectedResultCount(scenario));
+        results.Count(r => r.Kind == YcsbRunKind.Load).Should().Be(1, "the keyspace is loaded once per invocation");
+
+        // The ramp gives the ceiling, every named rate gives a fixed-rate row, and workload C runs
+        // under every named distribution.
+        results.Should().Contain(r => r.Summary.Ycsb!.Shape == "closed");
+        results.Where(r => r.Summary.Ycsb!.Shape == "rate").Select(r => r.Summary.Ycsb!.Rate)
+            .Should().OnlyContain(rate => rate == scenario.ResolvedRates[0]);
+        results.Where(r => r.Kind == YcsbRunKind.WorkloadC && r.Summary.Ycsb!.Shape == "closed")
+            .Select(r => r.Summary.Ycsb!.Distribution).Distinct()
+            .Should().BeEquivalentTo(scenario.ResolvedDistributions);
+
+        // A scenario that names one repetition fewer produces a smaller set, so the count follows
+        // the file.
+        var smaller = scenario with { Repetitions = 1 };
+        var fewer = await new YcsbRunner(smaller, Settings(store.Urls[0], store.Database)).RunAsync();
+        fewer.Should().HaveCount(ExpectedResultCount(smaller));
+        fewer.Count.Should().BeLessThan(results.Count);
+    }
+
+    [Fact]
+    public async Task Every_Result_Records_What_Produced_It_And_No_Two_Share_That_Identity()
+    {
+        using var store = GetDocumentStore();
+
+        var scenario = SetScenario("ravendb", 20);
+        var results = await new YcsbRunner(scenario, Settings(store.Urls[0], store.Database)).RunAsync();
+
+        foreach (var (identity, summary) in results)
+        {
+            var info = summary.Ycsb!;
+            info.Shape.Should().BeOneOf("closed", "rate");
+            info.Repetition.Should().BeGreaterThan(0);
+            info.Rate.HasValue.Should().Be(info.Shape == "rate", "a rate row records its rate and a closed row has none");
+
+            // The recorded distribution is the one the run used, not the scenario's first value.
+            CliParsing.ParseDistribution(info.Distribution).Should().Be(summary.Options.Distribution);
+
+            info.ResolvedScenario.Seed.Should().Be(scenario.Seed, "the resolved scenario keeps the file's seed");
+            summary.Options.Seed.Should().Be(SeedMixer.Derive(scenario.Seed, identity.ResultName),
+                "the seed a run used is readable from its own result");
+        }
+
+        results.Select(r => (r.Summary.Ycsb!.Run, r.Summary.Ycsb!.Shape, r.Summary.Ycsb!.Distribution, r.Summary.Ycsb!.Rate, r.Summary.Ycsb!.Repetition))
+            .Should().OnlyHaveUniqueItems();
+
+        var zipfianC = results.First(r => r.Kind == YcsbRunKind.WorkloadC && r.Summary.Ycsb!.Distribution == "zipfian");
+        zipfianC.Summary.Options.Distribution.Should().Be(KeyDistributionKind.Zipfian);
+    }
+
+    [Fact]
+    public async Task Exactly_One_Repetition_Of_Each_Row_Is_The_Median_And_Every_Repetition_Is_Kept()
+    {
+        using var store = GetDocumentStore();
+
+        var scenario = SetScenario("ravendb", 20) with { Repetitions = 3 };
+        var results = await new YcsbRunner(scenario, Settings(store.Urls[0], store.Database)).RunAsync();
+
+        foreach (var row in results.GroupBy(r => r.Identity.RowKey))
+        {
+            row.Should().HaveCount(row.First().Kind == YcsbRunKind.Load ? 1 : scenario.ResolvedRepetitions,
+                "every repetition is kept as its own result");
+
+            var marked = row.Where(r => r.Summary.Ycsb!.IsRowMedian).ToList();
+            var publishable = row.Where(r => r.Summary.Steps.All(s => s.InvalidReason == null)).ToList();
+
+            if (publishable.Count == 0)
+            {
+                marked.Should().BeEmpty("a row whose every repetition is client-bound carries no median");
+                continue;
+            }
+
+            marked.Should().ContainSingle("the median is identifiable from one file alone");
+            marked[0].Summary.Ycsb!.MedianStatistic.Should().Be(YcsbMedianSelector.StatisticName);
+            YcsbMedianSelector.Statistic(marked[0].Summary.Steps).Should().Be(
+                publishable.Select(r => YcsbMedianSelector.Statistic(r.Summary.Steps))
+                    .OrderBy(v => v)
+                    .ElementAt((publishable.Count - 1) / 2));
+        }
+    }
+
+    [Fact]
+    public async Task Every_Artifact_Path_Of_The_Larger_Set_Exists_And_Is_Its_Own()
+    {
+        using var store = GetDocumentStore();
+
+        var results = await new YcsbRunner(SetScenario("ravendb", 20), Settings(store.Urls[0], store.Database)).RunAsync();
+
+        var paths = results.SelectMany(r => r.Summary.HistogramArtifacts!)
+            .SelectMany(a => new[] { a.HlogPath, a.CsvPath })
+            .ToList();
+
+        paths.Should().NotContainNulls();
+        paths.Should().OnlyHaveUniqueItems("the whole identity is in the histogram prefix");
+        foreach (var path in paths)
+        {
+            File.Exists(path).Should().BeTrue($"the result names '{path}'");
+            new FileInfo(path!).Length.Should().BeGreaterThan(0);
+        }
+
+        results.Select(r => r.Identity.ResultName).Should().OnlyHaveUniqueItems("the result file names are distinguishable");
+    }
+
+    [RequiresMongoFact]
+    public async Task Two_Insert_Stream_Runs_Of_One_Invocation_Address_Disjoint_Ids()
+    {
+        var database = "ycsb-inserts-" + Guid.NewGuid().ToString("N")[..8];
+
+        try
+        {
+            var scenario = SetScenario(MongoYcsbTransport.MongoDbTarget, 20) with { Rates = null, Distributions = null };
+            var results = await new YcsbRunner(scenario, Settings(MongoTestEndpoints.MongoConnectionString, database)).RunAsync();
+
+            var inserts = results.Where(r => r.Kind == YcsbRunKind.InsertStream).ToList();
+            inserts.Should().HaveCount(scenario.ResolvedRepetitions);
+
+            // MongoDB rejects a duplicate _id, so a second run that reused the first run's starting
+            // key would report errors instead of a measurement.
+            inserts.Should().OnlyContain(r => r.Summary.Steps.All(s => s.ErrorRate == 0),
+                "each insert-stream run starts above every id the previous one issued");
+        }
+        finally
+        {
+            using var cleanup = new MongoYcsbTransport(MongoTestEndpoints.MongoConnectionString, database, MongoYcsbTransport.MongoDbTarget);
+            await cleanup.Documents.Database.Client.DropDatabaseAsync(database);
+        }
     }
 }

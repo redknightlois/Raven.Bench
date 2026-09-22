@@ -17,6 +17,12 @@ public sealed class WriteWorkload : IWorkload
         _maxKey = startingKey;
     }
 
+    /// <summary>
+    /// The highest key this workload has published. A later insert stream starts above it, so two
+    /// insert streams of one invocation never address the same id.
+    /// </summary>
+    public long HighestKeyIssued => Interlocked.Read(ref _maxKey);
+
     public OperationBase NextOperation(Random rng)
     {
         var keyValue = Interlocked.Increment(ref _maxKey);

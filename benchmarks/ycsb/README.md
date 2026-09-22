@@ -46,9 +46,49 @@ The forwarded options are the ones the command accepts: `--scenario`, `--url`, `
 `--output-prefix` and the rest. A caller-supplied `--scenario`, `--url`, `--database` or
 `--output-prefix` replaces the script default instead of being appended a second time.
 
-The script prints the result path when the run ends. By default the five results are written as
-`benchmarks/ycsb/results/<target>-<timestamp>-<run>.json`, where `<run>` is `load`, `C`, `A`, `B`
-or `insert-stream`.
+The script prints the result path when the run ends. Every result is written as
+`benchmarks/ycsb/results/<target>-<timestamp>-<run>-<shape>-<distribution>-rep<n>.json`, where
+`<run>` is `load`, `C`, `A`, `B` or `insert-stream` and `<shape>` is `closed` for a ramp run or
+`rate<rate>` for a fixed-rate run. The whole identity is in the name because one invocation
+produces several results per run kind, and the same identity is inside each file under the `Ycsb`
+block.
+
+## The set one invocation produces
+
+Three scenario keys name the set, beside the single-value keys:
+
+| Key | Domain | Meaning |
+|---|---|---|
+| `Rates` | a list of numbers, each greater than zero; empty for none | The fixed rates to run after the closed-loop ramp. `Rate` is the one-element spelling of the same key; a scenario names one or the other, never both. |
+| `Distributions` | a non-empty list of `uniform`, `zipfian` and `latest` | The distributions workload C runs under. The first value is the one every other run uses. Absent means the single `Distribution` value alone. |
+| `Repetitions` | an integer of one or more | How many times every workload row is repeated. |
+
+`--rates`, `--distributions` and `--repetitions` override them on the command line; a
+command-line value wins over the file, and the file wins over nothing.
+
+One invocation produces: one load run, then for each repetition workload C under every named
+distribution, then A, B and insert-stream under the first named distribution, then one workload C
+run per named rate. The count is `1 + repetitions * (distributions + 3 + rates)`. The keyspace is
+loaded once: a repetition, a second distribution and a rate never reload it. The checked-in
+scenario names two distributions, one rate and three repetitions, which is
+`1 + 3 * (2 + 3 + 1) = 19` results.
+
+How to pick a rate: run the invocation once, open a closed-loop C result, read the throughput of
+the step the `Knee` field names, and set `Rates` to about 40 percent of it, which is the plan's
+operating point. The checked-in `2000` is a starting point for this box, not a measurement of
+yours; read it from your own ramp result before you publish a rate row.
+
+Every repetition of a row is kept as its own file. Exactly one of them carries
+`Ycsb.IsRowMedian: true`: the median of `Ycsb.MedianStatistic` (the highest step throughput the
+result measured) over the row's repetitions. A repetition whose steps the client-bound guard marked
+invalid is left out of that selection, because a client-bound number must not be published; a row
+whose every repetition is invalid carries no median marking at all. With an even number of
+candidates the lower of the two middle results is marked.
+
+Each run draws its own request stream: the seed is derived from the scenario seed and the run's
+identity, so two repetitions of one row are two samples while two invocations of one scenario
+repeat the same streams. The derived seed is in `Options.Seed`; the scenario's own seed stays in
+`Ycsb.ResolvedScenario.Seed`.
 
 ## What each row means
 

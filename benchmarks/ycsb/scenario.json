@@ -6,5 +6,13 @@
   "Concurrency": "8..64x2",
   "Distribution": "uniform",
   "Warmup": "10s",
-  "Duration": "30s"
+  "Duration": "30s",
+  "Rates": [
+    2000
+  ],
+  "Distributions": [
+    "uniform",
+    "zipfian"
+  ],
+  "Repetitions": 3
 }

@@ -7,8 +7,9 @@ using Spectre.Console.Cli;
 namespace RavenBench.Cli;
 
 /// <summary>
-/// Runs the ycsb scenario's full sequence (load, C, A, B, insert-stream) through the existing
-/// closed-loop/rate load generators, and leaves one result per run.
+/// Runs the whole set the ycsb scenario names - the closed-loop ramp, every fixed rate, every
+/// distribution workload C runs under, each repeated the scenario's repetition count - through the
+/// existing closed-loop and rate load generators, and leaves one result per run.
 /// </summary>
 public sealed class YcsbCommand : AsyncCommand<YcsbSettings>
 {
@@ -38,11 +39,12 @@ public sealed class YcsbCommand : AsyncCommand<YcsbSettings>
         var runner = new YcsbRunner(resolved, settings);
         var results = await runner.RunAsync();
 
-        foreach (var (kind, summary) in results)
+        foreach (var (identity, summary) in results)
         {
-            var name = kind.ToResultName();
+            var name = identity.ResultName;
             var throughput = summary.Steps.Count > 0 ? summary.Steps[^1].Throughput : 0.0;
-            AnsiConsole.MarkupLine($"[bold]{name}[/]: {summary.Steps.Count} step(s), last throughput {throughput:F0}/s");
+            var median = summary.Ycsb!.IsRowMedian ? " (row median)" : string.Empty;
+            AnsiConsole.MarkupLine($"[bold]{name}[/]{median}: {summary.Steps.Count} step(s), last throughput {throughput:F0}/s");
 
             var outPath = OutputPathFor(settings, name);
             if (outPath != null)

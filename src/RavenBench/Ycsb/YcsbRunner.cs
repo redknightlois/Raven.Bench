@@ -10,12 +10,18 @@ using RavenBench.Core.Ycsb;
 
 namespace RavenBench.Ycsb;
 
+/// <summary>One run of the set an invocation produced: what it was, and what it measured.</summary>
+public sealed record YcsbRunResult(YcsbRunIdentity Identity, BenchmarkSummary Summary)
+{
+    public YcsbRunKind Kind => Identity.Kind;
+}
+
 /// <summary>
-/// Drives one ycsb scenario end to end: load fills the keyspace, then the C, A, B and
-/// insert-stream runs address it, each through the existing ramp/warmup/latency-recording path
-/// (<see cref="BenchmarkRunner.RunRampAsync"/>) and each leaving its own result. The scenario's
-/// target selects the transport before any product-specific setup runs, so a Mongo target never
-/// negotiates HTTP and never reads the RavenDB-only options.
+/// Drives one ycsb scenario end to end: the keyspace is loaded once, then every run the scenario's
+/// set names (<see cref="YcsbRunPlan"/>) addresses it through the existing
+/// ramp/warmup/latency-recording path (<see cref="BenchmarkRunner.RunRampAsync"/>), each leaving
+/// its own result. The scenario's target selects the transport before any product-specific setup
+/// runs, so a Mongo target never negotiates HTTP and never reads the RavenDB-only options.
 /// </summary>
 public sealed class YcsbRunner
 {
@@ -45,19 +51,15 @@ public sealed class YcsbRunner
         _fingerprintSource = new NativeMachineFingerprintSource();
     }
 
-    public async Task<List<(YcsbRunKind Kind, BenchmarkSummary Summary)>> RunAsync()
+    public async Task<List<YcsbRunResult>> RunAsync()
     {
-        var seed = _scenario.Seed;
+        var plan = YcsbRunPlan.Build(_scenario);
         var docSizeBytes = CliParsing.ParseSize(_scenario.DocumentSize);
-        var distributionKind = CliParsing.ParseDistribution(_scenario.Distribution);
-        var distribution = ToKeyDistribution(distributionKind);
         var warmup = CliParsing.ParseDuration(_scenario.Warmup);
         var duration = CliParsing.ParseDuration(_scenario.Duration);
         var url = RequiredString(_settings.Url, "--url");
         var database = RequiredString(_settings.Database, "--database");
-
-        var (loadStep, loadShape) = ResolveLoadStepPlan(_scenario);
-        var (workStep, workShape) = ResolveStepPlan(_scenario);
+        var closedStep = CliParsing.ParseStepPlan(_scenario.Concurrency).Normalize();
 
         var context = await BuildContextAsync(url, database, ResolveConcurrencyCeiling(_scenario, url, database));
         using var transport = context.Transport;
@@ -70,35 +72,7 @@ public sealed class YcsbRunner
         var databaseContainer = ResolveDatabaseContainer(context.RecordedUrl);
         var machineFingerprint = new MachineFingerprintCollector(_fingerprintSource).Collect(repositoryRoot, databaseContainer);
 
-        RunOptions BaseOptions(WorkloadProfile profile, StepPlan step, LoadShape shape, string runName) => new()
-        {
-            Url = context.RecordedUrl,
-            Database = database,
-            Transport = context.TransportKind,
-            Compression = context.Compression,
-            HttpVersion = context.HttpVersion,
-            StrictHttpVersion = context.StrictHttpVersion,
-            Seed = seed,
-            DocumentSizeBytes = docSizeBytes,
-            Distribution = distributionKind,
-            Warmup = warmup,
-            Duration = duration,
-            Step = step,
-            Shape = shape,
-            Profile = profile,
-            BulkBatchSize = _settings.BulkBatchSize,
-            BulkDepth = _settings.BulkDepth,
-            MaxErrorRate = CliParsing.ParsePercent(_settings.MaxErrors),
-            LinkMbps = _settings.LinkMbps,
-            LatencyHistogramsDir = HistogramPrefixFor(runName),
-            // A ycsb run always exports both the HdrHistogram log and the CSV, so the result
-            // names two artifacts that exist for every step and the two runs never collide.
-            LatencyHistogramsFormat = HistogramExportFormat.Both
-        };
-
         var cpuTracker = new ProcessCpuTracker();
-        var rng = new Random(seed);
-        var results = new List<(YcsbRunKind, BenchmarkSummary)>();
 
         // Only a RavenDB target exposes a server metric this harness can read, and the tracker's
         // constructor says so at compile time. It starts and stops with the CPU tracker, so its
@@ -107,46 +81,93 @@ public sealed class YcsbRunner
             ? new ServerMetricsTracker(ravenTransport, new RunOptions { Url = context.RecordedUrl, Database = database })
             : null;
 
-        BenchmarkSummary Summary(RunOptions opts, BenchmarkRunner.RampResult ramp, YcsbRunKind kind, OnDiskSize? loadedSize = null)
-        {
-            var knee = KneeFinder.FindKnee(ramp.Steps, opts.MaxErrorRate);
+        // The first id an insert-stream run may claim. It advances past every id the previous
+        // insert-stream run issued, so two such runs of one invocation address disjoint ranges and
+        // never re-insert an id a product rejects as a duplicate.
+        long nextInsertKey = _scenario.DocumentCount;
+        var outcomes = new List<RunOutcome>();
 
-            return new BenchmarkSummary
+        foreach (var identity in plan)
+        {
+            // Every run draws from its own source, mixed from the scenario seed and the run's
+            // identity: two invocations of one scenario repeat a run's stream, two repetitions of
+            // one row never repeat each other's, and a run's stream does not depend on how many
+            // runs preceded it.
+            var runSeed = SeedMixer.Derive(_scenario.Seed, identity.ResultName);
+            var distributionKind = CliParsing.ParseDistribution(identity.Distribution);
+            var isWorkloadMix = identity.Kind is YcsbRunKind.WorkloadC or YcsbRunKind.WorkloadA or YcsbRunKind.WorkloadB;
+
+            var opts = new RunOptions
             {
-                Options = opts,
-                Steps = ramp.Steps,
-                Knee = knee,
-                // The verdict comes from the one attribution every command uses, so a client-bound
-                // ycsb run says so instead of carrying a fixed literal.
-                Verdict = ResultAnalyzer.BuildVerdict(knee, opts),
-                ClientCompression = context.ClientCompression,
-                EffectiveHttpVersion = context.EffectiveHttpVersion,
-                HistogramArtifacts = ramp.HistogramArtifacts.Count > 0 ? ramp.HistogramArtifacts : null,
-                MachineFingerprint = machineFingerprint,
-                Ycsb = new YcsbRunInfo
-                {
-                    Run = kind.ToResultName(),
-                    ResolvedScenario = _scenario,
-                    ProductName = transport.ProductName,
-                    ServerVersion = serverVersion,
-                    Durability = context.Durability,
-                    ImageReference = databaseContainer?.ImageReference,
-                    ImageDigest = databaseContainer?.ImageDigest,
-                    LoadedSize = loadedSize,
-                    ServerColumns = ServerColumnAvailability.FromSteps(transport.ProductName, ramp.Steps)
-                }
+                Url = context.RecordedUrl,
+                Database = database,
+                Transport = context.TransportKind,
+                Compression = context.Compression,
+                HttpVersion = context.HttpVersion,
+                StrictHttpVersion = context.StrictHttpVersion,
+                Seed = runSeed,
+                DocumentSizeBytes = docSizeBytes,
+                Distribution = distributionKind,
+                // A bounded fill has no steady state to warm: it ends once the keyspace holds
+                // every document.
+                Warmup = identity.Kind == YcsbRunKind.Load ? TimeSpan.Zero : warmup,
+                Duration = duration,
+                Step = StepPlanFor(identity, closedStep),
+                Shape = identity.Shape,
+                Profile = ProfileFor(identity.Kind),
+                Preload = isWorkloadMix ? _scenario.DocumentCount : 0,
+                BulkBatchSize = _settings.BulkBatchSize,
+                BulkDepth = _settings.BulkDepth,
+                MaxErrorRate = CliParsing.ParsePercent(_settings.MaxErrors),
+                LinkMbps = _settings.LinkMbps,
+                LatencyHistogramsDir = HistogramPrefixFor(identity.ResultName),
+                // A ycsb run always exports both the HdrHistogram log and the CSV, so the result
+                // names two artifacts that exist for every step and no two runs collide.
+                LatencyHistogramsFormat = HistogramExportFormat.Both
             };
+
+            IWorkload workload = identity.Kind switch
+            {
+                YcsbRunKind.Load => new BulkWriteWorkload(docSizeBytes, opts.BulkBatchSize, runSeed, _scenario.DocumentCount, startingKey: 0, payload: payloadKind),
+                YcsbRunKind.InsertStream => new WriteWorkload(docSizeBytes, runSeed, startingKey: nextInsertKey, payload: payloadKind),
+                _ => new MixedProfileWorkload(MixFor(identity.Kind), ToKeyDistribution(distributionKind), docSizeBytes, runSeed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind)
+            };
+
+            var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, identity.ResultName);
+            var ramp = await BenchmarkRunner.RunRampAsync(opts, transport, executor, workload, startupCalibration: null, new Random(runSeed));
+
+            OnDiskSize? loadedSize = null;
+            if (identity.Kind == YcsbRunKind.Load)
+            {
+                // Read once, after the load ramp returned and outside any measurement window, so
+                // the figure is the size of what the load left behind.
+                loadedSize = await ReadOnDiskSizeAsync(transport);
+                await GuardKeyspaceAsync(transport);
+            }
+
+            if (workload is WriteWorkload insertStream)
+                nextInsertKey = insertStream.HighestKeyIssued;
+
+            outcomes.Add(new RunOutcome(identity, opts, ramp, loadedSize));
         }
 
-        var loadOpts = BaseOptions(WorkloadProfile.BulkWrites, loadStep, loadShape, YcsbRunKind.Load.ToResultName()) with { Warmup = TimeSpan.Zero };
-        var loadWorkload = new BulkWriteWorkload(docSizeBytes, loadOpts.BulkBatchSize, seed, _scenario.DocumentCount, startingKey: 0, payload: payloadKind);
-        var loadExecutor = new BenchmarkExecutor(loadOpts, transport, loadWorkload, cpuTracker, serverTracker, YcsbRunKind.Load.ToResultName());
-        var loadRamp = await BenchmarkRunner.RunRampAsync(loadOpts, transport, loadExecutor, loadWorkload, startupCalibration: null, rng);
-        // Read once, after the load ramp returned and outside any measurement window, so the figure
-        // is the size of what the load left behind.
-        var loadedSize = await ReadOnDiskSizeAsync(transport);
-        results.Add((YcsbRunKind.Load, Summary(loadOpts, loadRamp, YcsbRunKind.Load, loadedSize)));
+        // The median rule reads the measured results, so it runs once every repetition of every
+        // row has run and before the results are built.
+        var medians = YcsbMedianSelector
+            .SelectMedians(outcomes, o => o.Identity.RowKey, o => o.Ramp.Steps)
+            .Select(o => o.Identity)
+            .ToHashSet();
 
+        return outcomes
+            .Select(o => new YcsbRunResult(o.Identity, BuildSummary(o, medians.Contains(o.Identity), context, transport, serverVersion, machineFingerprint, databaseContainer)))
+            .ToList();
+    }
+
+    private sealed record RunOutcome(YcsbRunIdentity Identity, RunOptions Options, BenchmarkRunner.RampResult Ramp, OnDiskSize? LoadedSize);
+
+    /// <summary>The one load fills the keyspace every workload run addresses; no workload run loads its own.</summary>
+    private async Task GuardKeyspaceAsync(IYcsbTransport transport)
+    {
         var loadedCount = await transport.GetDocumentCountAsync("bench/");
         if (loadedCount < _scenario.DocumentCount)
         {
@@ -154,29 +175,82 @@ public sealed class YcsbRunner
                 $"The keyspace holds {loadedCount} documents but the scenario requires DocumentCount={_scenario.DocumentCount}. " +
                 "C, A, B and insert-stream do not run against a short keyspace, and do not load it themselves.");
         }
-
-        foreach (var (kind, mix) in new[]
-                 {
-                     (YcsbRunKind.WorkloadC, YcsbRunKinds.WorkloadC),
-                     (YcsbRunKind.WorkloadA, YcsbRunKinds.WorkloadA),
-                     (YcsbRunKind.WorkloadB, YcsbRunKinds.WorkloadB)
-                 })
-        {
-            var opts = BaseOptions(WorkloadProfile.Mixed, workStep, workShape, kind.ToResultName()) with { Preload = _scenario.DocumentCount };
-            var workload = new MixedProfileWorkload(mix, distribution, docSizeBytes, seed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind);
-            var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, kind.ToResultName());
-            var ramp = await BenchmarkRunner.RunRampAsync(opts, transport, executor, workload, startupCalibration: null, rng);
-            results.Add((kind, Summary(opts, ramp, kind)));
-        }
-
-        var insertOpts = BaseOptions(WorkloadProfile.Writes, workStep, workShape, YcsbRunKind.InsertStream.ToResultName());
-        var insertWorkload = new WriteWorkload(docSizeBytes, seed, startingKey: _scenario.DocumentCount, payload: payloadKind);
-        var insertExecutor = new BenchmarkExecutor(insertOpts, transport, insertWorkload, cpuTracker, serverTracker, YcsbRunKind.InsertStream.ToResultName());
-        var insertRamp = await BenchmarkRunner.RunRampAsync(insertOpts, transport, insertExecutor, insertWorkload, startupCalibration: null, rng);
-        results.Add((YcsbRunKind.InsertStream, Summary(insertOpts, insertRamp, YcsbRunKind.InsertStream)));
-
-        return results;
     }
+
+    private BenchmarkSummary BuildSummary(
+        RunOutcome outcome,
+        bool isRowMedian,
+        RunContext context,
+        IYcsbTransport transport,
+        string serverVersion,
+        MachineFingerprint machineFingerprint,
+        DatabaseContainerInfo? databaseContainer)
+    {
+        var knee = KneeFinder.FindKnee(outcome.Ramp.Steps, outcome.Options.MaxErrorRate);
+
+        return new BenchmarkSummary
+        {
+            Options = outcome.Options,
+            Steps = outcome.Ramp.Steps,
+            Knee = knee,
+            // The verdict comes from the one attribution every command uses, so a client-bound
+            // ycsb run says so.
+            Verdict = ResultAnalyzer.BuildVerdict(knee, outcome.Options),
+            ClientCompression = context.ClientCompression,
+            EffectiveHttpVersion = context.EffectiveHttpVersion,
+            HistogramArtifacts = outcome.Ramp.HistogramArtifacts.Count > 0 ? outcome.Ramp.HistogramArtifacts : null,
+            MachineFingerprint = machineFingerprint,
+            Ycsb = new YcsbRunInfo
+            {
+                Run = outcome.Identity.Kind.ToResultName(),
+                Shape = outcome.Identity.ShapeName,
+                Distribution = outcome.Options.Distribution.ToString().ToLowerInvariant(),
+                Rate = outcome.Identity.Rate,
+                Repetition = outcome.Identity.Repetition,
+                IsRowMedian = isRowMedian,
+                MedianStatistic = YcsbMedianSelector.StatisticName,
+                ResolvedScenario = _scenario,
+                ProductName = transport.ProductName,
+                ServerVersion = serverVersion,
+                Durability = context.Durability,
+                ImageReference = databaseContainer?.ImageReference,
+                ImageDigest = databaseContainer?.ImageDigest,
+                LoadedSize = outcome.LoadedSize,
+                ServerColumns = ServerColumnAvailability.FromSteps(transport.ProductName, outcome.Ramp.Steps)
+            }
+        };
+    }
+
+    /// <summary>The mix each workload run issues. These are the YCSB definitions, pinned as values.</summary>
+    private static WorkloadMix MixFor(YcsbRunKind kind) => kind switch
+    {
+        YcsbRunKind.WorkloadC => YcsbRunKinds.WorkloadC,
+        YcsbRunKind.WorkloadA => YcsbRunKinds.WorkloadA,
+        YcsbRunKind.WorkloadB => YcsbRunKinds.WorkloadB,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Only the C, A and B runs issue a weighted mix.")
+    };
+
+    private static WorkloadProfile ProfileFor(YcsbRunKind kind) => kind switch
+    {
+        YcsbRunKind.Load => WorkloadProfile.BulkWrites,
+        YcsbRunKind.InsertStream => WorkloadProfile.Writes,
+        _ => WorkloadProfile.Mixed
+    };
+
+    /// <summary>
+    /// A closed-loop run follows the scenario's own concurrency plan. A fixed-rate run holds no
+    /// ramp: its step plan is the rate itself, at a fixed target.
+    /// </summary>
+    private static StepPlan StepPlanFor(YcsbRunIdentity identity, StepPlan closedStep)
+    {
+        if (identity.Shape == LoadShape.Closed)
+            return closedStep;
+
+        var rate = RateSteps(identity.Rate!.Value);
+        return new StepPlan(rate, rate, 2.0);
+    }
+
+    private static int RateSteps(double rate) => (int)Math.Max(1, Math.Round(rate));
 
     /// <summary>
     /// The on-disk size of the loaded set, through the product's own named statistic. A product
@@ -348,48 +422,24 @@ public sealed class YcsbRunner
         bool StrictHttpVersion);
 
     /// <summary>
-    /// The load run fills exactly the scenario's document count, so it uses the closed-loop
-    /// generator at the scenario's concurrency and no warmup: a fill has no steady state to warm,
-    /// and the bounded workload ends the step once the keyspace holds every document.
-    /// </summary>
-    private static (StepPlan Step, LoadShape Shape) ResolveLoadStepPlan(YcsbScenario scenario)
-        => (CliParsing.ParseStepPlan(scenario.Concurrency).Normalize(), LoadShape.Closed);
-
-    /// <summary>
-    /// The scenario's own concurrency step plan drives the C, A and B runs: one field, one
-    /// meaning, per the scenario's parameter table. A scenario rate switches those runs to the
-    /// rate load shape, at a fixed target (no ramp) sized by the rate value itself. The load run
-    /// resolves its own plan, because a bounded fill holds no rate.
-    /// </summary>
-    private static (StepPlan Step, LoadShape Shape) ResolveStepPlan(YcsbScenario scenario)
-    {
-        if (scenario.Rate.HasValue)
-        {
-            var rate = (int)Math.Max(1, Math.Round(scenario.Rate.Value));
-            return (new StepPlan(rate, rate, 2.0), LoadShape.Rate);
-        }
-
-        return (CliParsing.ParseStepPlan(scenario.Concurrency).Normalize(), LoadShape.Closed);
-    }
-
-    /// <summary>
-    /// The largest concurrency the resolved scenario reaches, which sizes a transport's per-worker
-    /// connection set. The closed-loop plan gives it directly. A rate run holds one in-flight
-    /// operation per worker, so its ceiling is the rate planner's own estimate at the run's
-    /// fallback service time (the ycsb runs carry no measured baseline), and the load run's
-    /// closed-loop plan is counted too because it runs first at the scenario's concurrency.
+    /// The largest concurrency any run of the invocation reaches, which sizes a transport's
+    /// per-worker connection set. The closed-loop plan gives it directly. A rate run holds one
+    /// in-flight operation per worker, so every rate the scenario names contributes the rate
+    /// planner's own estimate at the run's fallback service time (the ycsb runs carry no measured
+    /// baseline), and the largest of them all wins.
     /// </summary>
     internal static int ResolveConcurrencyCeiling(YcsbScenario scenario, string url, string database)
     {
-        var closedEnd = CliParsing.ParseStepPlan(scenario.Concurrency).Normalize().End;
-        if (scenario.Rate.HasValue == false)
-            return closedEnd;
+        var ceiling = CliParsing.ParseStepPlan(scenario.Concurrency).Normalize().End;
 
-        var rate = (int)Math.Max(1, Math.Round(scenario.Rate.Value));
-        var rateWorkers = RateWorkerPlanner.ResolveRateWorkerCount(
-            new RunOptions { Url = url, Database = database }, rate, baselineLatencyMicros: 0);
+        foreach (var rate in scenario.ResolvedRates)
+        {
+            var workers = RateWorkerPlanner.ResolveRateWorkerCount(
+                new RunOptions { Url = url, Database = database }, RateSteps(rate), baselineLatencyMicros: 0);
+            ceiling = Math.Max(ceiling, workers);
+        }
 
-        return Math.Max(closedEnd, rateWorkers);
+        return ceiling;
     }
 
     private static ITransport BuildRavenDbTransport(TransportKind kind, string url, string database, CompressionMode compression, Version httpVersion) => kind switch

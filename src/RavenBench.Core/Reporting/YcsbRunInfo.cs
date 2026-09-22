@@ -81,6 +81,28 @@ public sealed record ServerColumnAvailability
 public sealed record YcsbRunInfo
 {
     public required string Run { get; init; }
+
+    /// <summary>The load shape that produced this result: "closed" for the ramp, "rate" for a fixed rate.</summary>
+    public required string Shape { get; init; }
+
+    /// <summary>The key distribution this run actually used, not the scenario's first value.</summary>
+    public required string Distribution { get; init; }
+
+    /// <summary>The fixed rate this run ran at. Absent for a closed-loop run, which has none.</summary>
+    public double? Rate { get; init; }
+
+    /// <summary>Which repetition of its row this result is, counting from one.</summary>
+    public required int Repetition { get; init; }
+
+    /// <summary>
+    /// True on the one repetition of this row the median rule selected, so the median of a row is
+    /// identifiable from one file. False on a row whose every repetition was client-bound.
+    /// </summary>
+    public required bool IsRowMedian { get; init; }
+
+    /// <summary>The statistic the median of a row is taken over, named so a reader can recompute it.</summary>
+    public required string MedianStatistic { get; init; }
+
     public required YcsbScenario ResolvedScenario { get; init; }
     public required string ProductName { get; init; }
     public required string ServerVersion { get; init; }
