@@ -390,15 +390,7 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
 
     public async Task EnsureDatabaseExistsAsync(string databaseName)
     {
-        try
-        {
-            var dbRecord = new Raven.Client.ServerWide.DatabaseRecord(databaseName);
-            await _store.Maintenance.Server.SendAsync(new Raven.Client.ServerWide.Operations.CreateDatabaseOperation(dbRecord));
-        }
-        catch (Raven.Client.Exceptions.ConcurrencyException)
-        {
-            // Database already exists, ignore
-        }
+        await TransportAdminClient.EnsureDatabaseExistsAsync(_store, databaseName);
     }
 
     public Task<long> GetDocumentCountAsync(string idPrefix)

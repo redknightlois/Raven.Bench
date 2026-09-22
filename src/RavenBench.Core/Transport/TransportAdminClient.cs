@@ -11,6 +11,55 @@ namespace RavenBench.Core.Transport;
 /// </summary>
 internal sealed class TransportAdminClient
 {
+    /// <summary>
+    /// How long to wait for a new database to show up in the cluster after the create command
+    /// stops waiting for its raft index.
+    /// </summary>
+    internal static readonly TimeSpan DatabaseCreationDeadline = TimeSpan.FromMinutes(2);
+
+    private static readonly TimeSpan DatabaseCreationPollInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Creates the database if it is not there, and is safe to call again. If the create fails,
+    /// it counts as done only once the database record can be read back; otherwise the original
+    /// error is thrown.
+    /// </summary>
+    internal static async Task EnsureDatabaseExistsAsync(IDocumentStore store, string databaseName)
+    {
+        try
+        {
+            var record = new Raven.Client.ServerWide.DatabaseRecord(databaseName);
+            await store.Maintenance.Server.SendAsync(new Raven.Client.ServerWide.Operations.CreateDatabaseOperation(record)).ConfigureAwait(false);
+        }
+        catch (Raven.Client.Exceptions.ConcurrencyException)
+        {
+            // The database already exists.
+        }
+        catch (Exception ex)
+        {
+            if (await WaitForDatabaseAsync(store, databaseName).ConfigureAwait(false) == false)
+                throw new InvalidOperationException($"Database '{databaseName}' was not created within {DatabaseCreationDeadline} of the create command failing.", ex);
+        }
+    }
+
+    private static async Task<bool> WaitForDatabaseAsync(IDocumentStore store, string databaseName)
+    {
+        var deadline = DateTime.UtcNow + DatabaseCreationDeadline;
+        while (true)
+        {
+            var record = await store.Maintenance.Server
+                .SendAsync(new Raven.Client.ServerWide.Operations.GetDatabaseRecordOperation(databaseName))
+                .ConfigureAwait(false);
+
+            if (record is not null)
+                return true;
+            if (DateTime.UtcNow >= deadline)
+                return false;
+
+            await Task.Delay(DatabaseCreationPollInterval).ConfigureAwait(false);
+        }
+    }
+
     private readonly HttpClient _http;
     private readonly string _baseUrl;
 
