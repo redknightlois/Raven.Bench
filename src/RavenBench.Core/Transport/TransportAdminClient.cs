@@ -124,6 +124,18 @@ internal sealed class TransportAdminClient
         }
     }
 
+    /// <summary>The RavenDB statistic that reports the database's on-disk size.</summary>
+    public const string StorageSizeMetricName = "SizeOnDisk.SizeInBytes";
+
+    /// <summary>Reads <see cref="StorageSizeMetricName"/> from the database statistics.</summary>
+    public static async Task<long> GetStorageSizeBytesAsync(IDocumentStore store)
+    {
+        var stats = await store.Maintenance
+            .SendAsync(new Raven.Client.Documents.Operations.GetStatisticsOperation())
+            .ConfigureAwait(false);
+        return stats.SizeOnDisk.SizeInBytes;
+    }
+
     public static async Task<long> GetDocumentCountAsync(IDocumentStore store, string idPrefix)
     {
         using var session = store.OpenAsyncSession();

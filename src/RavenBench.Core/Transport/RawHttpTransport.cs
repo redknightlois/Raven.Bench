@@ -13,7 +13,7 @@ using ZstdSharp;
 
 namespace RavenBench.Core.Transport;
 
-public sealed class RawHttpTransport : ITransport
+public sealed class RawHttpTransport : ITransport, IReportsStorageSize
 {
     private const int BufferSize = 32 * 1024;
     private const int PoolCount = 1024;
@@ -689,6 +689,17 @@ public sealed class RawHttpTransport : ITransport
         using var adminStore = CreateAdminStore(_db);
 
         return await TransportAdminClient.GetDocumentCountAsync(adminStore, idPrefix).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public string StorageSizeMetricName => TransportAdminClient.StorageSizeMetricName;
+
+    /// <inheritdoc />
+    public async Task<long> GetStorageSizeBytesAsync()
+    {
+        using var adminStore = CreateAdminStore(_db);
+
+        return await TransportAdminClient.GetStorageSizeBytesAsync(adminStore).ConfigureAwait(false);
     }
 
     public void Dispose()

@@ -24,7 +24,7 @@ namespace RavenBench.Core.Transport;
 /// Transport implementation using the official RavenDB .NET client.
 /// Provides high-level document operations through sessions for benchmarking.
 /// </summary>
-public sealed class RavenClientTransport : ITransport
+public sealed class RavenClientTransport : ITransport, IReportsStorageSize
 {
     /// <summary>
     /// Estimated JSON serialization size per float32 value in characters.
@@ -405,6 +405,12 @@ public sealed class RavenClientTransport : ITransport
     {
         return TransportAdminClient.GetDocumentCountAsync(_store, idPrefix);
     }
+
+    /// <inheritdoc />
+    public string StorageSizeMetricName => TransportAdminClient.StorageSizeMetricName;
+
+    /// <inheritdoc />
+    public Task<long> GetStorageSizeBytesAsync() => TransportAdminClient.GetStorageSizeBytesAsync(_store);
 
     public void Dispose()
     {

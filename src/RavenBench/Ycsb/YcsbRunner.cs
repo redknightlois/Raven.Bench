@@ -1,3 +1,4 @@
+using RavenBench.Analysis;
 using RavenBench.Cli;
 using RavenBench.Core;
 using RavenBench.Core.Diagnostics;
@@ -99,32 +100,52 @@ public sealed class YcsbRunner
         var rng = new Random(seed);
         var results = new List<(YcsbRunKind, BenchmarkSummary)>();
 
-        BenchmarkSummary Summary(RunOptions opts, BenchmarkRunner.RampResult ramp, YcsbRunKind kind) => new()
+        // Only a RavenDB target exposes a server metric this harness can read, and the tracker's
+        // constructor says so at compile time. It starts and stops with the CPU tracker, so its
+        // samples cover the same post-warmup measurement window.
+        using var serverTracker = transport is ITransport ravenTransport
+            ? new ServerMetricsTracker(ravenTransport, new RunOptions { Url = context.RecordedUrl, Database = database })
+            : null;
+
+        BenchmarkSummary Summary(RunOptions opts, BenchmarkRunner.RampResult ramp, YcsbRunKind kind, OnDiskSize? loadedSize = null)
         {
-            Options = opts,
-            Steps = ramp.Steps,
-            Verdict = "ycsb",
-            ClientCompression = context.ClientCompression,
-            EffectiveHttpVersion = context.EffectiveHttpVersion,
-            HistogramArtifacts = ramp.HistogramArtifacts.Count > 0 ? ramp.HistogramArtifacts : null,
-            MachineFingerprint = machineFingerprint,
-            Ycsb = new YcsbRunInfo
+            var knee = KneeFinder.FindKnee(ramp.Steps, opts.MaxErrorRate);
+
+            return new BenchmarkSummary
             {
-                Run = kind.ToResultName(),
-                ResolvedScenario = _scenario,
-                ProductName = transport.ProductName,
-                ServerVersion = serverVersion,
-                Durability = context.Durability,
-                ImageReference = databaseContainer?.ImageReference,
-                ImageDigest = databaseContainer?.ImageDigest
-            }
-        };
+                Options = opts,
+                Steps = ramp.Steps,
+                Knee = knee,
+                // The verdict comes from the one attribution every command uses, so a client-bound
+                // ycsb run says so instead of carrying a fixed literal.
+                Verdict = ResultAnalyzer.BuildVerdict(knee, opts),
+                ClientCompression = context.ClientCompression,
+                EffectiveHttpVersion = context.EffectiveHttpVersion,
+                HistogramArtifacts = ramp.HistogramArtifacts.Count > 0 ? ramp.HistogramArtifacts : null,
+                MachineFingerprint = machineFingerprint,
+                Ycsb = new YcsbRunInfo
+                {
+                    Run = kind.ToResultName(),
+                    ResolvedScenario = _scenario,
+                    ProductName = transport.ProductName,
+                    ServerVersion = serverVersion,
+                    Durability = context.Durability,
+                    ImageReference = databaseContainer?.ImageReference,
+                    ImageDigest = databaseContainer?.ImageDigest,
+                    LoadedSize = loadedSize,
+                    ServerColumns = ServerColumnAvailability.FromSteps(transport.ProductName, ramp.Steps)
+                }
+            };
+        }
 
         var loadOpts = BaseOptions(WorkloadProfile.BulkWrites, loadStep, loadShape, YcsbRunKind.Load.ToResultName()) with { Warmup = TimeSpan.Zero };
         var loadWorkload = new BulkWriteWorkload(docSizeBytes, loadOpts.BulkBatchSize, seed, _scenario.DocumentCount, startingKey: 0, payload: payloadKind);
-        var loadExecutor = new BenchmarkExecutor(loadOpts, transport, loadWorkload, cpuTracker);
+        var loadExecutor = new BenchmarkExecutor(loadOpts, transport, loadWorkload, cpuTracker, serverTracker, YcsbRunKind.Load.ToResultName());
         var loadRamp = await BenchmarkRunner.RunRampAsync(loadOpts, transport, loadExecutor, loadWorkload, startupCalibration: null, rng);
-        results.Add((YcsbRunKind.Load, Summary(loadOpts, loadRamp, YcsbRunKind.Load)));
+        // Read once, after the load ramp returned and outside any measurement window, so the figure
+        // is the size of what the load left behind.
+        var loadedSize = await ReadOnDiskSizeAsync(transport);
+        results.Add((YcsbRunKind.Load, Summary(loadOpts, loadRamp, YcsbRunKind.Load, loadedSize)));
 
         var loadedCount = await transport.GetDocumentCountAsync("bench/");
         if (loadedCount < _scenario.DocumentCount)
@@ -143,18 +164,30 @@ public sealed class YcsbRunner
         {
             var opts = BaseOptions(WorkloadProfile.Mixed, workStep, workShape, kind.ToResultName()) with { Preload = _scenario.DocumentCount };
             var workload = new MixedProfileWorkload(mix, distribution, docSizeBytes, seed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind);
-            var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker);
+            var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, kind.ToResultName());
             var ramp = await BenchmarkRunner.RunRampAsync(opts, transport, executor, workload, startupCalibration: null, rng);
             results.Add((kind, Summary(opts, ramp, kind)));
         }
 
         var insertOpts = BaseOptions(WorkloadProfile.Writes, workStep, workShape, YcsbRunKind.InsertStream.ToResultName());
         var insertWorkload = new WriteWorkload(docSizeBytes, seed, startingKey: _scenario.DocumentCount, payload: payloadKind);
-        var insertExecutor = new BenchmarkExecutor(insertOpts, transport, insertWorkload, cpuTracker);
+        var insertExecutor = new BenchmarkExecutor(insertOpts, transport, insertWorkload, cpuTracker, serverTracker, YcsbRunKind.InsertStream.ToResultName());
         var insertRamp = await BenchmarkRunner.RunRampAsync(insertOpts, transport, insertExecutor, insertWorkload, startupCalibration: null, rng);
         results.Add((YcsbRunKind.InsertStream, Summary(insertOpts, insertRamp, YcsbRunKind.InsertStream)));
 
         return results;
+    }
+
+    /// <summary>
+    /// The on-disk size of the loaded set, through the product's own named statistic. A product
+    /// whose transport does not carry the optional capability states that fact by name instead.
+    /// </summary>
+    private static async Task<OnDiskSize> ReadOnDiskSizeAsync(IYcsbTransport transport)
+    {
+        if (transport is IReportsStorageSize reporter)
+            return OnDiskSize.Reported(reporter.StorageSizeMetricName, await reporter.GetStorageSizeBytesAsync());
+
+        return OnDiskSize.NotExposed(transport.ProductName);
     }
 
     /// <summary>

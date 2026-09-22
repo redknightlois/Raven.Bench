@@ -14,6 +14,66 @@ public sealed record DurabilityParity
 }
 
 /// <summary>
+/// The on-disk size of what a load run left behind, as the product itself reports it. Either the
+/// product's own statistic named its figure, or the named fact that this product exposes none.
+/// </summary>
+public sealed record OnDiskSize
+{
+    /// <summary>The product statistic the figure is read from. Absent when the product exposes none.</summary>
+    public string? Metric { get; init; }
+
+    /// <summary>The size the product reported, in bytes. Never an estimate. Absent when the product exposes none.</summary>
+    public long? Bytes { get; init; }
+
+    /// <summary>The named fact that this product exposes no on-disk size. Absent when a figure is present.</summary>
+    public string? Unavailable { get; init; }
+
+    /// <summary>The figure a product reported, with the name of the statistic it came from.</summary>
+    public static OnDiskSize Reported(string metric, long bytes) => new() { Metric = metric, Bytes = bytes };
+
+    /// <summary>The statement a product that exposes no on-disk size leaves in the result.</summary>
+    public static OnDiskSize NotExposed(string productName) =>
+        new() { Unavailable = $"{productName} exposes no on-disk size to this harness." };
+}
+
+/// <summary>
+/// Which server columns this harness run actually collected for the product that ran, stated
+/// positively so a reader never has to infer availability from an absent key. It is derived from
+/// the steps the run produced: a column is named only when at least one step carries a value for it.
+/// </summary>
+public sealed record ServerColumnAvailability
+{
+    public required string Product { get; init; }
+
+    /// <summary>The step columns at least one step of this result carries. Empty when the harness collected none.</summary>
+    public required IReadOnlyList<string> Columns { get; init; }
+
+    /// <summary>The same fact in words, so an empty list never reads as a missing measurement.</summary>
+    public required string Statement { get; init; }
+
+    /// <summary>Derives the statement from the steps that were produced.</summary>
+    public static ServerColumnAvailability FromSteps(string productName, IReadOnlyList<StepResult> steps)
+    {
+        var columns = new List<string>();
+        if (steps.Any(s => s.ServerCpu.HasValue))
+            columns.Add(nameof(StepResult.ServerCpu));
+        if (steps.Any(s => s.ServerMemoryMB.HasValue))
+            columns.Add(nameof(StepResult.ServerMemoryMB));
+        if (steps.Any(s => s.ServerRequestsPerSec.HasValue))
+            columns.Add(nameof(StepResult.ServerRequestsPerSec));
+
+        return new ServerColumnAvailability
+        {
+            Product = productName,
+            Columns = columns,
+            Statement = columns.Count == 0
+                ? $"{productName} has no server column from this harness run."
+                : $"{productName} server columns collected by this harness run: {string.Join(", ", columns)}."
+        };
+    }
+}
+
+/// <summary>
 /// What a ycsb result carries on top of a Raven.Bench summary: which run of the sequence produced
 /// it, the scenario as resolved for that run, and the target that ran it. Absent from a result
 /// produced by any other command.
@@ -37,4 +97,13 @@ public sealed record YcsbRunInfo
     /// container.
     /// </summary>
     public string? ImageDigest { get; init; }
+
+    /// <summary>
+    /// The on-disk size of what the load left behind, read after the load ramp returned. Present on
+    /// the load result alone; the C, A and B runs do not change the loaded set.
+    /// </summary>
+    public OnDiskSize? LoadedSize { get; init; }
+
+    /// <summary>Which server columns this harness run collected for this product.</summary>
+    public required ServerColumnAvailability ServerColumns { get; init; }
 }
