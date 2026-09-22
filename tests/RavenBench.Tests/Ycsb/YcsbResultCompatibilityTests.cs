@@ -64,7 +64,8 @@ public class YcsbResultCompatibilityTests
                 ServerVersion = "8.0.30",
                 Durability = new DurabilityParity { Setting = "writeConcern", Value = "j=true" },
                 ImageReference = "mongo:8.0",
-                ImageDigest = "mongo:8.0@sha256:4a0f30875898413139bec44c73c02a05fed172578de65b644dcdcee143ae7306"
+                ImageDigest = "mongo:8.0@sha256:4a0f30875898413139bec44c73c02a05fed172578de65b644dcdcee143ae7306",
+                ServerColumns = ServerColumnAvailability.FromSteps("MongoDB Community", Array.Empty<StepResult>())
             }
         };
 

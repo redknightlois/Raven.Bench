@@ -14,7 +14,7 @@ namespace RavenBench.Core.Transport;
 /// to the scenario's largest concurrency; each connection prepares its three fixed statements once
 /// and reuses them. Apex's pipelining pool and its automatic prepared-statement cache are not used.
 /// </summary>
-public sealed class PostgresYcsbTransport : IYcsbTransport
+public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize
 {
     /// <summary>Scenario target name for PostgreSQL.</summary>
     public const string Target = "postgresql";
@@ -160,6 +160,23 @@ public sealed class PostgresYcsbTransport : IYcsbTransport
         var rows = await _setup!
             .QueryAsync(CountSql, SqlParameters.Create(idPrefix), CancellationToken.None)
             .ConfigureAwait(false);
+        return rows[0].Get<long>(0);
+    }
+
+    /// <summary>The PostgreSQL function the on-disk size is read from.</summary>
+    internal const string StorageSizeMetric = "pg_database_size";
+
+    /// <summary>Reads the size of the run's database through that function.</summary>
+    internal const string StorageSizeSql = "SELECT " + StorageSizeMetric + "(current_database())::int8";
+
+    /// <inheritdoc />
+    public string StorageSizeMetricName => StorageSizeMetric;
+
+    /// <inheritdoc />
+    public async Task<long> GetStorageSizeBytesAsync()
+    {
+        await _ready.Value.ConfigureAwait(false);
+        var rows = await _setup!.QueryAsync(StorageSizeSql, CancellationToken.None).ConfigureAwait(false);
         return rows[0].Get<long>(0);
     }
 

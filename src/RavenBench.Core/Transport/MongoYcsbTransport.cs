@@ -13,7 +13,7 @@ namespace RavenBench.Core.Transport;
 /// alone, because neither product exposes SNMP, a license type or a RavenDB calibration endpoint,
 /// and the driver hides the socket, so byte counts are not wire-accurate.
 /// </summary>
-public sealed class MongoYcsbTransport : IYcsbTransport
+public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize
 {
     /// <summary>Scenario target name for MongoDB Community.</summary>
     public const string MongoDbTarget = "mongodb";
@@ -141,6 +141,25 @@ public sealed class MongoYcsbTransport : IYcsbTransport
     {
         var filter = Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression("^" + Regex.Escape(idPrefix)));
         return await _collection.CountDocumentsAsync(filter).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public string StorageSizeMetricName => StorageSizeMetric;
+
+    /// <summary>
+    /// The <c>dbStats</c> key the on-disk size is read from. It is the storage the collections and
+    /// their indexes occupy; the plain storage size omits the indexes.
+    /// </summary>
+    internal const string StorageSizeMetric = "dbStats.totalSize";
+
+    /// <inheritdoc />
+    public async Task<long> GetStorageSizeBytesAsync()
+    {
+        var stats = await _database.RunCommandAsync<BsonDocument>(new BsonDocument("dbStats", 1)).ConfigureAwait(false);
+        if (stats.TryGetValue("totalSize", out var size) && size.IsNumeric)
+            return (long)size.ToDouble();
+
+        throw new InvalidOperationException($"The Mongo server's dbStats response carries no totalSize for database '{_database.DatabaseNamespace.DatabaseName}'.");
     }
 
     /// <summary>

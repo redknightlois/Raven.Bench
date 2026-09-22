@@ -65,6 +65,29 @@ reference and digest of the target that actually served the run, the durability 
 the per-step table, the machine fingerprint, and the paths of the per-step HdrHistogram and CSV
 files.
 
+## What makes a step valid
+
+Every measured step reports `ClientCpu`: the CPU this load process spent over that step's own
+post-warmup measurement window, as a fraction of the load host's total capacity. `MeasuredDuration`
+is the measured length of that same window, so throughput, CPU and wall time read against one clock.
+A bounded fill that ends before the configured duration reports the window it measured, not the cap.
+
+A step whose load host reached the saturation threshold carries `InvalidReason` and prints an
+`INVALID` line on the console naming the step, the ycsb run and why. Such a step measures the load
+host, not the server, so its number must not be published. The same threshold decides the result's
+`Verdict`, which reads `client-limited (CPU)` for such a run.
+
+Two more fields state what the harness could and could not read:
+
+- `Ycsb.LoadedSize` on the load result: the on-disk size of what the load left behind, with the
+  name of the product statistic it was read from (`SizeOnDisk.SizeInBytes` for RavenDB,
+  `pg_database_size` for PostgreSQL, `dbStats.totalSize` for MongoDB and DocumentDB). A product
+  that exposes none says so by name instead.
+- `Ycsb.ServerColumns` on every result: which server columns this run actually collected for this
+  product, derived from the steps it produced. A RavenDB run names the columns the admin endpoints
+  filled (`ServerCpu`, `ServerMemoryMB`); a PostgreSQL, MongoDB or DocumentDB run states that this
+  harness has no server column for that product, so an absent key never reads as a lost measurement.
+
 ## Port table
 
 Every service, its host port and its default endpoint. The two containerized RavenDB host ports
