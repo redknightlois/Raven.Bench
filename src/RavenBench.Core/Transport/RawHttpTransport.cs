@@ -673,15 +673,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize
     {
         using var adminStore = CreateAdminStore(databaseName);
 
-        try
-        {
-            var dbRecord = new Raven.Client.ServerWide.DatabaseRecord(databaseName);
-            await adminStore.Maintenance.Server.SendAsync(new Raven.Client.ServerWide.Operations.CreateDatabaseOperation(dbRecord));
-        }
-        catch (Raven.Client.Exceptions.ConcurrencyException)
-        {
-            // Database already exists, ignore
-        }
+        await TransportAdminClient.EnsureDatabaseExistsAsync(adminStore, databaseName);
     }
 
     public async Task<long> GetDocumentCountAsync(string idPrefix)

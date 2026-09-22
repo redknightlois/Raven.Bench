@@ -194,8 +194,18 @@ that database before the run, because the transport creates the table but does n
 database. Pass `--database` to run against a database you manage; that database must start with an
 empty `bench/` keyspace.
 
-The results directory is not cleaned. A rerun writes a new timestamped set of five files and
-leaves the earlier set in place.
+The results directory is not cleaned. A rerun writes a new timestamped set of files and leaves the
+earlier set in place. The results directory is ignored by git, so results stay on the machine that
+produced them.
+
+The `ravendb` target is the shared development server, and every run leaves its database
+`ycsb_ravendb_<timestamp>_<pid>` behind with the loaded keyspace in it, so an evening of runs leaves
+one 100,000-document database per run. Delete them when you are done, either from the Studio at
+`http://localhost:8081` or with one request per database:
+
+```
+curl -X DELETE 'http://localhost:8081/admin/databases?name=ycsb_ravendb_20260922T101500_1234&hard-delete=true'
+```
 
 ## How to add a target
 
