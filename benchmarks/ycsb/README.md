@@ -100,6 +100,9 @@ repeat the same streams. The derived seed is in `Options.Seed`; the scenario's o
 | B | 95% read, 5% update | The same two operations at a read-mostly ratio. |
 | insert-stream | 100% insert | Inserts one document per operation, one commit each. This is the fsync path. |
 
+C, A, B and insert-stream are fixed points of one weighted blend. `YcsbBlendFixedPointsTests`
+checks that each preset resolves to the mix the run sequence holds for it.
+
 Each result JSON holds the resolved scenario, the target product and server version, the image
 reference and digest of the target that actually served the run, the durability parity setting,
 the per-step table, the machine fingerprint, and the paths of the per-step HdrHistogram and CSV
