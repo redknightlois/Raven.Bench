@@ -11,6 +11,7 @@ using Raven.TestDriver;
 using RavenBench.Core;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
+using RavenBench.Tests.Infrastructure;
 using Xunit;
 
 namespace RavenBench.Tests;
@@ -42,20 +43,9 @@ public class UpdateFieldOperationTests
 /// Proves the field update against a real server: a transport that served it by rewriting the
 /// whole document would fail the byte-identical check on the nine fields it must not touch.
 /// </summary>
-public class UpdateFieldOperationTransportTests : RavenTestDriver
+public class UpdateFieldOperationTransportTests : EmbeddedRavenTestBase
 {
     private const int DocumentSize = 1024;
-
-    static UpdateFieldOperationTransportTests()
-    {
-        ConfigureServer(new TestServerOptions
-        {
-            Licensing = new ServerOptions.LicensingOptions
-            {
-                ThrowOnInvalidOrMissingLicense = false
-            }
-        });
-    }
 
     [Fact]
     public async Task Update_Changes_The_Named_Field_And_Leaves_The_Other_Nine_Byte_Identical()

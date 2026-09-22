@@ -8,6 +8,7 @@ using Raven.TestDriver;
 using RavenBench.Cli;
 using RavenBench.Core.Ycsb;
 using RavenBench.Ycsb;
+using RavenBench.Tests.Infrastructure;
 using Xunit;
 
 namespace RavenBench.Tests.Ycsb;
@@ -16,19 +17,8 @@ namespace RavenBench.Tests.Ycsb;
 /// Drives the full ycsb sequence against a real (embedded) RavenDB server, the way the repository
 /// already tests other full-run paths: state-based, no transport mock.
 /// </summary>
-public class YcsbRunnerIntegrationTests : RavenTestDriver
+public class YcsbRunnerIntegrationTests : EmbeddedRavenTestBase
 {
-    static YcsbRunnerIntegrationTests()
-    {
-        ConfigureServer(new TestServerOptions
-        {
-            Licensing = new ServerOptions.LicensingOptions
-            {
-                ThrowOnInvalidOrMissingLicense = false
-            }
-        });
-    }
-
     [Fact]
     public async Task Full_Sequence_Produces_One_Result_Per_Run_With_The_Resolved_Scenario_Recorded()
     {

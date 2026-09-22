@@ -25,24 +25,13 @@ namespace RavenBench.Tests.Ycsb;
 /// back from PostgreSQL, MongoDB and DocumentDB equal the ones read back from RavenDB. The only
 /// permitted differences are the id field/column and key order.
 /// </summary>
-public class YcsbProductParityTests : RavenTestDriver
+public class YcsbProductParityTests : EmbeddedRavenTestBase
 {
     private const int Seed = 42;
     private const int DocumentSize = 1024;
     private const int DocumentCount = 1000;
     private const int BulkBatchSize = 100;
     private const int PostgreSqlConcurrency = 8;
-
-    static YcsbProductParityTests()
-    {
-        ConfigureServer(new TestServerOptions
-        {
-            Licensing = new ServerOptions.LicensingOptions
-            {
-                ThrowOnInvalidOrMissingLicense = false
-            }
-        });
-    }
 
     [RequiresMongoDocumentDbAndPostgreSqlFact]
     public async Task The_Ten_Fields_Read_Back_The_Same_From_PostgreSql_MongoDB_DocumentDB_And_RavenDB()
