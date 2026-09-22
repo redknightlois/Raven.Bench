@@ -24,14 +24,21 @@ namespace RavenBench.Core
         private readonly IWorkload _workload;
         private readonly ProcessCpuTracker _cpuTracker;
         private readonly ServerMetricsTracker? _serverTracker;
+        private readonly string? _runName;
 
+        /// <param name="runName">
+        /// The run of a ycsb sequence these steps belong to, so an invalid step names the result
+        /// file it landed in. Null for a command that writes one result.
+        /// </param>
         public BenchmarkExecutor(
             RunOptions options,
             IYcsbTransport transport,
             IWorkload workload,
             ProcessCpuTracker cpuTracker,
-            ServerMetricsTracker? serverTracker = null)
+            ServerMetricsTracker? serverTracker = null,
+            string? runName = null)
         {
+            _runName = runName;
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _transport = transport ?? throw new ArgumentNullException(nameof(transport));
             _workload = workload ?? throw new ArgumentNullException(nameof(workload));
@@ -70,6 +77,10 @@ namespace RavenBench.Core
                 var (latencyRecorder, metrics) = await loadGenerator.ExecuteMeasurementAsync(
                     measurementTime, cancellationToken);
 
+                // The measurement window closes here. The exception dump and the result
+                // construction below run outside it, so neither enters the load-host CPU figure.
+                _cpuTracker.Stop();
+
                 var exSnap = exTracker.Take();
                 if (exSnap.Total > 0)
                 {
@@ -91,6 +102,9 @@ namespace RavenBench.Core
 
                 var result = BuildStepResult(
                     loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics);
+
+                if (result.InvalidReason != null)
+                    Console.WriteLine(ClientSaturation.ConsoleLine(stepIndex + 1, currentStepValue, _runName, result.InvalidReason));
 
                 return (latencyRecorder, result);
             }
@@ -126,6 +140,8 @@ namespace RavenBench.Core
                     .ToList()
                 : null;
 
+            var clientCpu = _cpuTracker.AverageCpu;
+
             var result = new StepResult
             {
                 Concurrency = loadGenerator.Concurrency,
@@ -144,7 +160,9 @@ namespace RavenBench.Core
                 CorrectedCount = 0, // Will be set by BenchmarkRunner
                 ScheduledOperations = metrics.ScheduledOperations,
                 MaxTimestamp = null, // Not tracked in simplified executor
-                ClientCpu = _cpuTracker.AverageCpu,
+                ClientCpu = clientCpu,
+                MeasuredDuration = metrics.Duration,
+                InvalidReason = ClientSaturation.MarkingFor(clientCpu),
                 ServerCpu = serverMetrics.CpuUsagePercent,
                 ServerMemoryMB = serverMetrics.MemoryUsageMB,
                 ServerRequestsPerSec = serverMetrics.RequestsPerSecond,

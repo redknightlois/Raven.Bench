@@ -11,10 +11,12 @@ public sealed class ProcessCpuTracker
     private TimeSpan _startCpu;
     private readonly Stopwatch _wall = new();
     private double _avgCpu;
+    private bool _running;
 
     public void Reset()
     {
         _avgCpu = 0;
+        _running = false;
     }
 
     public void Start()
@@ -22,10 +24,19 @@ public sealed class ProcessCpuTracker
         var p = Process.GetCurrentProcess();
         _startCpu = p.TotalProcessorTime;
         _wall.Restart();
+        _running = true;
     }
 
+    /// <summary>
+    /// Closes the window and computes the average. A second call is a no-op, so the average stays
+    /// the reading of the window that was measured.
+    /// </summary>
     public void Stop()
     {
+        if (_running == false)
+            return;
+        _running = false;
+
         var p = Process.GetCurrentProcess();
         var endCpu = p.TotalProcessorTime;
         _wall.Stop();
