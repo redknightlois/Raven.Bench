@@ -46,7 +46,25 @@ public sealed class StepResult
     // Timestamp when maximum latency was observed (null if not tracked)
     public DateTimeOffset? MaxTimestamp { get; set; }
 
+    /// <summary>
+    /// The CPU the load host spent over this step's measurement window, as a 0..1 fraction of the
+    /// host's total capacity as this process sees it. Warmup is outside the window.
+    /// </summary>
     public double ClientCpu { get; init; }
+
+    /// <summary>
+    /// The measured length of this step's measurement window: the window the throughput divides by
+    /// and <see cref="ClientCpu"/> covers. A bounded fill that ends early reports its own length,
+    /// not the configured duration cap.
+    /// </summary>
+    public TimeSpan? MeasuredDuration { get; init; }
+
+    /// <summary>
+    /// Why this step must not be published, when it must not be. Absent for a valid step. It is
+    /// separate from <see cref="Reason"/>, which carries warmup and ramp-stop reasons.
+    /// </summary>
+    public string? InvalidReason { get; init; }
+
     public double NetworkUtilization { get; init; }
     /// <summary>True when NetworkUtilization is derived from measured wire bytes; false when estimated.</summary>
     public bool NetworkBytesMeasured { get; init; }

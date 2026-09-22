@@ -1,5 +1,6 @@
 using RavenBench.Core.Reporting;
 using RavenBench.Core;
+using RavenBench.Core.Metrics;
 
 namespace RavenBench.Analysis;
 
@@ -23,7 +24,7 @@ public static class ResultAnalyzer
     {
         var report = new Report
         {
-            Verdict = BuildVerdict(run, knee, opts)
+            Verdict = BuildVerdict(knee, opts)
         };
 
         // "end-of-range" marks the fallback knee when the ramp ended without degradation
@@ -42,14 +43,18 @@ public static class ResultAnalyzer
         return report;
     }
 
-    private static string BuildVerdict(BenchmarkRun run, StepResult? knee, RunOptions opts)
+    /// <summary>
+    /// The one attribution every command's verdict comes from. The ycsb runs reach it through the
+    /// same knee their siblings use, so no second copy of these rules exists.
+    /// </summary>
+    public static string BuildVerdict(StepResult? knee, RunOptions opts)
     {
         if (knee == null) return "unknown";
 
         var s = knee;
         if (s.NetworkBytesMeasured && s.NetworkUtilization >= 0.85 && s.Raw.P95 > 0 && s.Throughput > 0 && IsLoopbackUrl(opts.Url) == false)
             return $"network-limited at ~{opts.LinkMbps:F0} Mb/s (est.)";
-        if (s.ClientCpu >= 0.85)
+        if (ClientSaturation.IsSaturated(s.ClientCpu))
             return "client-limited (CPU)";
         // ProcessCpu (SNMP) / ServerCpu (admin endpoint) are 0..100%; null compares false.
         var serverCpu = s.ProcessCpu ?? s.ServerCpu;
