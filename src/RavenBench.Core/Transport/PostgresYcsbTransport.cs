@@ -3,6 +3,7 @@ using Apex.PgClient;
 using Apex.SqlClient;
 using RavenBench.Core.Workload;
 using RavenBench.Core.Ycsb;
+using RavenBench.Core;
 
 namespace RavenBench.Core.Transport;
 
@@ -14,7 +15,7 @@ namespace RavenBench.Core.Transport;
 /// to the scenario's largest concurrency; each connection prepares its three fixed statements once
 /// and reuses them. Apex's pipelining pool and its automatic prepared-statement cache are not used.
 /// </summary>
-public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize
+public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize, IInspectsStoredDocuments
 {
     /// <summary>Scenario target name for PostgreSQL.</summary>
     public const string Target = "postgresql";
@@ -50,6 +51,9 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize
     /// <summary>Upsert used by <see cref="PutAsync"/> outside the measured path.</summary>
     internal const string PutSql =
         "INSERT INTO ycsb (id, doc) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc";
+
+    /// <summary>Removes one stored row; the parity check leaves no sample behind.</summary>
+    internal const string DeleteSql = "DELETE FROM ycsb WHERE id = $1";
 
     /// <summary>The durability parity setting applied on every connection the transport opens.</summary>
     internal const string SetDurabilitySql = "SET " + DurabilitySetting + " = " + DurabilityValue;
@@ -199,6 +203,36 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize
 
         DisposeConnectionsAsync().AsTask().GetAwaiter().GetResult();
     }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyDictionary<string, string>?> ReadStoredFieldsAsync(string id, CancellationToken ct) =>
+        ReadWithMeasuredConnectionAsync(async connection =>
+        {
+            var rows = await connection.QueryAsync(ReadSql, SqlParameters.Create(id), ct).ConfigureAwait(false);
+            if (rows.Count == 0)
+                return (IReadOnlyDictionary<string, string>?)null;
+
+            // The driver returns jsonb in binary form, so the statement casts it to text. jsonb
+            // reorders keys, so only parsed values may be compared.
+            using var stored = System.Text.Json.JsonDocument.Parse(rows[0].Get<string>(0));
+            var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
+            for (int i = 0; i < PayloadGenerator.FieldCount; i++)
+            {
+                var name = PayloadGenerator.FieldName(i);
+                if (stored.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
+                    fields[name] = value.GetString()!;
+            }
+
+            return fields;
+        });
+
+    /// <inheritdoc />
+    public Task DeleteStoredDocumentAsync(string id, CancellationToken ct) =>
+        ReadWithMeasuredConnectionAsync(async connection =>
+        {
+            await connection.ExecuteAsync(DeleteSql, SqlParameters.Create(id), ct).ConfigureAwait(false);
+            return true;
+        });
 
     /// <summary>
     /// Runs one body against a connection from the measured set. The state tests use it to read the

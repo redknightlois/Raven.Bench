@@ -3,6 +3,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using RavenBench.Core.Workload;
 using RavenBench.Core.Ycsb;
+using RavenBench.Core;
 
 namespace RavenBench.Core.Transport;
 
@@ -13,7 +14,7 @@ namespace RavenBench.Core.Transport;
 /// alone, because neither product exposes SNMP, a license type or a RavenDB calibration endpoint,
 /// and the driver hides the socket, so byte counts are not wire-accurate.
 /// </summary>
-public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize
+public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, IInspectsStoredDocuments
 {
     /// <summary>Scenario target name for MongoDB Community.</summary>
     public const string MongoDbTarget = "mongodb";
@@ -180,6 +181,28 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize
         // The pinned driver keeps its cluster in a process-wide registry and exposes no dispose on
         // the client, so there is no per-run resource to release here.
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, string>?> ReadStoredFieldsAsync(string id, CancellationToken ct)
+    {
+        var stored = await _collection.Find(ReadFilter(id)).FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        if (stored is null)
+            return null;
+
+        var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
+        for (int i = 0; i < PayloadGenerator.FieldCount; i++)
+        {
+            var name = PayloadGenerator.FieldName(i);
+            if (stored.TryGetValue(name, out var value) && value.IsString)
+                fields[name] = value.AsString;
+        }
+
+        return fields;
+    }
+
+    /// <inheritdoc />
+    public Task DeleteStoredDocumentAsync(string id, CancellationToken ct) =>
+        _collection.DeleteOneAsync(ReadFilter(id), ct);
 
     /// <summary>
     /// The read filter: a document is addressed by the id the ycsb workloads carry, stored under

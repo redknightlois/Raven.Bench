@@ -128,6 +128,31 @@ Two more fields state what the harness could and could not read:
   filled (`ServerCpu`, `ServerMemoryMB`); a PostgreSQL, MongoDB or DocumentDB run states that this
   harness has no server column for that product, so an absent key never reads as a lost measurement.
 
+## Checking the four products agree
+
+The parity check is a separate command. It is not a benchmark: it writes no result summary and
+reports no throughput, latency or percentile.
+
+```
+dotnet run --project src/RavenBench -- parity \
+  --ravendb-url http://localhost:8081 \
+  --postgresql-url postgresql://bench:bench@localhost:5432/bench \
+  --mongodb-url mongodb://localhost:27017 \
+  --documentdb-url 'mongodb://bench:bench@localhost:10260/?tls=true&tlsInsecure=true' \
+  --database ycsb_parity --postgresql-database bench
+```
+
+It writes a seeded sample (1,000 documents by default), then runs every typed operation of the
+contract against every product: read by id, single insert and the one-field update. RavenDB is the
+reference: the other products are compared against what RavenDB stored, and RavenDB itself against
+what the seed says each operation must leave. The report has one row per operation and per product,
+so a disagreement names the operation and the product instead of stopping at the first one. Full
+agreement exits zero; any disagreement, or any product the check could not reach, exits non-zero
+and names that product with its endpoint. The check deletes its own sample from each product and
+says so, so the next load run does not find ids that already exist. PostgreSQL creates no database
+on demand, so `--postgresql-database` names an existing one; the other three are created by the
+check.
+
 ## Port table
 
 Every service, its host port and its default endpoint. The two containerized RavenDB host ports

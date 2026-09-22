@@ -13,7 +13,7 @@ using ZstdSharp;
 
 namespace RavenBench.Core.Transport;
 
-public sealed class RawHttpTransport : ITransport, IReportsStorageSize
+public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspectsStoredDocuments
 {
     private const int BufferSize = 32 * 1024;
     private const int PoolCount = 1024;
@@ -36,6 +36,9 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize
 
     public string ProductName => "RavenDB";
 
+    /// <summary>The URL with any password replaced by a token, safe to record or print.</summary>
+    public string RecordedEndpoint { get; }
+
     // Wire-accurate only without transparent decompression; gzip/brotli/deflate are measured post-inflate.
     public bool ReportsWireBytes => _compression is CompressionMode.Identity or CompressionMode.Zstd;
 
@@ -48,6 +51,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize
         _acceptEncoding = compression.ToWireFormat();
         _customEndpoint = string.IsNullOrWhiteSpace(endpoint) ? null : endpoint;
         _httpVersion = httpVersion;
+        RecordedEndpoint = ConnectionStringRedaction.Redact(_baseUrl);
 
         // Zstd is decoded manually; DecompressionMethods has no zstd support.
         var decompression = _compression switch
@@ -598,6 +602,37 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize
     public IReadOnlyList<(string name, string path)> GetCalibrationEndpoints()
     {
         return _admin.GetCalibrationEndpoints();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, string>?> ReadStoredFieldsAsync(string id, CancellationToken ct)
+    {
+        using var response = await _http.GetAsync(BuildUrl(id), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var body = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+        var results = body.RootElement.GetProperty("Results");
+        if (results.GetArrayLength() == 0)
+            return null;
+
+        var stored = results[0];
+        var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
+        for (int i = 0; i < PayloadGenerator.FieldCount; i++)
+        {
+            var name = PayloadGenerator.FieldName(i);
+            if (stored.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                fields[name] = value.GetString()!;
+        }
+
+        return fields;
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteStoredDocumentAsync(string id, CancellationToken ct)
+    {
+        using var response = await _http.DeleteAsync(BuildUrl(id), ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
     }
 
     private string BuildUrl(string id)

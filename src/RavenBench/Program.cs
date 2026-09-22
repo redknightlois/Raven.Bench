@@ -67,6 +67,9 @@ internal static class Program
         cfg.AddCommand<IndexBuildCommand>("index-build")
             .WithDescription("Build a static index from scratch and report build time and docs/s. Leaves the database indexed for reuse.")
             .WithExample("index-build", "--url", "http://localhost:10101", "--dataset", "stackoverflow", "--dataset-profile", "small", "--index-kind", "fanout");
+        cfg.AddCommand<ParityCommand>("parity")
+            .WithDescription("Check that every typed ycsb operation leaves the same state on all four products over a seeded sample.")
+            .WithExample("parity", "--ravendb-url", "http://localhost:8081", "--postgresql-url", "postgresql://bench:bench@localhost:5432/bench", "--mongodb-url", "mongodb://localhost:27017", "--documentdb-url", "mongodb://bench:bench@localhost:10260/?tls=true&tlsInsecure=true", "--database", "ycsb_parity");
         cfg.AddCommand<YcsbCommand>("ycsb")
             .WithDescription("Run the ycsb scenario's load, C, A, B and insert-stream sequence, one result per run.")
             .WithExample("ycsb", "--url", "http://localhost:10101", "--database", "ycsb", "--scenario", "benchmarks/ycsb/scenario.json");
