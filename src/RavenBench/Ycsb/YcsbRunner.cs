@@ -130,7 +130,7 @@ public sealed class YcsbRunner
             {
                 YcsbRunKind.Load => new BulkWriteWorkload(docSizeBytes, opts.BulkBatchSize, runSeed, _scenario.DocumentCount, startingKey: 0, payload: payloadKind),
                 YcsbRunKind.InsertStream => new WriteWorkload(docSizeBytes, runSeed, startingKey: nextInsertKey, payload: payloadKind),
-                _ => new MixedProfileWorkload(MixFor(identity.Kind), ToKeyDistribution(distributionKind), docSizeBytes, runSeed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind)
+                _ => new MixedProfileWorkload(YcsbRunKinds.MixFor(identity.Kind), ToKeyDistribution(distributionKind), docSizeBytes, runSeed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind)
             };
 
             var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, identity.ResultName);
@@ -220,15 +220,6 @@ public sealed class YcsbRunner
             }
         };
     }
-
-    /// <summary>The mix each workload run issues. These are the YCSB definitions, pinned as values.</summary>
-    private static WorkloadMix MixFor(YcsbRunKind kind) => kind switch
-    {
-        YcsbRunKind.WorkloadC => YcsbRunKinds.WorkloadC,
-        YcsbRunKind.WorkloadA => YcsbRunKinds.WorkloadA,
-        YcsbRunKind.WorkloadB => YcsbRunKinds.WorkloadB,
-        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Only the C, A and B runs issue a weighted mix.")
-    };
 
     private static WorkloadProfile ProfileFor(YcsbRunKind kind) => kind switch
     {

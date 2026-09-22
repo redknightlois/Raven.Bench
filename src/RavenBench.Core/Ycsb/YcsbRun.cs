@@ -37,6 +37,22 @@ public static class YcsbRunKinds
     /// <summary>95% reads, 5% one-field updates.</summary>
     public static readonly WorkloadMix WorkloadB = WorkloadMix.FromWeights(read: 95, write: 0, update: 5);
 
+    /// <summary>100% single-document inserts: the blend at its insert extreme.</summary>
+    public static readonly WorkloadMix InsertStream = WorkloadMix.FromWeights(read: 0, write: 100, update: 0);
+
+    /// <summary>
+    /// The mix a run issues. C, A, B and insert-stream are fixed points of the one blend. The load
+    /// run fills the keyspace through the bulk path and issues no mix.
+    /// </summary>
+    public static WorkloadMix MixFor(YcsbRunKind kind) => kind switch
+    {
+        YcsbRunKind.WorkloadC => WorkloadC,
+        YcsbRunKind.WorkloadA => WorkloadA,
+        YcsbRunKind.WorkloadB => WorkloadB,
+        YcsbRunKind.InsertStream => InsertStream,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "The load run fills the keyspace through the bulk path and issues no weighted mix.")
+    };
+
     /// <summary>The run sequence, in order: load, then the three YCSB core workloads, then insert-stream.</summary>
     public static readonly YcsbRunKind[] Sequence =
     {
