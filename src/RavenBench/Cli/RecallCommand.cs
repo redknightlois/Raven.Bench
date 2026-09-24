@@ -48,6 +48,10 @@ public sealed class RecallSettings : CommandSettings
     [Description("Data directory holding the pinned set files (default: ./datasets)")]
     public string? DatasetCacheDir { get; init; }
 
+    [CommandOption("--node-exporter-url")]
+    [Description("node_exporter metrics endpoint on the database host (e.g. http://dbhost:9100/metrics). Fills host-wide server CPU and memory per effort row.")]
+    public string? NodeExporterUrl { get; init; }
+
     [CommandOption("--index-name")]
     [Description("Override the index name to query (default: derived from collection/quantization/engine)")]
     public string? IndexNameOverride { get; init; }
@@ -100,7 +104,8 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
                 recallKs,
                 efSweep,
                 settings.VectorQuantization,
-                settings.SearchEngine);
+                settings.SearchEngine,
+                nodeExporterUrl: CliParsing.ParseNodeExporterUrl(settings.NodeExporterUrl));
 
             var table = new Table().Border(TableBorder.Rounded).Title("[blue]Recall@K by efSearch[/]");
             table.AddColumn("efSearch");
@@ -108,6 +113,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             foreach (var k in ks)
                 table.AddColumn($"recall@{k}");
             table.AddColumn("time");
+            table.AddColumn("server CPU");
 
             foreach (var (ef, result) in sweep.OrderBy(kvp => kvp.Key))
             {
@@ -115,6 +121,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
                 foreach (var k in ks)
                     row.Add(result.RecallAtK.TryGetValue(k, out var v) ? $"{v:P2}" : "-");
                 row.Add($"{result.MeasurementTime.TotalSeconds:F1}s");
+                row.Add(result.ServerCpu is { } cpu ? $"{cpu:F1}% host-wide" : "-");
                 table.AddRow(row.ToArray());
             }
 
@@ -128,7 +135,8 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
                 metadata,
                 recallKs,
                 settings.VectorQuantization,
-                settings.SearchEngine);
+                settings.SearchEngine,
+                nodeExporterUrl: CliParsing.ParseNodeExporterUrl(settings.NodeExporterUrl));
 
             var lines = result.RecallAtK
                 .OrderBy(kvp => kvp.Key)

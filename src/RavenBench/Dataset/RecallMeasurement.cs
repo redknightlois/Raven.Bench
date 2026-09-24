@@ -25,10 +25,12 @@ public sealed class RecallMeasurement
         VectorQuantization quantization,
         IndexingEngine searchEngine,
         Version? httpVersion = null,
-        int? efSearch = null)
+        int? efSearch = null,
+        Uri? nodeExporterUrl = null)
     {
+        using var nodeExporter = await NodeExporterClient.ConnectAsync(nodeExporterUrl);
         using var transport = await OpenRavenAsync(serverUrl, databaseName, metadata, quantization, searchEngine, httpVersion);
-        return await MeasureAsync(transport, metadata, recallKs, quantization, efSearch is { } ef ? SearchEffort.RavenDb(ef) : null);
+        return await MeasureAsync(transport, metadata, recallKs, quantization, efSearch is { } ef ? SearchEffort.RavenDb(ef) : null, nodeExporter);
     }
 
     /// <summary>
@@ -42,23 +44,26 @@ public sealed class RecallMeasurement
         int[] efSearchValues,
         VectorQuantization quantization,
         IndexingEngine searchEngine,
-        Version? httpVersion = null)
+        Version? httpVersion = null,
+        Uri? nodeExporterUrl = null)
     {
+        using var nodeExporter = await NodeExporterClient.ConnectAsync(nodeExporterUrl);
         using var transport = await OpenRavenAsync(serverUrl, databaseName, metadata, quantization, searchEngine, httpVersion);
         var results = new Dictionary<int, RecallResult>();
         foreach (var effort in efSearchValues.Order())
         {
             Console.WriteLine($"[Recall] --- effort={effort} ---");
-            results[effort] = await MeasureAsync(transport, metadata, recallKs, quantization, SearchEffort.RavenDb(effort));
+            results[effort] = await MeasureAsync(transport, metadata, recallKs, quantization, SearchEffort.RavenDb(effort), nodeExporter);
         }
         return results;
     }
 
     /// <summary>
     /// Runs every query of the metadata through the transport at one effort, the transport's own knob, and scores
-    /// it against the metadata's truth. A null effort runs the product at its default.
+    /// it against the metadata's truth. A null effort runs the product at its default. A node_exporter client brackets
+    /// the queries with two scrapes and fills the server columns.
     /// </summary>
-    public async Task<RecallResult> MeasureAsync(IYcsbTransport transport, VectorWorkloadMetadata metadata, int[] recallKs, VectorQuantization quantization, SearchEffort? effort, CancellationToken ct = default)
+    public async Task<RecallResult> MeasureAsync(IYcsbTransport transport, VectorWorkloadMetadata metadata, int[] recallKs, VectorQuantization quantization, SearchEffort? effort, NodeExporterClient? nodeExporter = null, CancellationToken ct = default)
     {
         var truth = metadata.GroundTruth
             ?? throw new InvalidOperationException("Recall needs the set's truth; the vector metadata carries none.");
@@ -66,6 +71,7 @@ public sealed class RecallMeasurement
         var prefix = metadata.DocumentIdPrefix ?? "";
 
         Console.WriteLine($"[Recall] Measuring recall at K={string.Join(",", recallKs)} over {metadata.QueryVectorCount} queries...");
+        var nodeStart = nodeExporter?.ScrapeAsync(ct);
         var sw = Stopwatch.StartNew();
         var returned = new List<string>[metadata.QueryVectorCount];
         for (int i = 0; i < metadata.QueryVectorCount; i++)
@@ -86,6 +92,7 @@ public sealed class RecallMeasurement
             returned[i] = ids.Select(id => StripPrefix(id, prefix)).ToList();
         }
         sw.Stop();
+        var server = nodeStart == null ? null : await nodeExporter!.EndWindowAsync(nodeStart, ct);
 
         var recallAtK = ComputeRecall(returned, truth, recallKs);
         foreach (var (k, recall) in recallAtK.OrderBy(kvp => kvp.Key))
@@ -98,7 +105,13 @@ public sealed class RecallMeasurement
             GroundTruthDepth = truth.Values.Min(t => t.Length),
             GroundTruthCached = true,
             GroundTruthComputeTime = TimeSpan.Zero,
-            MeasurementTime = sw.Elapsed
+            MeasurementTime = sw.Elapsed,
+            ServerCpu = server?.CpuPercent,
+            ServerMemoryMB = server?.MemoryMB,
+            ServerCpuSource = server?.CpuPercent.HasValue == true ? NodeExporterClient.SourceName : null,
+            ServerMemorySource = server?.MemoryMB.HasValue == true ? NodeExporterClient.SourceName : null,
+            ServerMetricsHostWide = server?.CpuPercent.HasValue == true || server?.MemoryMB.HasValue == true ? true : null,
+            ServerMetricsUnavailable = server?.Unavailable
         };
     }
 
