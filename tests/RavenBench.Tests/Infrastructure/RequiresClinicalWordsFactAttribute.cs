@@ -6,34 +6,23 @@ namespace RavenBench.Tests.Infrastructure;
 
 internal static class ClinicalWordsAvailability
 {
-    private static readonly Lazy<bool> Cached = new(Check);
+    private static readonly Lazy<bool> Cached = new(() => PathOf(100) != null);
 
     public static bool IsAvailable => Cached.Value;
 
-    private static bool Check()
+    /// <summary>
+    /// The parquet the prepare script writes under the repository's datasets directory, searched upwards from the test binaries.
+    /// </summary>
+    public static string? PathOf(int dimensions)
     {
-        // Mirror the search logic from ClinicalWordsDatasetProvider.GetParquetPath()
-        const string fileName = "w2v_100d_oa_cr_embeddings.parquet";
-
-        var startDirs = new[]
+        var relative = Path.Combine("datasets", $"clinical-words-{dimensions}", $"w2v_{dimensions}d_oa_cr_embeddings.parquet");
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
-            AppContext.BaseDirectory,
-            Directory.GetCurrentDirectory(),
-        };
-
-        foreach (var startDir in startDirs)
-        {
-            var dir = new DirectoryInfo(startDir);
-            while (dir != null)
-            {
-                var path = Path.Combine(dir.FullName, "datasets", fileName);
-                if (File.Exists(path))
-                    return true;
-                dir = dir.Parent;
-            }
+            var path = Path.Combine(dir.FullName, relative);
+            if (File.Exists(path))
+                return path;
         }
-
-        return false;
+        return null;
     }
 }
 

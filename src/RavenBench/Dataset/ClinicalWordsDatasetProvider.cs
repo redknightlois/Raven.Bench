@@ -9,13 +9,15 @@ using Raven.Client.Documents.Indexes;
 using Raven.Client.Documents.Indexes.Vector;
 using Raven.Client.Documents.Operations.Indexes;
 using RavenBench.Core;
+using RavenBench.Dataset.Vectors;
 
 namespace RavenBench.Dataset;
 
 /// <summary>
-/// Word embeddings provider for clinical vocabulary (Word2Vec 100D, 300D, 600D).
+/// Word embeddings provider for clinical vocabulary (Word2Vec 100D, 300D, 600D). As a vector set it ships
+/// no query split: the scenario seed holds query words out of the load and the truth is brute force.
 /// </summary>
-public sealed class ClinicalWordsDatasetProvider
+public sealed class ClinicalWordsDatasetProvider : HeldOutVectorDataset
 {
     /// <summary>
     /// Helper record for deserializing word documents during batch import.
@@ -29,6 +31,8 @@ public sealed class ClinicalWordsDatasetProvider
     public const int MinExpectedDocuments = 100_000;
 
     private readonly int _dimensions;
+    private readonly DatasetFile _file;
+    private string? _loadedPath;
     private Dictionary<string, float[]>? _wordVectors;
     private readonly SemaphoreSlim _loadSemaphore = new(1, 1);
 
@@ -39,56 +43,58 @@ public sealed class ClinicalWordsDatasetProvider
         { 600, "w2v_600d_oa_cr_embeddings.parquet" },
     };
 
+    public const string DocumentIdPrefix = "Words/";
+
     public ClinicalWordsDatasetProvider(int dimensions = 100)
     {
         if (ParquetFiles.ContainsKey(dimensions) == false)
             throw new ArgumentException($"Supported dimensions: 100, 300, 600. Got: {dimensions}");
         _dimensions = dimensions;
+        // The parquet derives locally from an upstream archive that no longer serves, so the catalog carries
+        // neither a URL nor a pin; the operator pins the file they produced.
+        _file = new DatasetFile
+        {
+            FileName = ParquetFiles[dimensions],
+            Url = "",
+            Type = "vectors",
+            EstimatedSizeBytes = 0,
+            Description = $"Produce it with: python datasets/prepare_clinical_embeddings.py --model w2v_{dimensions}d_oa_cr"
+        };
     }
 
-    public int Dimensions => _dimensions;
+    public override string Name => $"clinical-words-{_dimensions}";
+    public override VectorMetric Metric => VectorMetric.Cosine;
+    public override int Dimensions => _dimensions;
+    public override IReadOnlyList<DatasetFile> Files => [_file];
+
+    protected override async Task<long> CountRowsAsync(VerifiedFiles files, CancellationToken ct) =>
+        (await LoadWordVectorsAsync(files.PathOf(_file.FileName))).Count;
+
+    protected override async IAsyncEnumerable<BaseVector> ReadRowsAsync(VerifiedFiles files, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (word, vector) in await LoadWordVectorsAsync(files.PathOf(_file.FileName)))
+        {
+            var id = SanitizeDocumentId(word);
+            if (ids.Add(id) == false)
+                throw new InvalidDataException($"Set '{Name}' maps two words to the document id '{DocumentIdPrefix}{id}'.");
+            yield return new BaseVector(id, vector);
+        }
+    }
     public static IReadOnlyCollection<int> AvailableDimensions => ParquetFiles.Keys;
 
-    private string GetParquetPath()
+    // Enumeration order is the parquet row order: the dictionary sees no removals.
+    private async Task<Dictionary<string, float[]>> LoadWordVectorsAsync(string path)
     {
-        // Search upwards from these starting directories
-        var startDirs = new[]
-        {
-            AppContext.BaseDirectory,
-            Directory.GetCurrentDirectory(),
-        };
-
-        foreach (var startDir in startDirs)
-        {
-            var dir = new DirectoryInfo(startDir);
-            while (dir != null)
-            {
-                var datasetsPath = Path.Combine(dir.FullName, "datasets", ParquetFiles[_dimensions]);
-                if (File.Exists(datasetsPath))
-                    return datasetsPath;
-                dir = dir.Parent;
-            }
-        }
-
-        throw new FileNotFoundException(
-            $"Word embeddings not found. Run:\n  python datasets/prepare_clinical_embeddings.py");
-    }
-
-    private async Task<Dictionary<string, float[]>> LoadWordVectorsAsync()
-    {
-        // We have already loaded and cached the vectors.
-        if (_wordVectors != null) 
+        if (_wordVectors != null && _loadedPath == path)
             return _wordVectors;
 
-        // Use SemaphoreSlim for async locking instead of lock()
         await _loadSemaphore.WaitAsync();
         try
         {
-            // Someone else did it before us while we were waiting.
-            if (_wordVectors != null) 
+            if (_wordVectors != null && _loadedPath == path)
                 return _wordVectors;
 
-            var path = GetParquetPath();
             Console.WriteLine($"[ClinicalWords] Loading {_dimensions}D vectors from {path}");
 
             _wordVectors = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
@@ -135,6 +141,7 @@ public sealed class ClinicalWordsDatasetProvider
             }
 
             Console.WriteLine($"[ClinicalWords] Loaded {_wordVectors.Count:N0} words");
+            _loadedPath = path;
             return _wordVectors;
         }
         finally
@@ -143,15 +150,15 @@ public sealed class ClinicalWordsDatasetProvider
         }
     }
 
-    public async Task<float[]?> GetWordVectorAsync(string word)
+    public async Task<float[]?> GetWordVectorAsync(VerifiedFiles files, string word)
     {
-        var vectors = await LoadWordVectorsAsync();
+        var vectors = await LoadWordVectorsAsync(files.PathOf(_file.FileName));
         return vectors.TryGetValue(word, out var v) ? v : null;
     }
 
-    public async Task<float[]> ComputeDocumentEmbeddingAsync(string text)
+    public async Task<float[]> ComputeDocumentEmbeddingAsync(VerifiedFiles files, string text)
     {
-        var w2v = await LoadWordVectorsAsync();
+        var w2v = await LoadWordVectorsAsync(files.PathOf(_file.FileName));
         var result = new float[_dimensions];
         int count = 0;
 
@@ -175,42 +182,24 @@ public sealed class ClinicalWordsDatasetProvider
     private static string[] Tokenize(string text) =>
         Regex.Split(text.ToLowerInvariant(), @"[^a-z0-9_]+").Where(t => t.Length > 1).ToArray();
 
-    public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(int count = 100)
-    {
-        var w2v = await LoadWordVectorsAsync();
-        var words = w2v.Keys.ToArray();
-        var rng = new Random(42);
-        var vectors = Enumerable.Range(0, Math.Min(count, words.Length))
-            .Select(_ => w2v[words[rng.Next(words.Length)]])
-            .ToArray();
-
-        return new VectorWorkloadMetadata
-        {
-            QueryVectors = vectors,
-            FieldName = "Embedding",
-            VectorDimensions = _dimensions,
-            BaseVectorCount = w2v.Count
-        };
-    }
+    /// <summary>
+    /// The seeded query selection, held out of the load, with its brute-force truth at depth k.
+    /// </summary>
+    public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(VerifiedFiles files, QuerySelection selection, int k) =>
+        await VectorSets.BuildMetadataAsync(this, files, selection, k, fieldName: "Embedding", DocumentIdPrefix, await BaseCountAsync(files, selection));
 
     public string GetDatabaseName(string? profile = null, int? customSize = null) => $"ClinicalWords{_dimensions}D";
-
-    public async Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName, int expectedMinDocuments = 1000, Version? httpVersion = null)
-    {
-        // Check if parquet file exists locally
-        try { GetParquetPath(); }
-        catch { return false; }
-
-        return await DatasetImportCheck.RunAsync(serverUrl, databaseName, httpVersion, "[ClinicalWords]", "WordDocuments", expectedMinDocuments);
-    }
 
     /// <summary>
     /// Imports all words with their embeddings as documents into RavenDB.
     /// Each word becomes a document: {{ "Word": "patient", "Embedding": [0.1, 0.2, ...] }}
     /// </summary>
-    public async Task ImportWordsAsync(
+    /// <returns>True when documents were loaded; false when the database already held them.</returns>
+    public async Task<bool> ImportWordsAsync(
         string serverUrl,
         string databaseName,
+        VerifiedFiles files,
+        QuerySelection selection,
         VectorQuantization quantization = VectorQuantization.None,
         bool exactSearch = false,
         int batchSize = 1000,
@@ -230,28 +219,27 @@ public sealed class ClinicalWordsDatasetProvider
         // Determine search engine name for per-index configuration
         var engineName = searchEngine == IndexingEngine.Lucene ? "Lucene" : "Corax";
 
-        // Check if documents already exist
-        var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
-        bool documentsExist = stats.CountOfDocuments >= MinExpectedDocuments;
+        // The expected count includes the held-out query record itself.
+        var documentsExist = await HeldOutManifest.EnsureMatchesAsync(store, files, selection, await CountRowsAsync(files, default) - selection.Count + 1);
 
         if (documentsExist == false)
         {
-            // Import documents
-            var words = await LoadWordVectorsAsync();
-            Console.WriteLine($"[ClinicalWords] Importing {words.Count:N0} words to {databaseName}...");
+            var words = await LoadWordVectorsAsync(files.PathOf(_file.FileName));
+            var heldOut = await HeldOutPositionsAsync(files, selection);
+            Console.WriteLine($"[ClinicalWords] Importing {words.Count - heldOut.Count:N0} words to {databaseName} ({heldOut.Count} held out as queries)...");
 
+            await HeldOutManifest.StoreAsync(store, files, selection);
             int imported = 0;
+            long position = 0;
             using (var bulkInsert = store.BulkInsert())
             {
                 foreach (var (word, vector) in words)
                 {
-                    // Use the WordDocument record type to ensure proper @metadata
+                    if (heldOut.Contains(position++))
+                        continue;
+
                     var doc = new WordDocument(word, vector, _dimensions);
-
-                    // Sanitize document ID: RavenDB doesn't allow IDs ending with '|' or containing certain chars
-                    var docId = $"Words/{SanitizeDocumentId(word)}";
-
-                    await bulkInsert.StoreAsync(doc, docId);
+                    await bulkInsert.StoreAsync(doc, DocumentIdPrefix + SanitizeDocumentId(word));
                     imported++;
                     if (imported % batchSize == 0)
                     {
@@ -264,7 +252,7 @@ public sealed class ClinicalWordsDatasetProvider
         }
         else
         {
-            Console.WriteLine($"[ClinicalWords] Database already contains {stats.CountOfDocuments:N0} documents - skipping import");
+            Console.WriteLine($"[ClinicalWords] Database already holds the selection's documents - skipping import");
         }
 
         var engineSuffix = VectorIndexMapping.GetEngineSuffix(searchEngine);
@@ -315,6 +303,8 @@ public sealed class ClinicalWordsDatasetProvider
         {
             Console.WriteLine($"  - {result.Word} ({result.Embedding.Length}D)");
         }
+
+        return documentsExist == false;
     }
 
 
@@ -322,7 +312,7 @@ public sealed class ClinicalWordsDatasetProvider
     /// Sanitizes a word for use as a RavenDB document ID suffix.
     /// RavenDB doesn't allow document IDs ending with '|' and has restrictions on certain characters.
     /// </summary>
-    private static string SanitizeDocumentId(string word)
+    internal static string SanitizeDocumentId(string word)
     {
         if (string.IsNullOrEmpty(word))
             return "empty";

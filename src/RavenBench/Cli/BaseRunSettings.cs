@@ -96,12 +96,16 @@ public abstract class BaseRunSettings : CommandSettings
     public bool ForceDatasetImport { get; init; }
 
     [CommandOption("--dataset-cache-dir")]
-    [Description("Directory for caching downloaded dataset files")]
+    [Description("Directory for dataset files. Vector sets live under <dir>/<set>/, verified by SHA-256 on every run (default: ./datasets)")]
     public string? DatasetCacheDir { get; init; }
 
     [CommandOption("--dataset-source")]
-    [Description("Path to dataset source file or directory (for sphere: .jsonl.tar.gz file or directory)")]
+    [Description("A pre-placed file for a single-file vector set (sphere, ClinicalWords), used in place of <dir>/<set>/<file> and verified by SHA-256")]
     public string? DatasetSource { get; init; }
+
+    [CommandOption("--dataset-sha256")]
+    [Description("SHA-256 pin for a vector set file the catalog does not pin (ClinicalWords, derived locally); never replaces a catalog pin")]
+    public string? DatasetSha256 { get; init; }
 
     [CommandOption("--distribution")]
     [Description("Key distribution: uniform, zipfian, latest (default: uniform)")]

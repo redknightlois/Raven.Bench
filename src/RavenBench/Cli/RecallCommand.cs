@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using RavenBench.Core;
 using RavenBench.Core.Metrics;
+using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
 using RavenBench.Dataset;
+using RavenBench.Dataset.Vectors;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -37,6 +39,14 @@ public sealed class RecallSettings : CommandSettings
     [CommandOption("--engine")]
     [Description("Search engine: corax or lucene (default: corax)")]
     public IndexingEngine SearchEngine { get; init; } = IndexingEngine.Corax;
+
+    [CommandOption("--seed")]
+    [Description("Seed that draws the query vectors held out of the load (default: 42, the run default)")]
+    public int Seed { get; init; } = 42;
+
+    [CommandOption("--dataset-cache-dir")]
+    [Description("Data directory holding the pinned set files (default: ./datasets)")]
+    public string? DatasetCacheDir { get; init; }
 
     [CommandOption("--index-name")]
     [Description("Override the index name to query (default: derived from collection/quantization/engine)")]
@@ -148,8 +158,10 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
         {
             var profile = settings.DatasetProfile ?? "100k";
             var provider = new SphereDatasetProvider(profile);
-            var dbName = provider.GetDatabaseName(profile);
-            var metadata = await provider.GenerateQueryVectorsAsync(settings.Url, dbName, count: 1000);
+            UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, provider.Metric);
+            var files = await PinnedFiles.EnsureAsync(provider, settings.DatasetCacheDir ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets"));
+            var recallKs = CliParsing.ParseRecallKsRaw(settings.VectorRecallKs ?? "1,5,10");
+            var metadata = await provider.GenerateQueryVectorsAsync(files, new QuerySelection(settings.Seed, DatasetImportCoordinator.VectorQueryCount), recallKs.Max());
             metadata.IndexName = string.IsNullOrWhiteSpace(settings.IndexNameOverride) == false
                 ? settings.IndexNameOverride
                 : VectorIndexNaming.GetIndexName(SphereDatasetProvider.CollectionName, settings.VectorQuantization, engineSuffix);

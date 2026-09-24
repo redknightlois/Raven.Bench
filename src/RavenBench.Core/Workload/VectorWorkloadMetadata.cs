@@ -32,11 +32,20 @@ public sealed class VectorWorkloadMetadata
     public int QueryVectorCount => QueryVectors.Length;
 
     /// <summary>
-    /// Optional ground truth data for recall@K calculation.
-    /// Dictionary mapping query index to ordered list of nearest neighbor document IDs.
-    /// Computed via exact (brute-force) search and cached in the target database.
+    /// Product-neutral truth for recall@K: query index to the set's base ids, nearest first. It comes from
+    /// the set's published neighbours or from brute force outside any product, never from a product's search.
     /// </summary>
     public Dictionary<int, string[]>? GroundTruth { get; init; }
+
+    /// <summary>
+    /// The distance the set is defined under.
+    /// </summary>
+    public VectorMetric Metric { get; init; }
+
+    /// <summary>
+    /// The prefix a loader puts before a base id to form the document id; recall strips it from returned ids.
+    /// </summary>
+    public string? DocumentIdPrefix { get; init; }
 
     /// <summary>
     /// The field name as it appears in the index (e.g., "Vector" when the index map is "Vector = CreateVector(p.Embedding)").

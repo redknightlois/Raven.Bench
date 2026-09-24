@@ -53,7 +53,9 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     public string EffectiveCompressionMode => _acceptEncoding;
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
-    public string ProductName => "RavenDB";
+    public const string RavenDbProductName = "RavenDB";
+
+    public string ProductName => RavenDbProductName;
 
     /// <summary>The URL with any password replaced by a token, safe to record or print.</summary>
     public string RecordedEndpoint { get; }

@@ -22,6 +22,11 @@ public sealed class DatasetFile
     public required string Type { get; init; } // "indexes", "users", "questions", "posts"
     public required long EstimatedSizeBytes { get; init; }
     public string? Description { get; init; }
+
+    /// <summary>
+    /// Lower-case hex SHA-256 of the file as published. A vector set file carries one and is verified on every run.
+    /// </summary>
+    public string? Sha256 { get; init; }
 }
 
 /// <summary>

@@ -52,7 +52,9 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
     - `full`: ~50GB data → database `StackOverflow-50GB`
    - `--dataset-size <N>`: Custom dataset size: N post dump files (~1GB each + 2GB users). Auto-generates database name like `StackOverflow-12GB` for N=10. Overridden by `--dataset-profile`.
    - `--dataset-skip-if-exists`: Skip dataset import if data already exists (default: true).
-   - `--dataset-cache-dir <path>`: Directory for caching downloaded dataset files.
+   - `--dataset-cache-dir <path>`: Directory for dataset files (default: `./datasets`). Each vector set lives under `<path>/<set>/` (for example `sphere-100k/`, `clinical-words-100/`), is fetched once from its pinned URL, and is verified by SHA-256 on every run; a mismatch fails the run naming the set and file. The sphere file therefore moves from `datasets/sphere/` to `datasets/sphere-<profile>/`; move an existing download there, or pass it with `--dataset-source`, instead of fetching it again. Sets without a query split hold `--seed`-drawn queries out of the load, and recall compares against their brute-force float32 truth, cached beside the data.
+   - `--dataset-source <file>`: A pre-placed file for a single-file vector set (sphere, ClinicalWords), used in place of `<path>/<set>/<file>` and verified by SHA-256 exactly like a fetched file.
+   - `--dataset-sha256 <hex>`: The pin for a vector set file the catalog does not pin. ClinicalWords derives its parquet locally with `python datasets/prepare_clinical_embeddings.py`, which writes `datasets/clinical-words-<dims>/` and prints the SHA-256 to pass here. The pin is recorded in the result's options and never replaces a catalog pin.
    - `--http-version <auto|1.1|2.0|3.0>` and `--strict-http-version`: version negotiation and enforcement.
    - `--transport <raw|client>` and `--compression <identity|gzip|zstd|br|deflate>`:
     - `raw` uses HTTP directly; identity/gzip/br/deflate supported.

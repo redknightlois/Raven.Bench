@@ -1,28 +1,21 @@
 using System.Diagnostics;
-using Raven.Client;
+using System.Net;
 using Raven.Client.Documents;
 using RavenBench.Core;
 using RavenBench.Core.Metrics;
+using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
-using Sparrow.Json;
 
 namespace RavenBench.Dataset;
 
 /// <summary>
-/// Measures recall@K for vector search by comparing approximate (HNSW) results
-/// against brute-force exact nearest neighbor ground truth.
-/// Ground truth is computed once and cached in the target database.
+/// Measures recall@K for vector search: each query runs through the typed vector search operation, and
+/// the returned ids are compared with the set's product-neutral truth. No product search produces truth.
 /// </summary>
 public sealed class RecallMeasurement
 {
-    private const string GroundTruthDocId = "benchmark/ground-truth";
-
     /// <summary>
-    /// Runs the full recall measurement: compute or load ground truth, then measure recall
-    /// at each requested K cutoff.
-    /// </summary>
-    /// <summary>
-    /// Runs recall measurement at a single efSearch value.
+    /// Runs recall measurement at a single RavenDB numberOfCandidates value against a RavenDB database over raw HTTP.
     /// </summary>
     public async Task<RecallResult> MeasureAsync(
         string serverUrl,
@@ -34,37 +27,12 @@ public sealed class RecallMeasurement
         Version? httpVersion = null,
         int? efSearch = null)
     {
-        if (metadata.IndexName == null)
-            throw new InvalidOperationException("VectorWorkloadMetadata.IndexName must be set for recall measurement.");
-
-        var maxK = recallKs.Max();
-
-        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
-
-        var indexName = GetIndexName(metadata, quantization, searchEngine);
-        await EnsureIndexExistsAsync(store, metadata, indexName);
-
-        var queryFingerprint = ComputeQueryFingerprint(metadata, quantization, indexName);
-        var (groundTruth, cached, groundTruthTime) = await GetGroundTruthAsync(store, metadata, maxK, quantization, searchEngine, queryFingerprint);
-
-        var measureSw = Stopwatch.StartNew();
-        var recallAtK = await ComputeRecallAsync(store, metadata, groundTruth, recallKs, maxK, quantization, searchEngine, efSearch);
-        measureSw.Stop();
-
-        return new RecallResult
-        {
-            RecallAtK = recallAtK,
-            QueryCount = metadata.QueryVectorCount,
-            GroundTruthDepth = maxK,
-            GroundTruthCached = cached,
-            GroundTruthComputeTime = groundTruthTime,
-            MeasurementTime = measureSw.Elapsed
-        };
+        using var transport = await OpenRavenAsync(serverUrl, databaseName, metadata, quantization, searchEngine, httpVersion);
+        return await MeasureAsync(transport, metadata, recallKs, quantization, efSearch is { } ef ? SearchEffort.RavenDb(ef) : null);
     }
 
     /// <summary>
-    /// Runs recall measurement sweeping multiple efSearch values. Returns one RecallResult per efSearch.
-    /// Ground truth is computed once and reused.
+    /// Runs recall measurement sweeping RavenDB numberOfCandidates values against a RavenDB database. Returns one result per value.
     /// </summary>
     public async Task<Dictionary<int, RecallResult>> MeasureSweepAsync(
         string serverUrl,
@@ -76,358 +44,101 @@ public sealed class RecallMeasurement
         IndexingEngine searchEngine,
         Version? httpVersion = null)
     {
-        if (metadata.IndexName == null)
-            throw new InvalidOperationException("VectorWorkloadMetadata.IndexName must be set for recall measurement.");
-
-        var maxK = recallKs.Max();
-
-        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
-
-        var indexName = GetIndexName(metadata, quantization, searchEngine);
-        await EnsureIndexExistsAsync(store, metadata, indexName);
-
-        var queryFingerprint = ComputeQueryFingerprint(metadata, quantization, indexName);
-        var (groundTruth, cached, groundTruthTime) = await GetGroundTruthAsync(store, metadata, maxK, quantization, searchEngine, queryFingerprint);
-
+        using var transport = await OpenRavenAsync(serverUrl, databaseName, metadata, quantization, searchEngine, httpVersion);
         var results = new Dictionary<int, RecallResult>();
-        foreach (var ef in efSearchValues.Order())
+        foreach (var effort in efSearchValues.Order())
         {
-            Console.WriteLine($"[Recall] --- efSearch={ef} ---");
-            var measureSw = Stopwatch.StartNew();
-            var recallAtK = await ComputeRecallAsync(store, metadata, groundTruth, recallKs, maxK, quantization, searchEngine, ef);
-            measureSw.Stop();
-
-            results[ef] = new RecallResult
-            {
-                RecallAtK = recallAtK,
-                QueryCount = metadata.QueryVectorCount,
-                GroundTruthDepth = maxK,
-                GroundTruthCached = cached,
-                GroundTruthComputeTime = groundTruthTime,
-                MeasurementTime = measureSw.Elapsed
-            };
-
-            // Only count ground truth time for the first iteration
-            cached = true;
-            groundTruthTime = TimeSpan.Zero;
+            Console.WriteLine($"[Recall] --- effort={effort} ---");
+            results[effort] = await MeasureAsync(transport, metadata, recallKs, quantization, SearchEffort.RavenDb(effort));
         }
-
         return results;
     }
 
-    private async Task<(Dictionary<int, string[]> groundTruth, bool cached, TimeSpan computeTime)> GetGroundTruthAsync(
-        IDocumentStore store,
-        VectorWorkloadMetadata metadata,
-        int maxK,
-        VectorQuantization quantization,
-        IndexingEngine searchEngine,
-        string queryFingerprint)
-    {
-        var cached = await LoadGroundTruthAsync(store, maxK, metadata.QueryVectorCount, queryFingerprint);
-        if (cached != null)
-        {
-            Console.WriteLine($"[Recall] Loaded cached ground truth ({cached.Count} queries, depth {maxK})");
-            return (cached, true, TimeSpan.Zero);
-        }
-
-        Console.WriteLine($"[Recall] Computing ground truth for {metadata.QueryVectorCount} queries at depth {maxK}...");
-        var sw = Stopwatch.StartNew();
-        var groundTruth = await ComputeGroundTruthAsync(store, metadata, maxK, quantization, searchEngine);
-        sw.Stop();
-        Console.WriteLine($"[Recall] Ground truth computed in {sw.Elapsed}");
-
-        await StoreGroundTruthAsync(store, groundTruth, maxK, queryFingerprint);
-        Console.WriteLine($"[Recall] Ground truth cached in database");
-
-        return (groundTruth, false, sw.Elapsed);
-    }
-
-    private static async Task<Dictionary<int, string[]>?> LoadGroundTruthAsync(
-        IDocumentStore store, int requiredDepth, int requiredQueryCount, string queryFingerprint)
-    {
-        using var session = store.OpenAsyncSession();
-        var doc = await session.LoadAsync<GroundTruthDocument>(GroundTruthDocId);
-        if (doc == null)
-            return null;
-
-        // Validate cached ground truth matches current query vectors
-        if (doc.QueryFingerprint != queryFingerprint)
-        {
-            Console.WriteLine($"[Recall] Cached ground truth was computed with different query vectors — recomputing");
-            return null;
-        }
-
-        // Validate cached ground truth is sufficient
-        if (doc.MaxK < requiredDepth || doc.QueryCount < requiredQueryCount)
-        {
-            Console.WriteLine($"[Recall] Cached ground truth insufficient (depth {doc.MaxK} < {requiredDepth} or queries {doc.QueryCount} < {requiredQueryCount}) — recomputing");
-            return null;
-        }
-
-        // Rebuild dictionary, truncating to requiredDepth if cached has more
-        var result = new Dictionary<int, string[]>(doc.Entries.Count);
-        foreach (var entry in doc.Entries)
-        {
-            var ids = entry.NearestIds;
-            if (ids.Length > requiredDepth)
-                ids = ids[..requiredDepth];
-            result[entry.QueryIndex] = ids;
-        }
-
-        return result;
-    }
-
     /// <summary>
-    /// Computes a fingerprint of the query vectors plus quantization mode and index name,
-    /// so cached ground truth is invalidated when any of them change.
-    /// Uses first/last vector values + count to avoid hashing megabytes of floats.
+    /// Runs every query of the metadata through the transport at one effort, the transport's own knob, and scores
+    /// it against the metadata's truth. A null effort runs the product at its default.
     /// </summary>
-    private static string ComputeQueryFingerprint(VectorWorkloadMetadata metadata, VectorQuantization quantization, string indexName)
+    public async Task<RecallResult> MeasureAsync(IYcsbTransport transport, VectorWorkloadMetadata metadata, int[] recallKs, VectorQuantization quantization, SearchEffort? effort, CancellationToken ct = default)
     {
-        var vecs = metadata.QueryVectors;
-        if (vecs.Length == 0)
-            return $"empty|{quantization}|{indexName}";
-
-        var first = vecs[0];
-        var last = vecs[^1];
-        var parts = new List<string>
-        {
-            vecs.Length.ToString(),
-            metadata.VectorDimensions.ToString(),
-            quantization.ToString(),
-            indexName
-        };
-        for (int i = 0; i < Math.Min(4, first.Length); i++)
-            parts.Add(first[i].ToString("R"));
-        for (int i = 0; i < Math.Min(4, last.Length); i++)
-            parts.Add(last[i].ToString("R"));
-
-        return string.Join("|", parts);
-    }
-
-    private static async Task StoreGroundTruthAsync(
-        IDocumentStore store, Dictionary<int, string[]> groundTruth, int maxK, string queryFingerprint)
-    {
-        var doc = new GroundTruthDocument
-        {
-            MaxK = maxK,
-            QueryCount = groundTruth.Count,
-            QueryFingerprint = queryFingerprint,
-            ComputedAt = DateTimeOffset.UtcNow,
-            Entries = groundTruth
-                .OrderBy(kvp => kvp.Key)
-                .Select(kvp => new GroundTruthEntry { QueryIndex = kvp.Key, NearestIds = kvp.Value })
-                .ToList()
-        };
-
-        using var session = store.OpenAsyncSession();
-        await session.StoreAsync(doc, GroundTruthDocId);
-        await session.SaveChangesAsync();
-    }
-
-    /// <summary>
-    /// Computes ground truth by running exact vector search for each query vector.
-    /// </summary>
-    private static async Task<Dictionary<int, string[]>> ComputeGroundTruthAsync(
-        IDocumentStore store,
-        VectorWorkloadMetadata metadata,
-        int maxK,
-        VectorQuantization quantization,
-        IndexingEngine searchEngine)
-    {
-        var groundTruth = new Dictionary<int, string[]>(metadata.QueryVectorCount);
-
-        using var session = store.OpenAsyncSession();
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-
-        for (int i = 0; i < metadata.QueryVectorCount; i++)
-        {
-            var queryVector = metadata.QueryVectors[i];
-            var rql = BuildExactSearchQuery(metadata, quantization, searchEngine);
-
-            var results = await session.Advanced.AsyncRawQuery<BlittableJsonReaderObject>(rql)
-                .AddParameter("vector", queryVector)
-                .Take(maxK)
-                .ToListAsync();
-
-            var ids = new string[results.Count];
-            for (int j = 0; j < results.Count; j++)
-            {
-                ids[j] = ExtractDocumentId(results[j]);
-            }
-
-            groundTruth[i] = ids;
-
-            if ((i + 1) % 100 == 0 || i == metadata.QueryVectorCount - 1)
-            {
-                Console.Write($"\r[Recall] Ground truth: {i + 1}/{metadata.QueryVectorCount} queries");
-            }
-        }
-
-        Console.WriteLine();
-        return groundTruth;
-    }
-
-    /// <summary>
-    /// Runs approximate search and computes recall@K at each requested cutoff.
-    /// </summary>
-    private static async Task<Dictionary<int, double>> ComputeRecallAsync(
-        IDocumentStore store,
-        VectorWorkloadMetadata metadata,
-        Dictionary<int, string[]> groundTruth,
-        int[] recallKs,
-        int maxK,
-        VectorQuantization quantization,
-        IndexingEngine searchEngine,
-        int? efSearch = null)
-    {
-        var hits = new Dictionary<int, int>();
-        var queryCount = new Dictionary<int, int>();
-        foreach (var k in recallKs)
-        {
-            hits[k] = 0;
-            queryCount[k] = 0;
-        }
+        var truth = metadata.GroundTruth
+            ?? throw new InvalidOperationException("Recall needs the set's truth; the vector metadata carries none.");
+        var maxK = recallKs.Max();
+        var prefix = metadata.DocumentIdPrefix ?? "";
 
         Console.WriteLine($"[Recall] Measuring recall at K={string.Join(",", recallKs)} over {metadata.QueryVectorCount} queries...");
-
-        using var session = store.OpenAsyncSession();
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-
+        var sw = Stopwatch.StartNew();
+        var returned = new List<string>[metadata.QueryVectorCount];
         for (int i = 0; i < metadata.QueryVectorCount; i++)
         {
-            if (groundTruth.TryGetValue(i, out var truthIds) == false)
-                continue;
-
-            var queryVector = metadata.QueryVectors[i];
-            var rql = BuildApproximateSearchQuery(metadata, quantization, searchEngine, efSearch);
-
-            var query = session.Advanced.AsyncRawQuery<BlittableJsonReaderObject>(rql)
-                .AddParameter("vector", queryVector)
-                .Take(maxK);
-
-            if (efSearch.HasValue)
-                query = query.AddParameter("efSearch", efSearch.Value);
-
-            var results = await query.ToListAsync();
-
-            var annIds = new string[results.Count];
-            for (int j = 0; j < results.Count; j++)
+            var result = await transport.ExecuteAsync(new VectorSearchOperation
             {
-                annIds[j] = ExtractDocumentId(results[j]);
-            }
+                QueryVector = metadata.QueryVectors[i],
+                FieldName = metadata.IndexedFieldName ?? metadata.FieldName,
+                TopK = maxK,
+                Quantization = quantization,
+                ExpectedIndex = metadata.IndexName,
+                Effort = effort
+            }, ct).ConfigureAwait(false);
 
-            // recall@K = |truth_top_K ∩ ann_top_K| / K, averaged over queries (standard
-            // ANN-benchmarks definition). Intersection at each K via a HashSet of the ANN
-            // top-K. The accumulator is total-matches / total-truth-items so that variable
-            // truth lengths (e.g. when an index returns < K docs) are handled correctly.
-            if (truthIds.Length == 0)
-                continue; // skip queries with no ground truth results (e.g. empty index)
-
-            foreach (var k in recallKs)
-            {
-                var annAtK = annIds.Length >= k ? annIds.AsSpan(0, k) : annIds.AsSpan();
-                var truthAtK = truthIds.Length >= k ? truthIds.AsSpan(0, k) : truthIds.AsSpan();
-
-                var annSet = new HashSet<string>(annAtK.Length);
-                foreach (var id in annAtK)
-                    annSet.Add(id);
-
-                int matches = 0;
-                foreach (var truthId in truthAtK)
-                {
-                    if (annSet.Contains(truthId))
-                        matches++;
-                }
-
-                hits[k] += matches;
-                queryCount[k] += truthAtK.Length;
-            }
-
-            if ((i + 1) % 100 == 0 || i == metadata.QueryVectorCount - 1)
-            {
-                Console.Write($"\r[Recall] Measured: {i + 1}/{metadata.QueryVectorCount} queries");
-            }
+            if (result.IsSuccess == false)
+                throw new InvalidOperationException($"Recall query {i} failed: {result.ErrorDetails}");
+            var ids = result.NeighborIds ?? throw new InvalidOperationException($"{transport.ProductName} returned no neighbour ids.");
+            returned[i] = ids.Select(id => StripPrefix(id, prefix)).ToList();
         }
+        sw.Stop();
 
-        Console.WriteLine();
+        var recallAtK = ComputeRecall(returned, truth, recallKs);
+        foreach (var (k, recall) in recallAtK.OrderBy(kvp => kvp.Key))
+            Console.WriteLine($"[Recall] recall@{k} = {recall:P2}");
 
+        return new RecallResult
+        {
+            RecallAtK = recallAtK,
+            QueryCount = metadata.QueryVectorCount,
+            GroundTruthDepth = truth.Values.Min(t => t.Length),
+            GroundTruthCached = true,
+            GroundTruthComputeTime = TimeSpan.Zero,
+            MeasurementTime = sw.Elapsed
+        };
+    }
+
+    /// <summary>
+    /// recall@K = |truth top K ∩ returned top K| / K, averaged over queries. A query that returned fewer than K
+    /// ids still counts K truth ids, so a short result lowers recall.
+    /// </summary>
+    public static Dictionary<int, double> ComputeRecall(IReadOnlyList<IReadOnlyList<string>> returned, IReadOnlyDictionary<int, string[]> truth, int[] recallKs)
+    {
         var recallAtK = new Dictionary<int, double>();
         foreach (var k in recallKs)
         {
-            recallAtK[k] = queryCount[k] > 0 ? (double)hits[k] / queryCount[k] : 0.0;
-            Console.WriteLine($"[Recall] recall@{k} = {recallAtK[k]:P2}");
+            long hits = 0, expected = 0;
+            for (int q = 0; q < returned.Count; q++)
+            {
+                if (truth.TryGetValue(q, out var nearest) == false || nearest.Length < k)
+                    throw new InvalidOperationException($"Truth for query {q} holds fewer than {k} neighbours.");
+                var top = returned[q].Take(k).ToHashSet(StringComparer.Ordinal);
+                hits += nearest.Take(k).Count(top.Contains);
+                expected += k;
+            }
+            recallAtK[k] = expected == 0 ? 0 : (double)hits / expected;
         }
-
         return recallAtK;
     }
 
-    /// <summary>
-    /// Builds an exact (brute-force) vector search RQL query.
-    /// </summary>
-    private static string BuildExactSearchQuery(
-        VectorWorkloadMetadata metadata,
-        VectorQuantization quantization,
-        IndexingEngine searchEngine)
-    {
-        var fieldName = metadata.IndexedFieldName ?? metadata.FieldName;
-        var embeddingSelector = GetEmbeddingSelector(fieldName, quantization);
-        var indexName = GetIndexName(metadata, quantization, searchEngine);
-        return $"from index '{indexName}' where exact(vector.search({embeddingSelector}, $vector))";
-    }
+    private static string StripPrefix(string id, string prefix) =>
+        id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? id[prefix.Length..]
+            : throw new InvalidDataException($"Returned id '{id}' lacks the document prefix '{prefix}'.");
 
-    /// <summary>
-    /// Builds an approximate (HNSW) vector search RQL query.
-    /// </summary>
-    private static string BuildApproximateSearchQuery(
-        VectorWorkloadMetadata metadata,
-        VectorQuantization quantization,
-        IndexingEngine searchEngine,
-        int? efSearch = null)
+    private static async Task<RawHttpTransport> OpenRavenAsync(string serverUrl, string databaseName, VectorWorkloadMetadata metadata, VectorQuantization quantization, IndexingEngine searchEngine, Version? httpVersion)
     {
-        var fieldName = metadata.IndexedFieldName ?? metadata.FieldName;
-        var embeddingSelector = GetEmbeddingSelector(fieldName, quantization);
-        var indexName = GetIndexName(metadata, quantization, searchEngine);
-        // vector.search(field, value, minimumSimilarity, numberOfCandidates)
-        if (efSearch.HasValue)
-            return $"from index '{indexName}' where vector.search({embeddingSelector}, $vector, 0.0, $efSearch)";
-        return $"from index '{indexName}' where vector.search({embeddingSelector}, $vector)";
-    }
+        if (metadata.IndexName == null)
+            throw new InvalidOperationException("VectorWorkloadMetadata.IndexName must be set for recall measurement.");
 
-    private static string GetEmbeddingSelector(string fieldName, VectorQuantization quantization)
-    {
-        return quantization switch
-        {
-            VectorQuantization.Int8 => $"embedding.f32_i8('{fieldName}')",
-            VectorQuantization.Binary => $"embedding.f32_i1('{fieldName}')",
-            VectorQuantization.Int4 => $"embedding.f32_i4('{fieldName}')",
-            VectorQuantization.Int3 => $"embedding.f32_i3('{fieldName}')",
-            VectorQuantization.Int2 => $"embedding.f32_i2('{fieldName}')",
-            _ => $"'{fieldName}'"
-        };
-    }
+        using (var store = HttpHelper.Create(serverUrl, databaseName, httpVersion))
+            await EnsureIndexExistsAsync(store, metadata, metadata.IndexName);
 
-    private static string ExtractDocumentId(BlittableJsonReaderObject blittable)
-    {
-        if (blittable.TryGet(Constants.Documents.Metadata.Key, out BlittableJsonReaderObject metadata) &&
-            metadata.TryGet(Constants.Documents.Metadata.Id, out string id))
-        {
-            return id;
-        }
-        return string.Empty;
-    }
-
-    private static string GetIndexName(
-        VectorWorkloadMetadata metadata,
-        VectorQuantization quantization,
-        IndexingEngine searchEngine)
-    {
-        if (string.IsNullOrEmpty(metadata.IndexName) == false)
-            return metadata.IndexName;
-
-        var engineSuffix = VectorIndexMapping.GetEngineSuffix(searchEngine);
-        var collection = metadata.CollectionName ?? "Words";
-        return VectorIndexNaming.GetIndexName(collection, quantization, engineSuffix);
+        return new RawHttpTransport(serverUrl, databaseName, CompressionMode.Identity, httpVersion ?? HttpVersion.Version11);
     }
 
     private static async Task EnsureIndexExistsAsync(IDocumentStore store, VectorWorkloadMetadata metadata, string indexName)
@@ -443,22 +154,5 @@ public sealed class RecallMeasurement
                 "Run the benchmark first to create the index, or use the standalone recall command.");
 
         await metadata.EnsureIndexExists(store, indexName);
-    }
-
-    // --- Ground truth document model ---
-
-    private sealed class GroundTruthDocument
-    {
-        public int MaxK { get; set; }
-        public int QueryCount { get; set; }
-        public string QueryFingerprint { get; set; } = "";
-        public DateTimeOffset ComputedAt { get; set; }
-        public List<GroundTruthEntry> Entries { get; set; } = new();
-    }
-
-    private sealed class GroundTruthEntry
-    {
-        public int QueryIndex { get; set; }
-        public string[] NearestIds { get; set; } = [];
     }
 }
