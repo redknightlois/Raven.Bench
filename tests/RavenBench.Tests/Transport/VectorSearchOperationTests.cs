@@ -13,13 +13,16 @@ using Raven.Client.ServerWide.Operations;
 using RavenBench.Core;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
+using RavenBench.Dataset;
+using RavenBench.Dataset.Vectors;
 using RavenBench.Tests.Infrastructure;
 using Xunit;
 
 namespace RavenBench.Tests.Transport;
 
 /// <summary>
-/// The one typed vector search operation: its RQL, and each RavenDB transport mode serving it against the live server.
+/// The one typed vector search operation: its RQL, its refusal of an unsupported metric before load,
+/// and each RavenDB transport mode serving it against the live server.
 /// </summary>
 public class VectorSearchOperationTests
 {
@@ -53,6 +56,19 @@ public class VectorSearchOperationTests
     public void Filter_FieldThatIsNotAnIdentifier_IsRejected()
     {
         Assert.Throws<ArgumentException>(() => new VectorFilter("Label = 1 or 1", "x"));
+    }
+
+    [Fact]
+    public async Task UnsupportedMetric_IsRefusedBeforeAnyFileOrServerIsTouched()
+    {
+        var set = new AnnBenchmarksHdf5Dataset("fake-euclidean", 2, VectorMetric.L2, VectorSets.Pinned("absent.hdf5", "http://127.0.0.1:9/absent.hdf5", new string('0', 64), 0));
+        var opts = new RunOptions { Url = "http://127.0.0.1:9", Database = "unused", DatasetCacheDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"absent-{Guid.NewGuid():N}") };
+
+        var ex = await Assert.ThrowsAsync<UnsupportedVectorMetricException>(() => DatasetImportCoordinator.PrepareVectorSetAsync(set, opts));
+
+        Assert.Equal("RavenDB", ex.Target);
+        Assert.Equal(VectorMetric.L2, ex.Metric);
+        Assert.False(System.IO.Directory.Exists(opts.DatasetCacheDir));
     }
 
     [RequiresRavenDbFact(8081)]

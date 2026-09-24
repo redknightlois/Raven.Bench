@@ -1,4 +1,7 @@
 using RavenBench.Dataset;
+using RavenBench.Dataset.Vectors;
+using System;
+using System.IO;
 using RavenBench.Tests.Infrastructure;
 using System.Linq;
 using System.Threading.Tasks;
@@ -15,10 +18,10 @@ public class ClinicalWordsDatasetProviderTests
     public async Task LoadWordVectors_AllDimensions_LoadsSuccessfully(int dimensions)
     {
         // Arrange
-        var provider = new ClinicalWordsDatasetProvider(dimensions);
+        var (provider, files) = await PinLocalParquetAsync(dimensions);
 
         // Act
-        var vectors = await provider.GenerateQueryVectorsAsync(count: 5);
+        var vectors = await provider.GenerateQueryVectorsAsync(files, new QuerySelection(42, 5), k: 10);
 
         // Assert
         Assert.Equal(dimensions, vectors.VectorDimensions);
@@ -30,11 +33,11 @@ public class ClinicalWordsDatasetProviderTests
     public async Task ComputeDocumentEmbedding_WithValidText_ReturnsVector()
     {
         // Arrange
-        var provider = new ClinicalWordsDatasetProvider(100);
+        var (provider, files) = await PinLocalParquetAsync(100);
         var text = "The patient presented with chest pain and shortness of breath.";
 
         // Act
-        var embedding = await provider.ComputeDocumentEmbeddingAsync(text);
+        var embedding = await provider.ComputeDocumentEmbeddingAsync(files, text);
 
         // Assert
         Assert.Equal(100, embedding.Length);
@@ -45,10 +48,10 @@ public class ClinicalWordsDatasetProviderTests
     public async Task GetWordVector_ExistingWord_ReturnsVector()
     {
         // Arrange
-        var provider = new ClinicalWordsDatasetProvider(100);
+        var (provider, files) = await PinLocalParquetAsync(100);
 
         // Act
-        var vector = await provider.GetWordVectorAsync("patient");
+        var vector = await provider.GetWordVectorAsync(files, "patient");
 
         // Assert
         Assert.NotNull(vector);
@@ -59,10 +62,10 @@ public class ClinicalWordsDatasetProviderTests
     public async Task GetWordVector_NonExistingWord_ReturnsNull()
     {
         // Arrange
-        var provider = new ClinicalWordsDatasetProvider(100);
+        var (provider, files) = await PinLocalParquetAsync(100);
 
         // Act
-        var vector = await provider.GetWordVectorAsync("xyznonexistent123");
+        var vector = await provider.GetWordVectorAsync(files, "xyznonexistent123");
 
         // Assert
         Assert.Null(vector);
@@ -72,10 +75,10 @@ public class ClinicalWordsDatasetProviderTests
     public async Task GetWordVector_ReturnsCorrectDimensionVectors()
     {
         // Arrange
-        var provider = new ClinicalWordsDatasetProvider(100);
+        var (provider, files) = await PinLocalParquetAsync(100);
 
         // Act - get a known clinical word
-        var vector = await provider.GetWordVectorAsync("patient");
+        var vector = await provider.GetWordVectorAsync(files, "patient");
 
         // Assert - verify it's a proper 100D vector with realistic values
         Assert.NotNull(vector);
@@ -96,10 +99,10 @@ public class ClinicalWordsDatasetProviderTests
     public async Task GenerateQueryVectors_ReturnsValidVectors()
     {
         // Arrange
-        var provider = new ClinicalWordsDatasetProvider(100);
+        var (provider, files) = await PinLocalParquetAsync(100);
 
         // Act
-        var metadata = await provider.GenerateQueryVectorsAsync(count: 10);
+        var metadata = await provider.GenerateQueryVectorsAsync(files, new QuerySelection(42, 10), k: 10);
 
         // Assert
         Assert.Equal(10, metadata.QueryVectors.Length);
@@ -110,5 +113,15 @@ public class ClinicalWordsDatasetProviderTests
             Assert.Equal(100, vec.Length);
             Assert.True(vec.Any(v => v != 0), "Query vector should not be all zeros");
         }
+    }
+
+    // The parquet derives locally, so the test pins the local file as found, as an operator does with --dataset-sha256.
+    private static async Task<(ClinicalWordsDatasetProvider, VerifiedFiles)> PinLocalParquetAsync(int dimensions)
+    {
+        var provider = new ClinicalWordsDatasetProvider(dimensions);
+        var source = ClinicalWordsAvailability.PathOf(dimensions)
+            ?? throw new FileNotFoundException($"No local parquet for {provider.Name}.");
+        var dataDir = Path.Combine(Path.GetTempPath(), $"clinical-pin-{Guid.NewGuid():N}");
+        return (provider, await PinnedFiles.EnsureAsync(provider, dataDir, sourcePath: source, sha256: await PinnedFiles.Sha256Async(source)));
     }
 }

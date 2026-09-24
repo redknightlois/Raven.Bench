@@ -2,6 +2,7 @@ using RavenBench.Core;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
 using RavenBench.Dataset;
+using RavenBench.Dataset.Vectors;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations;
 
@@ -65,37 +66,43 @@ internal static class DatasetImportCoordinator
         return targetDatabase;
     }
 
+    /// <summary>
+    /// Query vectors drawn per vector run; the scenario seed chooses which.
+    /// </summary>
+    internal const int VectorQueryCount = 1000;
+
+    internal static QuerySelection VectorQuerySelection(RunOptions opts) => new(opts.Seed, VectorQueryCount);
+
+    // Truth depth covers the search depth and every recall cutoff.
+    internal static int VectorTruthDepth(RunOptions opts) => Math.Max(opts.VectorTopK, opts.VectorRecallKs is { Length: > 0 } ks ? ks.Max() : 0);
+
+    internal static string VectorDataDirectory(RunOptions opts) =>
+        opts.DatasetCacheDir ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets");
+
+    internal static int ClinicalWordsDimensions(string dataset) =>
+        dataset.Contains("300d", StringComparison.OrdinalIgnoreCase) ? 300
+        : dataset.Contains("600d", StringComparison.OrdinalIgnoreCase) ? 600
+        : 100;
+
+    /// <summary>
+    /// Refuses a set RavenDB cannot search, then verifies the set's pinned files. Runs before any load.
+    /// </summary>
+    internal static async Task<VerifiedFiles> PrepareVectorSetAsync(IVectorDataset set, RunOptions opts)
+    {
+        UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, set.Metric);
+        return await PinnedFiles.EnsureAsync(set, VectorDataDirectory(opts), opts.DatasetSource, opts.DatasetSha256);
+    }
+
     internal static async Task<(string database, bool imported)> ImportClinicalWordsDatasetAsync(RunOptions opts, Version httpVersion)
     {
-        var datasetName = opts.Dataset!.ToLowerInvariant();
-        int dimensions = 100;
-        if (datasetName.Contains("300d")) dimensions = 300;
-        else if (datasetName.Contains("600d")) dimensions = 600;
-
-        var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
+        var provider = new Dataset.ClinicalWordsDatasetProvider(ClinicalWordsDimensions(opts.Dataset!));
         var targetDatabase = provider.GetDatabaseName();
+        Console.WriteLine($"[Raven.Bench] {provider.Name} dataset -> '{targetDatabase}' (engine: {opts.SearchEngine})");
 
-        Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D dataset -> '{targetDatabase}'");
-
-        if (opts.DatasetSkipIfExists)
-        {
-            Console.WriteLine($"[Raven.Bench] Checking if data already imported...");
-            var exists = await provider.IsDatasetImportedAsync(opts.Url, targetDatabase, expectedMinDocuments: Dataset.ClinicalWordsDatasetProvider.MinExpectedDocuments, httpVersion: httpVersion);
-            if (exists)
-            {
-                Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D already imported. Ready to use.");
-                return (targetDatabase, imported: false);
-            }
-            Console.WriteLine($"[Raven.Bench] Data not found or incomplete, will import.");
-        }
-
-        Console.WriteLine($"[Raven.Bench] Importing clinical word embeddings to RavenDB (engine: {opts.SearchEngine})...");
+        var files = await PrepareVectorSetAsync(provider, opts);
         var exactSearch = opts.Profile == WorkloadProfile.VectorSearchExact || opts.VectorExactSearch;
-        await provider.ImportWordsAsync(opts.Url, targetDatabase, opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine);
-
-        Console.WriteLine($"[Raven.Bench] ClinicalWords{dimensions}D import complete.");
-
-        return (targetDatabase, imported: true);
+        var imported = await provider.ImportWordsAsync(opts.Url, targetDatabase, files, VectorQuerySelection(opts), opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine);
+        return (targetDatabase, imported);
     }
 
     internal static async Task<(string database, bool imported)> ImportSphereDatasetAsync(RunOptions opts, Version httpVersion)
@@ -103,35 +110,14 @@ internal static class DatasetImportCoordinator
         var profile = opts.DatasetProfile ?? "100k";
         var provider = new Dataset.SphereDatasetProvider(profile);
         var targetDatabase = provider.GetDatabaseName(profile);
+        Console.WriteLine($"[Raven.Bench] {provider.Name} dataset -> '{targetDatabase}' (engine: {opts.SearchEngine})");
 
-        Console.WriteLine($"[Raven.Bench] SPHERE {profile} dataset -> '{targetDatabase}'");
-
-        if (opts.DatasetSkipIfExists)
-        {
-            Console.WriteLine($"[Raven.Bench] Checking if data already imported...");
-            var expectedMin = (int)Math.Min(Dataset.SphereDatasetProvider.GetProfile(profile).TargetDocCount, int.MaxValue);
-            var exists = await provider.IsDatasetImportedAsync(opts.Url, targetDatabase, expectedMinDocuments: expectedMin, httpVersion: httpVersion);
-            if (exists)
-            {
-                Console.WriteLine($"[Raven.Bench] SPHERE {profile} already imported. Ready to use.");
-                return (targetDatabase, imported: false);
-            }
-            Console.WriteLine($"[Raven.Bench] Data not found or incomplete, will import.");
-        }
-
-        var dataSourcePath = opts.DatasetSource
-            ?? opts.DatasetCacheDir
-            ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets", "sphere");
-
-        Console.WriteLine($"[Raven.Bench] Importing SPHERE dataset from '{dataSourcePath}' (engine: {opts.SearchEngine})...");
+        var files = await PrepareVectorSetAsync(provider, opts);
         var exactSearch = opts.Profile == WorkloadProfile.VectorSearchExact || opts.VectorExactSearch;
-        await provider.ImportAsync(opts.Url, targetDatabase, dataSourcePath,
+        var result = await provider.ImportAsync(opts.Url, targetDatabase, files, VectorQuerySelection(opts),
             opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine,
             numberOfEdges: opts.VectorEdges, numberOfCandidatesForIndexing: opts.VectorCandidates);
-
-        Console.WriteLine($"[Raven.Bench] SPHERE {profile} import complete.");
-
-        return (targetDatabase, imported: true);
+        return (targetDatabase, result.DocumentsImported > 0);
     }
 
     internal static async Task WaitForNonStaleIndexesAsync(string serverUrl, string databaseName, Version httpVersion)
@@ -174,14 +160,12 @@ internal static class DatasetImportCoordinator
 
         if (datasetName.StartsWith("clinicalwords", StringComparison.OrdinalIgnoreCase))
         {
-            int dimensions = 100;
-            if (datasetName.Contains("300d")) dimensions = 300;
-            else if (datasetName.Contains("600d")) dimensions = 600;
-
-            var provider = new Dataset.ClinicalWordsDatasetProvider(dimensions);
-            var metadata = await provider.GenerateQueryVectorsAsync(count: 1000);
+            var provider = new Dataset.ClinicalWordsDatasetProvider(ClinicalWordsDimensions(datasetName));
+            var files = await PrepareVectorSetAsync(provider, opts);
+            var metadata = await provider.GenerateQueryVectorsAsync(files, VectorQuerySelection(opts), VectorTruthDepth(opts));
             metadata.IndexName = VectorIndexNaming.GetIndexName("Words", opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
             metadata.CollectionName = "WordDocuments";
+            metadata.IndexedFieldName = "Vector";
             return metadata;
         }
 
@@ -189,8 +173,8 @@ internal static class DatasetImportCoordinator
         {
             var profile = opts.DatasetProfile ?? "100k";
             var provider = new Dataset.SphereDatasetProvider(profile);
-            var dbName = provider.GetDatabaseName(profile);
-            var metadata = await provider.GenerateQueryVectorsAsync(opts.Url, dbName, count: 1000);
+            var files = await PrepareVectorSetAsync(provider, opts);
+            var metadata = await provider.GenerateQueryVectorsAsync(files, VectorQuerySelection(opts), VectorTruthDepth(opts));
             metadata.IndexName = VectorIndexNaming.GetIndexName(Dataset.SphereDatasetProvider.CollectionName, opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
             metadata.CollectionName = Dataset.SphereDatasetProvider.CollectionName;
             metadata.IndexedFieldName = "Vector";

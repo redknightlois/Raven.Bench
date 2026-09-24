@@ -10,10 +10,12 @@ Downloads Word2Vec embeddings trained on Open Access Case Reports:
 - 300D (~716 MB)  
 - 600D (~1.4 GB)
 
-Output:
-- w2v_100d_oa_cr_embeddings.parquet
-- w2v_300d_oa_cr_embeddings.parquet
-- w2v_600d_oa_cr_embeddings.parquet
+Output, under the data directory the benchmark reads (default: this directory):
+- clinical-words-100/w2v_100d_oa_cr_embeddings.parquet
+- clinical-words-300/w2v_300d_oa_cr_embeddings.parquet
+- clinical-words-600/w2v_600d_oa_cr_embeddings.parquet
+
+The script prints each file's SHA-256; a run pins the file with --dataset-sha256.
 
 Usage:
     python prepare_clinical_embeddings.py          # Download all 3 models
@@ -27,6 +29,8 @@ import os
 import sys
 import tarfile
 import tempfile
+import hashlib
+import re
 import shutil
 from pathlib import Path
 from typing import Optional, List
@@ -61,6 +65,14 @@ DOWNLOAD_URLS = {
 
 # Default models to download (all Case Reports dimensions)
 DEFAULT_MODELS = ["w2v_100d_oa_cr", "w2v_300d_oa_cr", "w2v_600d_oa_cr"]
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def download_file(url: str, dest_path: Path, desc: str = "Downloading") -> None:
@@ -147,7 +159,7 @@ def prepare_clinical_embeddings(
     
     Args:
         model_key: Which model to download (e.g., 'w2v_100d_oa_cr')
-        output_dir: Directory for output parquet file
+        output_dir: Data directory; the parquet goes to its clinical-words-<dims> folder
         cache_dir: Directory to cache downloaded files
     
     Returns:
@@ -158,11 +170,12 @@ def prepare_clinical_embeddings(
     
     # Setup directories
     if output_dir is None:
-        output_dir = Path.cwd()
+        output_dir = Path(__file__).resolve().parent
     if cache_dir is None:
         cache_dir = Path.home() / ".cache" / "clinical_embeddings"
     
-    output_dir = Path(output_dir)
+    dims = re.match(r"w2v_(\d+)d_", model_key).group(1)
+    output_dir = Path(output_dir) / f"clinical-words-{dims}"
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -223,7 +236,7 @@ def main():
         "--output-dir", "-o",
         type=Path,
         default=None,
-        help="Output directory for parquet files (default: current directory)"
+        help="Data directory, as the benchmark's --dataset-cache-dir (default: this script's directory)"
     )
     parser.add_argument(
         "--cache-dir", "-c",
@@ -272,6 +285,7 @@ def main():
                 cache_dir=args.cache_dir,
             )
             print(f"[OK] Created: {output_file}")
+            print(f"[OK] SHA-256: {sha256_of(output_file)} (pass it with --dataset-sha256)")
         
         print(f"\n{'='*60}")
         print(f"[OK] Successfully created {len(models_to_download)} parquet file(s)")

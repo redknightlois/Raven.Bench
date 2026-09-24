@@ -141,43 +141,6 @@ public class SphereDatasetProviderTests
     }
 
     [Fact]
-    public void ResolveSourceFiles_SingleFile_ReturnsSingleFile()
-    {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"sphere-test-{Guid.NewGuid()}.jsonl.tar.gz");
-        try
-        {
-            File.WriteAllText(tempFile, "dummy");
-            var files = SphereDatasetProvider.ResolveSourceFiles(tempFile);
-            Assert.Single(files);
-            Assert.Equal(tempFile, files[0]);
-        }
-        finally
-        {
-            File.Delete(tempFile);
-        }
-    }
-
-    [Fact]
-    public void ResolveSourceFiles_Directory_FindsFiles()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"sphere-test-{Guid.NewGuid()}");
-        Directory.CreateDirectory(tempDir);
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "a.jsonl.tar.gz"), "dummy");
-            File.WriteAllText(Path.Combine(tempDir, "b.jsonl.gz"), "dummy");
-            File.WriteAllText(Path.Combine(tempDir, "c.txt"), "not this");
-
-            var files = SphereDatasetProvider.ResolveSourceFiles(tempDir);
-            Assert.Equal(2, files.Count);
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
-    }
-
-    [Fact]
     public void VectorDimensions_Is768()
     {
         Assert.Equal(768, SphereDatasetProvider.VectorDimensions);

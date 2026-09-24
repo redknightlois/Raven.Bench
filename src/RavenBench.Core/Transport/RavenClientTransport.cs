@@ -46,7 +46,7 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
     /// <inheritdoc />
     public string TransportPath => "ravendb-client";
 
-    public string ProductName => "RavenDB";
+    public string ProductName => RawHttpTransport.RavenDbProductName;
 
     // The client library abstracts the socket, so byte counts are estimated, not measured on the wire.
     public bool ReportsWireBytes => false;

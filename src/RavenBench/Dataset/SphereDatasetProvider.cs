@@ -12,15 +12,17 @@ using Raven.Client.ServerWide;
 using Raven.Client.ServerWide.Operations;
 using RavenBench.Core;
 using RavenBench.Core.Workload;
+using RavenBench.Dataset.Vectors;
 
 namespace RavenBench.Dataset;
 
 /// <summary>
 /// SPHERE dataset provider — streaming import of Meta's SPHERE passages with pre-computed DPR embeddings.
 /// Supports profiles from 100K to 899M passages. Streams .jsonl.tar.gz files directly into RavenDB
-/// bulk insert with no intermediate decompressed files on disk.
+/// bulk insert with no intermediate decompressed files on disk. As a vector set it ships no query split: the
+/// scenario seed holds query passages out of the load and the truth is brute force.
 /// </summary>
-public sealed class SphereDatasetProvider
+public sealed class SphereDatasetProvider : HeldOutVectorDataset
 {
     public const int VectorDimensions = 768; // facebook-dpr-ctx_encoder-single-nq-base
     public const string CollectionName = "Passages";
@@ -29,6 +31,8 @@ public sealed class SphereDatasetProvider
     private const int CheckpointInterval = 100_000;
 
     private readonly string _profile;
+    private readonly DatasetFile? _file;
+    private readonly long? _rowCount;
 
     private static readonly Dictionary<string, SphereProfile> Profiles = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -68,6 +72,44 @@ public sealed class SphereDatasetProvider
 
     public record ImportResult(long DocumentsImported, TimeSpan ImportDuration, TimeSpan IndexingDuration);
 
+    public const string DocumentIdPrefix = CollectionName + "/";
+
+    // DPR embeddings; the harness has always indexed them for cosine similarity, so the set is defined under cosine.
+    public override string Name => $"sphere-{_profile.ToLowerInvariant()}";
+    public override VectorMetric Metric => VectorMetric.Cosine;
+    public override int Dimensions => VectorDimensions;
+    public override IReadOnlyList<DatasetFile> Files => [_file ?? PinnedFile(_profile)];
+
+    private static DatasetFile PinnedFile(string profile) =>
+        new DatasetFile
+        {
+            FileName = ProfileFileNames[profile],
+            Url = $"https://storage.googleapis.com/sphere-demo/{ProfileFileNames[profile]}",
+            Type = "vectors",
+            EstimatedSizeBytes = 0,
+            Sha256 = ProfileSha256.GetValueOrDefault(profile)
+        };
+
+    // Profiles without a pin fail by set name before any use.
+    private static readonly Dictionary<string, string> ProfileSha256 = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "100k", "42460da4d032393aeba587b0988a1e806aef0b240076267a2738ec57967811b1" },
+        { "1m", "4be688444fdf63824d337287b5daa108a1b7f8dce2ab52cd4210847d87a7fbfe" },
+    };
+
+    protected override Task<long> CountRowsAsync(VerifiedFiles files, CancellationToken ct) =>
+        Task.FromResult(TargetDocCount);
+
+    private long TargetDocCount => _rowCount ?? ResolveProfile(null).TargetDocCount;
+
+    protected override async IAsyncEnumerable<BaseVector> ReadRowsAsync(VerifiedFiles files, [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var line in StreamJsonLinesAsync(files.PathOf(Files[0].FileName), ct))
+            yield return new BaseVector(BaseId(line), line.Vector);
+    }
+
+    private static string BaseId(SphereJsonLine line) => string.IsNullOrEmpty(line.Id) ? line.Sha : line.Id;
+
     public SphereDatasetProvider(string profile = "100k")
     {
         if (Profiles.ContainsKey(profile) == false)
@@ -76,6 +118,15 @@ public sealed class SphereDatasetProvider
             throw new ArgumentException($"Unknown SPHERE profile: '{profile}'. Valid profiles: {valid}");
         }
         _profile = profile;
+    }
+
+    /// <summary>
+    /// A profile served from a caller-pinned file of <paramref name="rowCount"/> passages.
+    /// </summary>
+    internal SphereDatasetProvider(string profile, DatasetFile file, long rowCount) : this(profile)
+    {
+        _file = file;
+        _rowCount = rowCount;
     }
 
     public string Profile => _profile;
@@ -87,10 +138,6 @@ public sealed class SphereDatasetProvider
         return ResolveProfile(profile).DatabaseName;
     }
 
-    public Task<bool> IsDatasetImportedAsync(string serverUrl, string databaseName,
-        int expectedMinDocuments = 1000, Version? httpVersion = null) =>
-        DatasetImportCheck.RunAsync(serverUrl, databaseName, httpVersion, "[Sphere]", CollectionName, expectedMinDocuments);
-
     /// <summary>
     /// Streams a .jsonl.tar.gz source into RavenDB via bulk insert. Supports resume and measures
     /// import time and indexing time separately.
@@ -98,7 +145,8 @@ public sealed class SphereDatasetProvider
     public async Task<ImportResult> ImportAsync(
         string serverUrl,
         string databaseName,
-        string dataSourcePath,
+        VerifiedFiles files,
+        QuerySelection selection,
         VectorQuantization quantization = VectorQuantization.None,
         bool exactSearch = false,
         Version? httpVersion = null,
@@ -116,87 +164,74 @@ public sealed class SphereDatasetProvider
             await store.Maintenance.Server.SendAsync(new CreateDatabaseOperation(new DatabaseRecord(databaseName)));
         }
 
-        var profile = ResolveProfile(null);
 
-        var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
-        bool documentsExist = stats.CountOfDocuments >= profile.TargetDocCount;
+        // The expected count includes the held-out query record itself.
+        var documentsExist = await HeldOutManifest.EnsureMatchesAsync(store, files, selection, TargetDocCount - selection.Count + 1);
 
         var importSw = Stopwatch.StartNew();
-        long totalImported;
+        long totalImported = 0;
 
         if (documentsExist == false)
         {
+            var heldOut = await HeldOutPositionsAsync(files, selection, ct);
             var checkpoint = await LoadCheckpointAsync(store);
             long skipLines = checkpoint?.LinesImported ?? 0;
 
             if (skipLines > 0)
                 Console.WriteLine($"[Sphere] Resuming from line {skipLines:N0} (checkpoint: {checkpoint!.LastSha})");
+            else
+                await HeldOutManifest.StoreAsync(store, files, selection);
 
-            var files = ResolveSourceFiles(dataSourcePath, _profile);
-            Console.WriteLine($"[Sphere] Importing from {files.Count} file(s) into {databaseName} (target: {profile.TargetDocCount:N0} docs)");
+            var file = files.PathOf(Files[0].FileName);
+            Console.WriteLine($"[Sphere] Importing {Path.GetFileName(file)} into {databaseName} (target: {TargetDocCount - heldOut.Count:N0} docs, {heldOut.Count} held out as queries)");
 
-            long imported = 0;
-            long skipped = 0;
+            long position = 0;
             var rateSw = Stopwatch.StartNew();
             string? lastSha = null;
 
             using (var bulkInsert = store.BulkInsert())
             {
-                foreach (var file in files)
+                await foreach (var line in StreamJsonLinesAsync(file, ct))
                 {
-                    Console.WriteLine($"[Sphere] Processing: {Path.GetFileName(file)}");
+                    if (position >= TargetDocCount)
+                        break;
+                    var linePosition = position++;
+                    if (linePosition < skipLines || heldOut.Contains(linePosition))
+                        continue;
 
-                    await foreach (var line in StreamJsonLinesAsync(file, ct))
+                    var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url);
+                    var docId = DocumentIdPrefix + BaseId(line);
+                    await bulkInsert.StoreAsync(doc, docId);
+
+                    // Store vector as binary attachment (768D × 4 bytes = 3072 bytes)
+                    var vectorBytes = new byte[line.Vector.Length * sizeof(float)];
+                    Buffer.BlockCopy(line.Vector, 0, vectorBytes, 0, vectorBytes.Length);
+                    using var vectorStream = new MemoryStream(vectorBytes);
+                    bulkInsert.AttachmentsFor(docId).Store("vector", vectorStream);
+                    totalImported++;
+                    lastSha = line.Sha;
+
+                    if (totalImported % ProgressInterval == 0)
                     {
-                        if (skipped < skipLines)
-                        {
-                            skipped++;
-                            continue;
-                        }
-
-                        if (skipLines + imported >= profile.TargetDocCount)
-                            break;
-
-                        var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url);
-                        var docId = string.IsNullOrEmpty(line.Id) ? $"{CollectionName}/{line.Sha}" : $"{CollectionName}/{line.Id}";
-                        await bulkInsert.StoreAsync(doc, docId);
-
-                        // Store vector as binary attachment (768D × 4 bytes = 3072 bytes)
-                        var vectorBytes = new byte[line.Vector.Length * sizeof(float)];
-                        Buffer.BlockCopy(line.Vector, 0, vectorBytes, 0, vectorBytes.Length);
-                        using var vectorStream = new MemoryStream(vectorBytes);
-                        bulkInsert.AttachmentsFor(docId).Store("vector", vectorStream);
-                        imported++;
-                        lastSha = line.Sha;
-
-                        if (imported % ProgressInterval == 0)
-                        {
-                            var docsPerSec = imported / rateSw.Elapsed.TotalSeconds;
-                            var pct = (double)imported / profile.TargetDocCount * 100;
-                            Console.Write($"\r[Sphere] Imported {imported:N0}/{profile.TargetDocCount:N0} ({pct:F1}%, {docsPerSec:N0} docs/sec)");
-                        }
-
-                        if (imported % CheckpointInterval == 0)
-                        {
-                            await StoreCheckpointAsync(store, skipLines + imported, lastSha);
-                        }
+                        var docsPerSec = totalImported / rateSw.Elapsed.TotalSeconds;
+                        var pct = (double)position / TargetDocCount * 100;
+                        Console.Write($"\r[Sphere] Imported {totalImported:N0} ({pct:F1}%, {docsPerSec:N0} docs/sec)");
                     }
 
-                    if (skipLines + imported >= profile.TargetDocCount)
-                        break;
+                    if (totalImported % CheckpointInterval == 0)
+                        await StoreCheckpointAsync(store, position, lastSha);
                 }
             }
 
-            Console.WriteLine($"\n[Sphere] Import complete: {imported:N0} documents in {importSw.Elapsed}");
-            totalImported = imported;
+            Console.WriteLine($"\n[Sphere] Import complete: {totalImported:N0} documents in {importSw.Elapsed}");
 
-            if (skipLines + imported >= profile.TargetDocCount)
-                await ClearCheckpointAsync(store);
+            if (position < TargetDocCount)
+                throw new InvalidDataException($"Set '{Name}' holds {position:N0} passages; the profile needs {TargetDocCount:N0}.");
+            await ClearCheckpointAsync(store);
         }
         else
         {
-            Console.WriteLine($"[Sphere] Database already contains {stats.CountOfDocuments:N0} documents - skipping import");
-            totalImported = stats.CountOfDocuments;
+            Console.WriteLine($"[Sphere] Database already holds the selection's documents - skipping import");
         }
 
         importSw.Stop();
@@ -213,141 +248,13 @@ public sealed class SphereDatasetProvider
     }
 
     /// <summary>
-    /// Generates query vectors by sampling random documents from the imported SPHERE data.
+    /// The seeded query selection, held out of the load, with its brute-force truth at depth k.
     /// </summary>
-    public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(
-        string serverUrl, string databaseName, int count = 1000, Version? httpVersion = null, int seed = 42)
+    public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(VerifiedFiles files, QuerySelection selection, int k)
     {
-        using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
-
-        var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
-        var totalDocs = stats.CountOfDocuments;
-
-        if (totalDocs == 0)
-            throw new InvalidOperationException($"No documents found in {CollectionName} collection. Import the SPHERE dataset first.");
-
-        // Deterministic sampling: load a block of documents ordered by id, then pick
-        // with a seeded RNG. Same seed → same query vectors → ground truth cache reusable.
-        Console.WriteLine($"[Sphere] Sampling {count} query vectors from {databaseName} (seed={seed})...");
-
-        using var session = store.OpenAsyncSession();
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-
-        // Load a pool of document IDs, then sample and load their vector attachments
-        var poolSize = (int)Math.Min(totalDocs, count * 3);
-        var pool = await session.Advanced.AsyncRawQuery<Passage>(
-                $"from {CollectionName} order by id()")
-            .Take(poolSize)
-            .ToListAsync();
-
-        // Deterministic shuffle and pick
-        var rng = new Random(seed);
-        var indices = Enumerable.Range(0, pool.Count).ToArray();
-        for (int i = indices.Length - 1; i > 0; i--)
-        {
-            int j = rng.Next(i + 1);
-            (indices[i], indices[j]) = (indices[j], indices[i]);
-        }
-
-        var selectedIndices = indices.Take(Math.Min(count, pool.Count)).ToArray();
-        var selected = new float[selectedIndices.Length][];
-        for (int i = 0; i < selectedIndices.Length; i++)
-        {
-            var docId = session.Advanced.GetDocumentId(pool[selectedIndices[i]]);
-            using var attachmentResult = await session.Advanced.Attachments.GetAsync(docId, "vector");
-            if (attachmentResult == null)
-                throw new InvalidOperationException($"Document {docId} has no 'vector' attachment. Was the dataset imported with attachment-based vectors?");
-            var bytes = new byte[VectorDimensions * sizeof(float)];
-            await attachmentResult.Stream.ReadExactlyAsync(bytes);
-            var floats = new float[VectorDimensions];
-            Buffer.BlockCopy(bytes, 0, floats, 0, bytes.Length);
-            selected[i] = floats;
-        }
-
-        Console.WriteLine($"[Sphere] Sampled {selected.Length} query vectors ({VectorDimensions}D) from {totalDocs:N0} documents");
-
-        return new VectorWorkloadMetadata
-        {
-            QueryVectors = selected,
-            FieldName = "Embedding",
-            VectorDimensions = VectorDimensions,
-            BaseVectorCount = totalDocs,
-            CollectionName = CollectionName
-        };
-    }
-
-    /// <summary>
-    /// Resolves the data source path to a list of .jsonl.tar.gz or .jsonl.gz files.
-    /// If a profile is specified, looks for the profile-specific file first and downloads if missing.
-    /// </summary>
-    public static List<string> ResolveSourceFiles(string dataSourcePath, string? profile = null)
-    {
-        // If a specific file was provided, use it directly
-        if (File.Exists(dataSourcePath))
-            return [dataSourcePath];
-
-        // When we know the profile, look for the profile-specific file first
-        if (profile != null && ProfileFileNames.TryGetValue(profile, out var expectedFileName))
-        {
-            // Search in the provided path and datasets/sphere/ directories
-            var searchDirs = new List<string>();
-            if (Directory.Exists(dataSourcePath))
-                searchDirs.Add(dataSourcePath);
-
-            foreach (var startDir in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
-            {
-                var dir = new DirectoryInfo(startDir);
-                while (dir != null)
-                {
-                    var sphereDir = Path.Combine(dir.FullName, "datasets", "sphere");
-                    if (Directory.Exists(sphereDir))
-                        searchDirs.Add(sphereDir);
-                    dir = dir.Parent;
-                }
-            }
-
-            // Check if the profile-specific file exists in any search directory
-            foreach (var searchDir in searchDirs)
-            {
-                var profileFile = Path.Combine(searchDir, expectedFileName);
-                if (File.Exists(profileFile))
-                    return [profileFile];
-            }
-
-            var targetDir = searchDirs.Count > 0 ? searchDirs[0]
-                : Path.Combine(Directory.GetCurrentDirectory(), "datasets", "sphere");
-            var downloaded = DownloadSphereFileAsync(profile, targetDir).GetAwaiter().GetResult();
-            if (downloaded != null)
-                return [downloaded];
-        }
-
-        // Fallback: find any sphere files in the provided path or datasets/sphere/
-        if (Directory.Exists(dataSourcePath))
-        {
-            var files = FindSphereFiles(dataSourcePath);
-            if (files.Count > 0)
-                return files;
-        }
-
-        foreach (var startDir in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
-        {
-            var dir = new DirectoryInfo(startDir);
-            while (dir != null)
-            {
-                var sphereDir = Path.Combine(dir.FullName, "datasets", "sphere");
-                if (Directory.Exists(sphereDir))
-                {
-                    var files = FindSphereFiles(sphereDir);
-                    if (files.Count > 0)
-                        return files;
-                }
-                dir = dir.Parent;
-            }
-        }
-
-        throw new FileNotFoundException(
-            $"SPHERE data source not found at '{dataSourcePath}'. " +
-            "Provide a .jsonl.tar.gz file, a directory containing them, or place files in datasets/sphere/.");
+        var metadata = await VectorSets.BuildMetadataAsync(this, files, selection, k, fieldName: "Embedding", DocumentIdPrefix, await BaseCountAsync(files, selection));
+        metadata.CollectionName = CollectionName;
+        return metadata;
     }
 
     // Profile -> GCS file mapping. Available at: https://storage.googleapis.com/sphere-demo/
@@ -359,64 +266,6 @@ public sealed class SphereDatasetProvider
         { "100m", "full.sphere.100M.jsonl.tar.gz" },
         { "full", "full.sphere.899M.jsonl.tar.gz" },
     };
-
-    private static async Task<string?> DownloadSphereFileAsync(string profile, string targetDir)
-    {
-        if (ProfileFileNames.TryGetValue(profile, out var fileName) == false)
-            return null;
-
-        Directory.CreateDirectory(targetDir);
-        var targetPath = Path.Combine(targetDir, fileName);
-
-        if (File.Exists(targetPath))
-            return targetPath;
-
-        var url = $"https://storage.googleapis.com/sphere-demo/{fileName}";
-        Console.WriteLine($"[Sphere] Downloading {fileName} from {url}...");
-
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromHours(12) };
-        using var response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-
-        var totalBytes = response.Content.Headers.ContentLength;
-        var totalMB = totalBytes.HasValue ? $"{totalBytes.Value / (1024.0 * 1024.0):N0} MB" : "unknown size";
-        Console.WriteLine($"[Sphere] Download size: {totalMB}");
-
-        await using var contentStream = await response.Content.ReadAsStreamAsync();
-        var tempPath = targetPath + ".downloading";
-        await using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
-        {
-            var buffer = new byte[81920];
-            long totalRead = 0;
-            int bytesRead;
-            var lastReport = DateTime.UtcNow;
-
-            while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
-            {
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                totalRead += bytesRead;
-
-                if ((DateTime.UtcNow - lastReport).TotalSeconds >= 5)
-                {
-                    var pct = totalBytes.HasValue ? $" ({100.0 * totalRead / totalBytes.Value:F1}%)" : "";
-                    Console.Write($"\r[Sphere] Downloaded {totalRead / (1024.0 * 1024.0):N0} MB{pct}");
-                    lastReport = DateTime.UtcNow;
-                }
-            }
-        }
-
-        File.Move(tempPath, targetPath);
-        Console.WriteLine($"\n[Sphere] Download complete: {targetPath}");
-        return targetPath;
-    }
-
-    private static List<string> FindSphereFiles(string directory)
-    {
-        return Directory.GetFiles(directory, "*.jsonl.tar.gz", SearchOption.TopDirectoryOnly)
-            .Concat(Directory.GetFiles(directory, "*.jsonl.gz", SearchOption.TopDirectoryOnly))
-            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
 
     // --- Streaming pipeline ---
 
