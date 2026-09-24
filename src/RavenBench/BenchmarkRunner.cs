@@ -57,6 +57,12 @@ public class BenchmarkRunner(RunOptions opts)
                 datasetDatabase = database;
                 datasetWasImported = imported;
             }
+            else if (Dataset.Vectors.VectorSets.FindPublished(opts.Dataset) is { } published)
+            {
+                var (database, imported) = await DatasetImportCoordinator.ImportPublishedSetAsync(opts, published, negotiatedHttpVersion);
+                datasetDatabase = database;
+                datasetWasImported = imported;
+            }
             else
             {
                 datasetDatabase = await DatasetImportCoordinator.ImportDatasetAsync(opts);

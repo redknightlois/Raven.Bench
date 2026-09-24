@@ -252,7 +252,7 @@ public sealed class SphereDatasetProvider : HeldOutVectorDataset
     /// </summary>
     public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(VerifiedFiles files, QuerySelection selection, int k)
     {
-        var metadata = await VectorSets.BuildMetadataAsync(this, files, selection, k, fieldName: "Embedding", DocumentIdPrefix, await BaseCountAsync(files, selection));
+        var metadata = await VectorSets.BuildMetadataAsync(this, files, selection, k, fieldName: "Embedding", DocumentIdPrefix);
         metadata.CollectionName = CollectionName;
         return metadata;
     }

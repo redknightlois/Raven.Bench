@@ -26,24 +26,14 @@ public static class VectorSets
     ];
 
     /// <summary>
-    /// Every set by name: the published sets, the sphere profiles and the ClinicalWords dimensions.
+    /// The published set of that name, or null when no published set carries it.
     /// </summary>
-    public static IVectorDataset Resolve(string name)
-    {
-        var published = Published.FirstOrDefault(s => s.Name == name);
-        if (published != null)
-            return published;
-        if (name.StartsWith("sphere-", StringComparison.Ordinal))
-            return new SphereDatasetProvider(name["sphere-".Length..]);
-        if (name.StartsWith("clinical-words-", StringComparison.Ordinal) && int.TryParse(name["clinical-words-".Length..], out var dims))
-            return new ClinicalWordsDatasetProvider(dims);
-        throw new ArgumentException($"Unknown vector set '{name}'. Known: {string.Join(", ", Published.Select(s => s.Name))}, sphere-<profile>, clinical-words-<100|300|600>.");
-    }
+    public static IVectorDataset? FindPublished(string name) => Published.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The selection's query vectors and product-neutral truth as workload metadata.
     /// </summary>
-    public static async Task<VectorWorkloadMetadata> BuildMetadataAsync(IVectorDataset set, VerifiedFiles files, QuerySelection selection, int k, string fieldName, string documentIdPrefix, long baseVectorCount, CancellationToken ct = default)
+    public static async Task<VectorWorkloadMetadata> BuildMetadataAsync(IVectorDataset set, VerifiedFiles files, QuerySelection selection, int k, string fieldName, string documentIdPrefix, CancellationToken ct = default)
     {
         var queries = await set.GetQueriesAsync(files, selection, k, ct).ConfigureAwait(false);
         return new VectorWorkloadMetadata
@@ -51,7 +41,7 @@ public static class VectorSets
             FieldName = fieldName,
             QueryVectors = queries.Queries,
             VectorDimensions = set.Dimensions,
-            BaseVectorCount = baseVectorCount,
+            BaseVectorCount = await set.BaseCountAsync(files, selection, ct).ConfigureAwait(false),
             Metric = set.Metric,
             DocumentIdPrefix = documentIdPrefix,
             GroundTruth = queries.Neighbors.Select((n, i) => (n, i)).ToDictionary(x => x.i, x => x.n)

@@ -55,6 +55,11 @@ public interface IVectorDataset
     /// The base vectors to load. A set without a published query split omits the held-out queries of the selection.
     /// </summary>
     IAsyncEnumerable<BaseVector> ReadBaseAsync(VerifiedFiles files, QuerySelection selection, CancellationToken ct = default);
+
+    /// <summary>
+    /// The number of base vectors a load of this selection writes.
+    /// </summary>
+    Task<long> BaseCountAsync(VerifiedFiles files, QuerySelection selection, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -106,9 +111,6 @@ public abstract class HeldOutVectorDataset : IVectorDataset
     /// </summary>
     protected abstract IAsyncEnumerable<BaseVector> ReadRowsAsync(VerifiedFiles files, CancellationToken ct);
 
-    /// <summary>
-    /// The number of base vectors a load of this selection writes.
-    /// </summary>
     public async Task<long> BaseCountAsync(VerifiedFiles files, QuerySelection selection, CancellationToken ct = default) =>
         await CountRowsAsync(files, ct).ConfigureAwait(false) - selection.Count;
 
