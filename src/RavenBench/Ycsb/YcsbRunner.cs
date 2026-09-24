@@ -61,6 +61,7 @@ public sealed class YcsbRunner
         var database = RequiredString(_settings.Database, "--database");
         var closedStep = CliParsing.ParseStepPlan(_scenario.Concurrency).Normalize();
 
+        using var nodeExporter = await NodeExporterClient.ConnectAsync(CliParsing.ParseNodeExporterUrl(_settings.NodeExporterUrl));
         var context = await BuildContextAsync(url, database, ResolveConcurrencyCeiling(_scenario, url, database));
         using var transport = context.Transport;
         var payloadKind = context.TransportKind == TransportKind.ClientEntity ? PayloadKind.Entity : PayloadKind.Json;
@@ -133,7 +134,7 @@ public sealed class YcsbRunner
                 _ => new MixedProfileWorkload(YcsbRunKinds.MixFor(identity.Kind), ToKeyDistribution(distributionKind), docSizeBytes, runSeed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind)
             };
 
-            var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, identity.ResultName);
+            var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, identity.ResultName, nodeExporter);
             var ramp = await BenchmarkRunner.RunRampAsync(opts, transport, executor, workload, startupCalibration: null, new Random(runSeed));
 
             OnDiskSize? loadedSize = null;

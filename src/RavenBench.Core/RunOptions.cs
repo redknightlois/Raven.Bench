@@ -184,6 +184,9 @@ public sealed record RunOptions
 
     public SnmpOptions Snmp { get; init; } = SnmpOptions.Disabled;
 
+    /// <summary>The operator-supplied node_exporter metrics endpoint beside the database. Null reads no host metrics.</summary>
+    public Uri? NodeExporterUrl { get; init; }
+
     // Required workload profile selection
     public WorkloadProfile Profile { get; init; } = WorkloadProfile.Unspecified;
 

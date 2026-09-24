@@ -73,6 +73,7 @@ internal static class CliParsing
             StrictHttpVersion = settings.StrictHttpVersion,
             Verbose = settings.Verbose,
             Snmp = BuildSnmpOptions(settings),
+            NodeExporterUrl = ParseNodeExporterUrl(settings.NodeExporterUrl),
             LatencyDisplay = ParseLatencyDisplayType(settings.Latencies),
             BulkBatchSize = settings.BulkBatchSize,
             BulkDepth = settings.BulkDepth,
@@ -89,6 +90,15 @@ internal static class CliParsing
         };
     }
 
+
+    public static Uri? ParseNodeExporterUrl(string? value)
+    {
+        if (value == null)
+            return null;
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) == false || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new ArgumentException($"--node-exporter-url '{value}' is not an absolute http or https URL.");
+        return uri;
+    }
 
     private static SnmpOptions BuildSnmpOptions(BaseRunSettings s)
     {
