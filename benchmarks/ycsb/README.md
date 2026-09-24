@@ -127,9 +127,19 @@ Two more fields state what the harness could and could not read:
   `pg_database_size` for PostgreSQL, `dbStats.totalSize` for MongoDB and DocumentDB). A product
   that exposes none says so by name instead.
 - `Ycsb.ServerColumns` on every result: which server columns this run actually collected for this
-  product, derived from the steps it produced. A RavenDB run names the columns the admin endpoints
-  filled (`ServerCpu`, `ServerMemoryMB`); a PostgreSQL, MongoDB or DocumentDB run states that this
-  harness has no server column for that product, so an absent key never reads as a lost measurement.
+  product, derived from the steps it produced, and `Sources`, the source of each CPU and memory
+  column. Without `--node-exporter-url` a RavenDB run names the columns its admin endpoints filled
+  (`ravendb-debug`), and a PostgreSQL, MongoDB or DocumentDB run states that this harness has no
+  server column for that product, so an absent key never reads as a lost measurement.
+- `--node-exporter-url <url>` points at node_exporter on the database host (for example
+  `http://db-host:9100/metrics`). It then fills `ServerCpu` and `ServerMemoryMB` on every step for
+  every product, including RavenDB, with `ServerCpuSource` and `ServerMemorySource` set to
+  `node_exporter` and `ServerMetricsHostWide` set, because node_exporter reads the whole host. CPU is
+  the non-idle share of `node_cpu_seconds_total` over all CPUs between a scrape at the start and one
+  at the end of the step (iowait and steal count as busy); memory is MemTotal minus MemAvailable. An
+  endpoint that does not answer fails the run before the load. A scrape that fails mid-run leaves the
+  step's columns empty and states the reason in `ServerMetricsUnavailable`. SNMP, where enabled,
+  keeps its own columns and its priority in the analysis.
 
 ## Checking the four products agree
 

@@ -219,6 +219,10 @@ public abstract class BaseRunSettings : CommandSettings
     [Description("SNMP timeout (e.g., 5s, 10s) (default: 5s)")]
     public string SnmpTimeout { get; init; } = "5s";
 
+    [CommandOption("--node-exporter-url")]
+    [Description("node_exporter metrics endpoint on the database host (e.g. http://dbhost:9100/metrics). Fills host-wide server CPU and memory for every product.")]
+    public string? NodeExporterUrl { get; init; }
+
     [CommandOption("--histograms-format")]
     [Description("Histogram export format: hlog, csv, both (default: hlog, auto-enabled when CSV output specified)")]
     public string HistogramsFormat { get; init; } = "hlog";

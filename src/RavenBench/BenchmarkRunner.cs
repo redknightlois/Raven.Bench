@@ -71,6 +71,7 @@ public class BenchmarkRunner(RunOptions opts)
 
         var effectiveDatabase = datasetDatabase ?? opts.Database;
 
+        using var nodeExporter = await NodeExporterClient.ConnectAsync(opts.NodeExporterUrl);
         using var transport = BuildTransport(opts, negotiatedHttpVersion, effectiveDatabase);
 
         Console.WriteLine($"[Raven.Bench] Ensuring database '{effectiveDatabase}' exists...");
@@ -295,7 +296,7 @@ public class BenchmarkRunner(RunOptions opts)
             startupCalibration = null;
         }
 
-        var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker);
+        var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, nodeExporter: nodeExporter);
 
         var rampResult = await RunRampAsync(opts, transport, executor, workload, startupCalibration, _rng);
         steps = rampResult.Steps;

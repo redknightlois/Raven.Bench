@@ -24,6 +24,7 @@ namespace RavenBench.Core
         private readonly IWorkload _workload;
         private readonly ProcessCpuTracker _cpuTracker;
         private readonly ServerMetricsTracker? _serverTracker;
+        private readonly NodeExporterClient? _nodeExporter;
         private readonly string? _runName;
 
         /// <param name="runName">
@@ -36,8 +37,10 @@ namespace RavenBench.Core
             IWorkload workload,
             ProcessCpuTracker cpuTracker,
             ServerMetricsTracker? serverTracker = null,
-            string? runName = null)
+            string? runName = null,
+            NodeExporterClient? nodeExporter = null)
         {
+            _nodeExporter = nodeExporter;
             _runName = runName;
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _transport = transport ?? throw new ArgumentNullException(nameof(transport));
@@ -69,6 +72,8 @@ namespace RavenBench.Core
             _cpuTracker.Reset();
             _cpuTracker.Start();
             _serverTracker?.Start();
+            // A start-scrape fault surfaces when the window closes, as the step's absence reason.
+            var nodeStart = _nodeExporter?.ScrapeAsync(cancellationToken);
 
             using var exTracker = FirstChanceExceptionTracker.BeginStep();
 
@@ -80,6 +85,7 @@ namespace RavenBench.Core
                 // The measurement window closes here. The exception dump and the result
                 // construction below run outside it, so neither enters the load-host CPU figure.
                 _cpuTracker.Stop();
+                var nodeWindow = nodeStart == null ? null : await _nodeExporter!.EndWindowAsync(nodeStart, cancellationToken);
 
                 var exSnap = exTracker.Take();
                 if (exSnap.Total > 0)
@@ -101,7 +107,7 @@ namespace RavenBench.Core
                 }
 
                 var result = BuildStepResult(
-                    loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics);
+                    loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics, nodeWindow);
 
                 if (result.InvalidReason != null)
                     Console.WriteLine(ClientSaturation.ConsoleLine(stepIndex + 1, currentStepValue, _runName, result.InvalidReason));
@@ -115,12 +121,15 @@ namespace RavenBench.Core
             }
         }
 
+        private const string RavenDebugSource = "ravendb-debug";
+
         private StepResult BuildStepResult(
             ILoadGenerator loadGenerator,
             int stepIndex,
             int currentStepValue,
             LatencyRecorder latencyRecorder,
-            LoadGeneratorMetrics metrics)
+            LoadGeneratorMetrics metrics,
+            NodeExporterWindow? nodeWindow)
         {
 
             var serverMetrics = _serverTracker?.Current ?? new ServerMetrics();
@@ -141,6 +150,12 @@ namespace RavenBench.Core
                 : null;
 
             var clientCpu = _cpuTracker.AverageCpu;
+
+            // node_exporter, when the operator configured it, fills both columns for every product;
+            // otherwise the RavenDB debug endpoints fill them for a RavenDB target.
+            var serverCpu = nodeWindow != null ? nodeWindow.CpuPercent : serverMetrics.CpuUsagePercent;
+            var serverMemory = nodeWindow != null ? nodeWindow.MemoryMB : serverMetrics.MemoryUsageMB;
+            var source = nodeWindow != null ? NodeExporterClient.SourceName : RavenDebugSource;
 
             var result = new StepResult
             {
@@ -163,8 +178,12 @@ namespace RavenBench.Core
                 ClientCpu = clientCpu,
                 MeasuredDuration = metrics.Duration,
                 InvalidReason = ClientSaturation.MarkingFor(clientCpu),
-                ServerCpu = serverMetrics.CpuUsagePercent,
-                ServerMemoryMB = serverMetrics.MemoryUsageMB,
+                ServerCpu = serverCpu,
+                ServerMemoryMB = serverMemory,
+                ServerCpuSource = serverCpu.HasValue ? source : null,
+                ServerMemorySource = serverMemory.HasValue ? source : null,
+                ServerMetricsHostWide = serverCpu.HasValue || serverMemory.HasValue ? nodeWindow != null : null,
+                ServerMetricsUnavailable = nodeWindow?.Unavailable,
                 ServerRequestsPerSec = serverMetrics.RequestsPerSecond,
                 ServerIoReadOps = serverMetrics.IoReadOperations.HasValue ? (long?)serverMetrics.IoReadOperations.Value : null,
                 ServerIoWriteOps = serverMetrics.IoWriteOperations.HasValue ? (long?)serverMetrics.IoWriteOperations.Value : null,

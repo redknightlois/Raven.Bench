@@ -73,6 +73,18 @@ public sealed class StepResult
     // Server-side metrics from RavenDB
     public double? ServerCpu { get; init; }
     public long? ServerMemoryMB { get; init; }
+
+    /// <summary>The source that filled <see cref="ServerCpu"/>: "node_exporter" or "ravendb-debug". Absent when the column is.</summary>
+    public string? ServerCpuSource { get; init; }
+
+    /// <summary>The source that filled <see cref="ServerMemoryMB"/>: "node_exporter" or "ravendb-debug". Absent when the column is.</summary>
+    public string? ServerMemorySource { get; init; }
+
+    /// <summary>True when the server CPU and memory figures cover the whole database host, not the database process alone.</summary>
+    public bool? ServerMetricsHostWide { get; init; }
+
+    /// <summary>Why a configured server source left the CPU and memory columns absent for this step, prefixed by the source name.</summary>
+    public string? ServerMetricsUnavailable { get; init; }
     public double? ServerRequestsPerSec { get; init; }
     public long? ServerIoReadOps { get; init; }
     public long? ServerIoWriteOps { get; init; }

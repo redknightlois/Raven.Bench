@@ -51,6 +51,9 @@ public sealed record ServerColumnAvailability
     /// <summary>The same fact in words, so an empty list never reads as a missing measurement.</summary>
     public required string Statement { get; init; }
 
+    /// <summary>The source of each collected CPU and memory column, with " (host-wide)" for a node_exporter figure.</summary>
+    public IReadOnlyDictionary<string, string> Sources { get; init; } = new Dictionary<string, string>();
+
     /// <summary>Derives the statement from the steps that were produced.</summary>
     public static ServerColumnAvailability FromSteps(string productName, IReadOnlyList<StepResult> steps)
     {
@@ -62,14 +65,29 @@ public sealed record ServerColumnAvailability
         if (steps.Any(s => s.ServerRequestsPerSec.HasValue))
             columns.Add(nameof(StepResult.ServerRequestsPerSec));
 
+        var sources = new Dictionary<string, string>();
+        AddSource(sources, nameof(StepResult.ServerCpu), steps.Where(s => s.ServerCpu.HasValue).Select(s => (s.ServerCpuSource, s.ServerMetricsHostWide)));
+        AddSource(sources, nameof(StepResult.ServerMemoryMB), steps.Where(s => s.ServerMemoryMB.HasValue).Select(s => (s.ServerMemorySource, s.ServerMetricsHostWide)));
+
         return new ServerColumnAvailability
         {
             Product = productName,
             Columns = columns,
+            Sources = sources,
             Statement = columns.Count == 0
                 ? $"{productName} has no server column from this harness run."
                 : $"{productName} server columns collected by this harness run: {string.Join(", ", columns)}."
         };
+    }
+
+    private static void AddSource(Dictionary<string, string> sources, string column, IEnumerable<(string? Source, bool? HostWide)> filled)
+    {
+        var names = filled
+            .Select(f => f.HostWide == true ? $"{f.Source} (host-wide)" : f.Source ?? "unnamed")
+            .Distinct()
+            .ToList();
+        if (names.Count > 0)
+            sources[column] = string.Join(", ", names);
     }
 }
 
