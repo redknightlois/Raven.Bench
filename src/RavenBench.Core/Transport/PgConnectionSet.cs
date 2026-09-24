@@ -55,9 +55,10 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
     }
 
     /// <summary>
-    /// Runs one body on a rented slot. A slot the body failed on is disposed and replaced, because the
-    /// driver closes the connection on a protocol-level error; if the server is gone, the set is closed
-    /// so a later rent fails fast instead of blocking on an empty set.
+    /// Runs one body on a rented slot. A slot the body failed on or was cancelled on is disposed and
+    /// replaced: the driver closes the connection on a protocol-level error, and a cancel can leave an
+    /// unread response, an open transaction or session state the slot does not know. If the server is
+    /// gone, the set is closed so a later rent fails fast instead of blocking on an empty set.
     /// </summary>
     public async Task<T> UseAsync<T>(Func<TSlot, Task<T>> body, CancellationToken ct)
     {
@@ -67,11 +68,6 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
             var result = await body(slot).ConfigureAwait(false);
             _slots.Writer.TryWrite(slot);
             return result;
-        }
-        catch (OperationCanceledException)
-        {
-            _slots.Writer.TryWrite(slot);
-            throw;
         }
         catch
         {
@@ -108,7 +104,9 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
         try { await slot.DisposeAsync().ConfigureAwait(false); } catch (Exception) { }
         try
         {
-            _slots.Writer.TryWrite(await OpenSlotAsync().ConfigureAwait(false));
+            var replacement = await OpenSlotAsync().ConfigureAwait(false);
+            if (_slots.Writer.TryWrite(replacement) == false)
+                await replacement.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
         {

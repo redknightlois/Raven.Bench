@@ -1,0 +1,25 @@
+# Compose file for the vector benchmark's containerized targets. Round one runs every product at its
+# shipped defaults plus the parity settings the harness applies per session, so no service here sets
+# a server option of its own (no shared_buffers, maintenance_work_mem or parallel worker count). The
+# result records the settings in force as the server reports them.
+#
+# The pgvector image is pinned to a release tag that names both the pgvector and the PostgreSQL
+# version. It publishes 5432 like the ycsb postgresql service, so only one of them runs at a time.
+name: ravenbench-vector
+
+services:
+  pgvector:
+    image: pgvector/pgvector:0.8.1-pg17
+    container_name: vector-pgvector
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: bench
+    volumes:
+      - vector-pgvector-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  vector-pgvector-data:
