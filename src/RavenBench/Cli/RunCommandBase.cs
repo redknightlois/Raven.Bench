@@ -66,7 +66,8 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
                     opts.VectorRecallEfSweep,
                     opts.VectorQuantization,
                     opts.SearchEngine,
-                    httpVersion);
+                    httpVersion,
+                    opts.NodeExporterUrl);
                 // Use the last (highest) efSearch result as the primary recall
                 recallResult = recallSweep[recallSweep.Keys.Max()];
             }
@@ -79,7 +80,8 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
                     opts.VectorRecallKs,
                     opts.VectorQuantization,
                     opts.SearchEngine,
-                    httpVersion);
+                    httpVersion,
+                    nodeExporterUrl: opts.NodeExporterUrl);
             }
         }
 

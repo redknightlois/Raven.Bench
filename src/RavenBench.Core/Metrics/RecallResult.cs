@@ -36,4 +36,17 @@ public sealed class RecallResult
     /// Time taken to run the recall measurement queries.
     /// </summary>
     public TimeSpan MeasurementTime { get; init; }
+
+    /// <summary>The step server columns over the measurement queries. Only node_exporter fills them, so a figure is host-wide.</summary>
+    public double? ServerCpu { get; init; }
+
+    public long? ServerMemoryMB { get; init; }
+
+    public string? ServerCpuSource { get; init; }
+
+    public string? ServerMemorySource { get; init; }
+
+    public bool? ServerMetricsHostWide { get; init; }
+
+    public string? ServerMetricsUnavailable { get; init; }
 }

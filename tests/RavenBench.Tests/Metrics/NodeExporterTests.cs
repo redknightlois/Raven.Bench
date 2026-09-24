@@ -12,6 +12,7 @@ using RavenBench.Core.Metrics;
 using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
+using RavenBench.Dataset;
 using Xunit;
 
 namespace RavenBench.Tests.Metrics;
@@ -130,6 +131,43 @@ public class NodeExporterTests
         step.ServerCpuSource.Should().BeNull();
         step.ServerMetricsUnavailable.Should().Be("node_exporter: series node_cpu_seconds_total missing.");
         ServerColumnAvailability.FromSteps("PostgreSQL", new[] { step }).Statement.Should().Be("PostgreSQL has no server column from this harness run.");
+    }
+
+    [Fact]
+    public async Task A_Recall_Row_Carries_The_Node_Exporter_Columns_In_Its_Json()
+    {
+        using var nodeExporter = new NodeExporterClient(new Uri("http://dbhost:9100/metrics"), new QueuedHandler(
+            new QueuedResponse(HttpStatusCode.OK, Scrape(100, 10, 200, 20)),
+            new QueuedResponse(HttpStatusCode.OK, Scrape(106, 14, 209, 21))));
+        var metadata = new VectorWorkloadMetadata
+        {
+            FieldName = "Vector",
+            QueryVectors = [[1f, 0f]],
+            GroundTruth = new Dictionary<int, string[]> { [0] = ["a", "b"] },
+            DocumentIdPrefix = "v/"
+        };
+
+        var row = await new RecallMeasurement().MeasureAsync(new TruthTransport(["v/a", "v/b"]), metadata, [2], VectorQuantization.None, effort: null, nodeExporter);
+
+        row.RecallAtK[2].Should().Be(1.0);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(row));
+        json.RootElement.GetProperty(nameof(StepResult.ServerCpu)).GetDouble().Should().BeApproximately(25.0, 1e-9);
+        json.RootElement.GetProperty(nameof(StepResult.ServerMemoryMB)).GetInt64().Should().Be(2048);
+        json.RootElement.GetProperty(nameof(StepResult.ServerCpuSource)).GetString().Should().Be("node_exporter");
+        json.RootElement.GetProperty(nameof(StepResult.ServerMetricsHostWide)).GetBoolean().Should().BeTrue();
+    }
+
+    private sealed class TruthTransport(IReadOnlyList<string> ids) : IYcsbTransport
+    {
+        public string ProductName => "stub";
+        public bool ReportsWireBytes => false;
+        public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) =>
+            Task.FromResult(new TransportResult(0, 0, resultCount: ids.Count) { NeighborIds = ids });
+        public Task PutAsync<T>(string id, T document) => throw new NotSupportedException();
+        public Task EnsureDatabaseExistsAsync(string databaseName) => throw new NotSupportedException();
+        public Task<long> GetDocumentCountAsync(string idPrefix) => throw new NotSupportedException();
+        public Task<string> GetServerVersionAsync() => throw new NotSupportedException();
+        public void Dispose() { }
     }
 
     private static async Task<StepResult> RunOneStep(NodeExporterClient nodeExporter)
