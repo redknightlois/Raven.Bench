@@ -161,6 +161,40 @@ public abstract class HeldOutVectorDataset : IVectorDataset
 }
 
 /// <summary>
+/// The first <see cref="Cap"/> base vectors of a set. The queries are the set's own; their truth is
+/// exact float32 brute force over the capped base, cached next to the data under the cap.
+/// </summary>
+public sealed class CappedVectorDataset(IVectorDataset inner, int cap) : IVectorDataset
+{
+    public int Cap { get; } = cap > 0 ? cap : throw new ArgumentOutOfRangeException(nameof(cap), cap, "The cap must be positive.");
+    public string Name => inner.Name;
+    public VectorMetric Metric => inner.Metric;
+    public int Dimensions => inner.Dimensions;
+    public IReadOnlyList<DatasetFile> Files => inner.Files;
+
+    public async Task<long> BaseCountAsync(VerifiedFiles files, QuerySelection selection, CancellationToken ct = default) =>
+        Math.Min(Cap, await inner.BaseCountAsync(files, selection, ct).ConfigureAwait(false));
+
+    public IAsyncEnumerable<BaseVector> ReadBaseAsync(VerifiedFiles files, QuerySelection selection, CancellationToken ct = default) =>
+        inner.ReadBaseAsync(files, selection, ct).Take(Cap);
+
+    // The inner set's truth is read and discarded; for a held-out set that is one full brute force, cached.
+    public async Task<VectorQuerySet> GetQueriesAsync(VerifiedFiles files, QuerySelection selection, int k, CancellationToken ct = default)
+    {
+        var queries = (await inner.GetQueriesAsync(files, selection, k, ct).ConfigureAwait(false)).Queries;
+        var cachePath = TruthCache.PathFor(files, $"{Name}-cap{Cap}", Metric, selection, k);
+        var truth = TruthCache.TryLoad(cachePath, queries.Length, k);
+        if (truth == null)
+        {
+            Console.WriteLine($"[Dataset] {Name}: computing exact float32 truth over the first {Cap} base vectors for {queries.Length} queries at k={k}");
+            truth = await BruteForceTruth.ComputeAsync(queries, ReadBaseAsync(files, selection, ct), Metric, k, ct).ConfigureAwait(false);
+            TruthCache.Store(cachePath, truth);
+        }
+        return new VectorQuerySet(queries, truth);
+    }
+}
+
+/// <summary>
 /// Exact nearest neighbours by float32 brute force, computed outside any product.
 /// </summary>
 public static class BruteForceTruth
@@ -223,7 +257,7 @@ public static class BruteForceTruth
     }
 
     // Cosine normalises once, so the score is a plain dot product.
-    private static float[] Prepare(float[] vector, VectorMetric metric)
+    internal static float[] Prepare(float[] vector, VectorMetric metric)
     {
         if (metric != VectorMetric.Cosine)
             return vector;
@@ -232,7 +266,7 @@ public static class BruteForceTruth
     }
 
     // Higher is nearer under every metric.
-    private static float Score(float[] q, float[] b, VectorMetric metric) => metric switch
+    internal static float Score(float[] q, float[] b, VectorMetric metric) => metric switch
     {
         VectorMetric.Cosine or VectorMetric.Dot => Dot(q, b),
         VectorMetric.L2 => -SquaredDistance(q, b),

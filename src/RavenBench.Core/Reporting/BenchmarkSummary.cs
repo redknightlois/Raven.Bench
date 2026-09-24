@@ -53,4 +53,7 @@ public sealed class BenchmarkSummary
     /// resolved scenario, and the target that ran it.
     /// </summary>
     public YcsbRunInfo? Ycsb { get; init; }
+
+    /// <summary>Present only on a result from the vector entry point.</summary>
+    public VectorRunInfo? Vector { get; init; }
 }
