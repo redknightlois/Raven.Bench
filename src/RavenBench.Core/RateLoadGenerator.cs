@@ -184,7 +184,6 @@ namespace RavenBench.Core
             private readonly long _startStamp;
             private readonly double _ticksPerToken;
             private long _sequence;
-            private double _carry;
             private double _droppedTokens;
             private int _stopped;
 
@@ -254,37 +253,17 @@ namespace RavenBench.Core
                 var targetIntervalTicks = (long)(targetIntervalMs * TimeSpan.TicksPerMillisecond);
                 var stopwatch = Stopwatch.StartNew();
                 // All pacing math uses Elapsed.Ticks (TimeSpan ticks); never ElapsedTicks (raw frequency), which mismatches targetTick off Windows.
-                var lastTick = stopwatch.Elapsed.Ticks;
+                var pacer = new TokenPacer(_ratePerSecond, _burstCapacity);
 
                 try
                 {
                     while (_producerCts.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false)
                     {
                         var nowTicks = stopwatch.Elapsed.Ticks;
-                        var deltaTicks = nowTicks - lastTick;
-
-                        if (deltaTicks > 0)
-                        {
-                            var deltaSeconds = deltaTicks / (double)TimeSpan.TicksPerSecond;
-                            var tokensToAdd = deltaSeconds * _ratePerSecond;
-
-                            if (tokensToAdd > 0)
-                            {
-                                var uncapped = _carry + tokensToAdd;
-                                _carry = Math.Min(uncapped, _burstCapacity);
-                                if (uncapped > _burstCapacity)
-                                    Volatile.Write(ref _droppedTokens, Volatile.Read(ref _droppedTokens) + (uncapped - _burstCapacity));
-                                var wholeTokens = (int)Math.Floor(_carry);
-
-                                if (wholeTokens > 0)
-                                {
-                                    _carry -= wholeTokens;
-                                    await WriteTokensAsync(wholeTokens, _producerCts.Token).ConfigureAwait(false);
-                                }
-                            }
-
-                            lastTick = nowTicks;
-                        }
+                        var wholeTokens = pacer.Release(nowTicks);
+                        Volatile.Write(ref _droppedTokens, pacer.DroppedTokens);
+                        if (wholeTokens > 0)
+                            await WriteTokensAsync(wholeTokens, _producerCts.Token).ConfigureAwait(false);
 
                         // Schedule the next wake-up relative to this cycle and wait just long enough to stay on pace.
                         var nextTick = nowTicks + targetIntervalTicks;
@@ -361,9 +340,47 @@ namespace RavenBench.Core
         }
 
         /// <summary>
+        /// Pure pacing arithmetic: given the elapsed time on the scheduler's clock, returns the whole tokens owed since
+        /// the previous call. Unreleased credit is capped at the burst capacity and the excess is counted as dropped.
+        /// Elapsed values are <see cref="TimeSpan"/> ticks and must not decrease.
+        /// </summary>
+        internal sealed class TokenPacer
+        {
+            private readonly double _ratePerSecond;
+            private readonly int _burstCapacity;
+            private long _lastTicks;
+            private double _carry;
+
+            public double DroppedTokens { get; private set; }
+
+            public TokenPacer(double ratePerSecond, int burstCapacity)
+            {
+                _ratePerSecond = ratePerSecond;
+                _burstCapacity = burstCapacity;
+            }
+
+            public int Release(long elapsedTicks)
+            {
+                var deltaTicks = elapsedTicks - _lastTicks;
+                if (deltaTicks <= 0)
+                    return 0;
+                _lastTicks = elapsedTicks;
+
+                var uncapped = _carry + deltaTicks / (double)TimeSpan.TicksPerSecond * _ratePerSecond;
+                if (uncapped > _burstCapacity)
+                    DroppedTokens += uncapped - _burstCapacity;
+                _carry = Math.Min(uncapped, _burstCapacity);
+
+                var whole = (int)Math.Floor(_carry);
+                _carry -= whole;
+                return whole;
+            }
+        }
+
+        /// <summary>
         /// Periodically samples completed operations to compute rolling throughput statistics over a fixed window.
         /// </summary>
-        private sealed class RollingRateSampler : IAsyncDisposable
+        internal sealed class RollingRateSampler : IAsyncDisposable
         {
             private readonly TimeSpan _window;
             private readonly TimeSpan _interval;
@@ -406,7 +423,7 @@ namespace RavenBench.Core
                 }, CancellationToken.None);
             }
 
-            private void RecordSample(double elapsedSeconds, long completed)
+            internal void RecordSample(double elapsedSeconds, long completed)
             {
                 lock (_lock)
                 {
