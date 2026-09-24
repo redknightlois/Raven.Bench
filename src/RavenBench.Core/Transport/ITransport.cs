@@ -51,6 +51,11 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     /// Whether the index was stale at query time (populated for query operations).
     /// </summary>
     public bool? IsStale { get; } = isStale;
+
+    /// <summary>
+    /// Ordered document ids a vector search returned, nearest first (populated for vector search).
+    /// </summary>
+    public IReadOnlyList<string>? NeighborIds { get; init; }
 }
 
 public readonly struct CalibrationResult(double ttfbMs, double totalMs, long bytesDown, Version httpVersion, bool isSuccess = true, string? errorDetails = null)

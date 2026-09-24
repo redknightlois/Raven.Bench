@@ -130,10 +130,15 @@ public class VectorSearchOperation : OperationBase
     public string? ExpectedIndex { get; init; }
 
     /// <summary>
-    /// Optional HNSW search candidate budget (efSearch / numberOfCandidates).
-    /// When null the server-side default applies.
+    /// The search effort as the product's own knob and value. The scenario supplies it; null runs
+    /// the product at its own default.
     /// </summary>
-    public int? EfSearch { get; init; }
+    public SearchEffort? Effort { get; init; }
+
+    /// <summary>
+    /// Optional metadata filter. A filtered search returns only documents whose field equals the value.
+    /// </summary>
+    public VectorFilter? Filter { get; init; }
 
     /// <summary>
     /// Builds the RQL embedding selector based on quantization type.
@@ -163,11 +168,8 @@ public class VectorSearchOperation : OperationBase
     public string ToRqlQuery()
     {
         var embeddingSelector = GetEmbeddingSelector();
-        // When efSearch is supplied, call vector.search with the explicit
-        // (minSimilarity, numberOfCandidates) overload so the server uses
-        // the bench-controlled ef instead of the server default.
-        string searchClause = EfSearch.HasValue
-            ? $"vector.search({embeddingSelector}, $vector, 0.0, $efSearch)"
+        string searchClause = Effort != null
+            ? $"vector.search({embeddingSelector}, $vector, 0.0, ${RavenDbEffortParameter()})"
             : $"vector.search({embeddingSelector}, $vector)";
 
         if (UseExactSearch)
@@ -176,11 +178,85 @@ public class VectorSearchOperation : OperationBase
         var whereClause = searchClause;
         if (MinimumSimilarity > 0)
             whereClause += " >= $minSimilarity";
+        if (Filter != null)
+            whereClause += $" and {Filter.Field} = $filterValue";
 
         var indexName = ExpectedIndex ?? VectorIndexNaming.GetIndexName("Words", Quantization, "");
 
         return $"from index '{indexName}' where {whereClause}";
     }
+
+    /// <summary>
+    /// The RQL parameter name that carries the effort. Throws when the effort names another product's knob.
+    /// </summary>
+    public string RavenDbEffortParameter() => Effort?.Knob == SearchEffort.RavenDbKnob
+        ? SearchEffort.RavenDbKnob
+        : throw new NotSupportedException($"RavenDB has no search-effort knob '{Effort?.Knob}'; its knob is '{SearchEffort.RavenDbKnob}'.");
+}
+
+/// <summary>
+/// The search effort of one product, named by the product's own knob.
+/// </summary>
+public sealed record SearchEffort(string Knob, int Value)
+{
+    /// <summary>
+    /// The numberOfCandidates argument of RavenDB's vector.search.
+    /// </summary>
+    public const string RavenDbKnob = "numberOfCandidates";
+
+    public static SearchEffort RavenDb(int value) => new(RavenDbKnob, value);
+}
+
+/// <summary>
+/// An equality filter on one metadata field. The field name is part of the query text, so it
+/// must be a plain identifier; the value always travels as a query parameter.
+/// </summary>
+public sealed record VectorFilter
+{
+    public string Field { get; }
+    public string Value { get; }
+
+    public VectorFilter(string field, string value)
+    {
+        if (System.Text.RegularExpressions.Regex.IsMatch(field ?? "", "^[A-Za-z_][A-Za-z0-9_]*$") == false)
+            throw new ArgumentException($"Filter field '{field}' is not a plain identifier.", nameof(field));
+        Field = field!;
+        Value = value ?? throw new ArgumentNullException(nameof(value));
+    }
+}
+
+/// <summary>
+/// The distance a vector set is defined under. Angular sets are cosine.
+/// </summary>
+public enum VectorMetric
+{
+    Cosine,
+    L2,
+    Dot
+}
+
+/// <summary>
+/// Thrown before any load when a target cannot search under the metric a vector set is defined with.
+/// </summary>
+public sealed class UnsupportedVectorMetricException(string target, VectorMetric metric)
+    : NotSupportedException($"Target '{target}' cannot serve vector metric '{metric}'; the run is refused before load.")
+{
+    public string Target { get; } = target;
+    public VectorMetric Metric { get; } = metric;
+
+    public static void ThrowIfUnsupported(string target, IReadOnlySet<VectorMetric> supported, VectorMetric metric)
+    {
+        if (supported.Contains(metric) == false)
+            throw new UnsupportedVectorMetricException(target, metric);
+    }
+}
+
+public static class RavenDbVectorMetrics
+{
+    /// <summary>
+    /// RavenDB vector search ranks float32 and quantized embeddings by cosine similarity only.
+    /// </summary>
+    public static readonly IReadOnlySet<VectorMetric> Supported = new HashSet<VectorMetric> { VectorMetric.Cosine };
 }
 
 /// <summary>
