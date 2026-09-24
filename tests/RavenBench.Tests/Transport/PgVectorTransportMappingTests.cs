@@ -65,4 +65,23 @@ public class PgVectorTransportMappingTests
 
         PgVectorTransport.RequireNoIndex(["Limit", "  ->  Sort", "        ->  Seq Scan on vectors"], PgVectorTransport.IndexName);
     }
+
+    [Fact]
+    public void Parity_Accepts_A_Differently_Broken_Tie_And_Rejects_A_Farther_Neighbour()
+    {
+        var byId = new Dictionary<string, float[]>
+        {
+            ["a"] = [1f, 0f],
+            ["b"] = [0f, 1f],
+            ["c"] = [0f, -1f],
+            ["d"] = [-1f, 0f]
+        };
+        float[] query = [1f, 0f];
+
+        // b and c tie at cosine distance 1.
+        Assert.True(VectorParityCheck.Agrees(query, ["a", "b"], ["a", "c"], byId));
+        Assert.False(VectorParityCheck.Agrees(query, ["a", "b"], ["a", "d"], byId));
+        Assert.False(VectorParityCheck.Agrees(query, ["a", "b"], ["a"], byId));
+        Assert.False(VectorParityCheck.Agrees(query, ["a", "b"], ["a", "a"], byId));
+    }
 }

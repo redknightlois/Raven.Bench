@@ -3,6 +3,7 @@ using System.Net;
 using RavenBench.Core;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Ycsb;
+using RavenBench.Dataset.Vectors;
 using RavenBench.Ycsb;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -43,6 +44,22 @@ public sealed class ParitySettings : CommandSettings
     [Description("The seed the sample documents are generated from.")]
     public int Seed { get; init; } = 42;
 
+    [CommandOption("--vector")]
+    [Description("Runs the vector check instead of the document check: over a seeded sample, the exact search of RavenDB and pgvector must return the brute-force truth.")]
+    public bool Vector { get; init; }
+
+    [CommandOption("--vector-base")]
+    [Description("How many base vectors the vector check loads.")]
+    public int VectorBase { get; init; } = VectorParityCheck.DefaultBaseCount;
+
+    [CommandOption("--vector-queries")]
+    [Description("How many queries the vector check compares.")]
+    public int VectorQueries { get; init; } = VectorParityCheck.DefaultQueryCount;
+
+    [CommandOption("--vector-dimensions")]
+    [Description("The dimensions of the vector check's sample.")]
+    public int VectorDimensions { get; init; } = VectorParityCheck.DefaultDimensions;
+
     [CommandOption("--doc-size")]
     [Description("The requested size of each sample document.")]
     public string DocumentSize { get; init; } = "1KB";
@@ -57,8 +74,11 @@ public sealed class ParityCommand : AsyncCommand<ParitySettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, ParitySettings settings)
     {
-        var documentSize = CliParsing.ParseSize(settings.DocumentSize);
         var database = Required(settings.Database, "--database");
+        if (settings.Vector)
+            return await RunVectorAsync(settings, database);
+
+        var documentSize = CliParsing.ParseSize(settings.DocumentSize);
 
         // The first product is the reference, so RavenDB over raw HTTP comes first.
         using var ravendb = new RawHttpTransport(Required(settings.RavenDbUrl, "--ravendb-url"), database, CompressionMode.Identity, HttpVersion.Version11);
@@ -86,6 +106,49 @@ public sealed class ParityCommand : AsyncCommand<ParitySettings>
         Print(report);
 
         return report.ExitCode;
+    }
+
+    /// <summary>
+    /// The vector check. RavenDB loads into its own throwaway database, created and deleted by the
+    /// check; pgvector needs a database without a vector load and drops its sample table afterwards.
+    /// </summary>
+    private static async Task<int> RunVectorAsync(ParitySettings settings, string database)
+    {
+        var postgreSqlDatabase = string.IsNullOrWhiteSpace(settings.PostgreSqlDatabase) ? database : settings.PostgreSqlDatabase;
+        using var pgvector = new PgVectorTransport(Required(settings.PostgreSqlUrl, "--postgresql-url"), postgreSqlDatabase, maxConcurrency: 1,
+            VectorParityCheck.Metric, settings.VectorDimensions);
+        var products = new[]
+        {
+            VectorParityCheck.RavenDb(Required(settings.RavenDbUrl, "--ravendb-url"), database + "-vector-parity", settings.VectorDimensions),
+            VectorParityCheck.PgVector(pgvector)
+        };
+
+        var check = new VectorParityCheck(settings.Seed, settings.VectorBase, settings.VectorQueries, settings.VectorDimensions, VectorParityCheck.DefaultK);
+        var report = await check.RunAsync(products, CancellationToken.None);
+        Print(report);
+        return report.ExitCode;
+    }
+
+    /// <summary>Prints one row per product, and every query that failed by index.</summary>
+    internal static void Print(VectorParityReport report)
+    {
+        AnsiConsole.MarkupLine($"Vector parity over {report.BaseCount} base vectors, {report.QueryCount} queries, {report.Dimensions} dimensions, k={report.K}, metric {report.Metric}");
+
+        var table = new Table();
+        table.AddColumn("Product");
+        table.AddColumn("Compared");
+        table.AddColumn("Result");
+        foreach (var result in report.Results)
+        {
+            var outcome = result.Failure is not null
+                ? $"[red]failed[/] {Markup.Escape(result.Failure)}"
+                : result.Agreed
+                    ? "[green]exact search matches the brute-force truth[/]"
+                    : $"[red]{result.Mismatches.Count} queries differ[/]: {string.Join(", ", result.Mismatches.Select(m => m.Query))}";
+            table.AddRow(Markup.Escape(result.Product), result.Compared.ToString(), outcome);
+        }
+
+        AnsiConsole.Write(table);
     }
 
     /// <summary>Prints every pair, one row per operation and product, agreements included.</summary>
