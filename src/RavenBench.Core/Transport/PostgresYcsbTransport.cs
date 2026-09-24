@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using Apex.PgClient;
 using Apex.SqlClient;
 using RavenBench.Core.Workload;
@@ -65,7 +64,7 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
     private readonly int _maxConcurrency;
     private readonly Lazy<Task> _ready;
     private PgConnection? _setup;
-    private Channel<MeasuredConnection>? _measured;
+    private PgConnectionSet<MeasuredConnection>? _measured;
     private string _productName = string.Empty;
     private string _serverVersion = string.Empty;
     private bool _disposed;
@@ -242,21 +241,8 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
     {
         ArgumentNullException.ThrowIfNull(body);
 
-        var slot = await RentAsync(CancellationToken.None).ConfigureAwait(false);
-        var healthy = true;
-        try
-        {
-            return await body(slot.Connection).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            healthy = false;
-            throw;
-        }
-        finally
-        {
-            await ReturnAsync(slot, healthy).ConfigureAwait(false);
-        }
+        await _ready.Value.ConfigureAwait(false);
+        return await _measured!.UseAsync(slot => body(slot.Connection), CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -274,12 +260,9 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
 
     private async Task InitializeAsync()
     {
-        var opened = new List<MeasuredConnection>(_maxConcurrency);
+        _setup = await PgConnectionSet<MeasuredConnection>.ConnectAsync(_options).ConfigureAwait(false);
         try
         {
-            _setup = await PgClient.ConnectAsync(_options, CancellationToken.None).ConfigureAwait(false);
-            await ApplyDurabilityAsync(_setup).ConfigureAwait(false);
-
             _productName = RequireMetadata(_setup.DatabaseMetadata.ProductName, "product name");
             _serverVersion = RequireMetadata(_setup.DatabaseMetadata.FullVersion, "version");
 
@@ -287,76 +270,44 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
             // prepared. EnsureDatabaseExistsAsync re-runs the same idempotent create.
             await _setup.ExecuteAsync(CreateTableSql, CancellationToken.None).ConfigureAwait(false);
 
-            var channel = Channel.CreateBounded<MeasuredConnection>(_maxConcurrency);
-            for (int i = 0; i < _maxConcurrency; i++)
-            {
-                var slot = await OpenMeasuredConnectionAsync().ConfigureAwait(false);
-                opened.Add(slot);
-                channel.Writer.TryWrite(slot);
-            }
-
-            _measured = channel;
+            _measured = await PgConnectionSet<MeasuredConnection>.OpenAsync(_options, _maxConcurrency, PrepareMeasuredConnectionAsync).ConfigureAwait(false);
         }
         catch
         {
-            foreach (var slot in opened)
-                await slot.DisposeAsync().ConfigureAwait(false);
-            if (_setup is not null)
-                await _setup.DisposeAsync().ConfigureAwait(false);
+            await _setup.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }
 
     /// <summary>
-    /// Opens one plain connection and prepares the three fixed statements on it. The statements are
-    /// prepared once per connection and reused, because the preview driver's automatic cache
-    /// mis-reads the server's ParameterDescription against PostgreSQL 17.
+    /// Prepares the three fixed statements on one connection. The statements are prepared once per
+    /// connection and reused, because the preview driver's automatic cache mis-reads the server's
+    /// ParameterDescription against PostgreSQL 17.
     /// </summary>
-    private async Task<MeasuredConnection> OpenMeasuredConnectionAsync()
+    private static async Task<MeasuredConnection> PrepareMeasuredConnectionAsync(PgConnection connection)
     {
-        var connection = await PgClient.ConnectAsync(_options, CancellationToken.None).ConfigureAwait(false);
-        try
-        {
-            await ApplyDurabilityAsync(connection).ConfigureAwait(false);
-            var read = await connection.PrepareAsync(ReadSql, CancellationToken.None).ConfigureAwait(false);
-            var insert = await connection.PrepareAsync(InsertSql, CancellationToken.None).ConfigureAwait(false);
-            var update = await connection.PrepareAsync(UpdateSql, CancellationToken.None).ConfigureAwait(false);
-            return new MeasuredConnection(connection, read, insert, update);
-        }
-        catch
-        {
-            await connection.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
+        var read = await connection.PrepareAsync(ReadSql, CancellationToken.None).ConfigureAwait(false);
+        var insert = await connection.PrepareAsync(InsertSql, CancellationToken.None).ConfigureAwait(false);
+        var update = await connection.PrepareAsync(UpdateSql, CancellationToken.None).ConfigureAwait(false);
+        return new MeasuredConnection(connection, read, insert, update);
     }
 
     private async Task<TransportResult> ReadAsync(ReadOperation read, CancellationToken ct)
     {
-        var slot = await RentAsync(ct).ConfigureAwait(false);
-        var healthy = true;
-        try
+        await _ready.Value.ConfigureAwait(false);
+        return await _measured!.UseAsync(async slot =>
         {
             var rows = await slot.Read.QueryAsync(SqlParameters.Create(read.Id), ct).ConfigureAwait(false);
             return rows.Count == 0
                 ? new TransportResult(0, 0, $"Document '{read.Id}' was not found.")
                 : new TransportResult(0, 0);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            healthy = false;
-            throw;
-        }
-        finally
-        {
-            await ReturnAsync(slot, healthy).ConfigureAwait(false);
-        }
+        }, ct).ConfigureAwait(false);
     }
 
     private async Task<TransportResult> InsertAsync(InsertOperation<string> insert, CancellationToken ct)
     {
-        var slot = await RentAsync(ct).ConfigureAwait(false);
-        var healthy = true;
-        try
+        await _ready.Value.ConfigureAwait(false);
+        return await _measured!.UseAsync(async slot =>
         {
             var result = await slot.Insert
                 .ExecuteAsync(SqlParameters.Create(insert.Id, insert.Payload), ct)
@@ -365,23 +316,13 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
             return result.AffectedRows == 1
                 ? new TransportResult(0, 0)
                 : new TransportResult(0, 0, $"Insert of '{insert.Id}' affected {result.AffectedRows} rows.");
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            healthy = false;
-            throw;
-        }
-        finally
-        {
-            await ReturnAsync(slot, healthy).ConfigureAwait(false);
-        }
+        }, ct).ConfigureAwait(false);
     }
 
     private async Task<TransportResult> UpdateFieldAsync(UpdateFieldOperation update, CancellationToken ct)
     {
-        var slot = await RentAsync(ct).ConfigureAwait(false);
-        var healthy = true;
-        try
+        await _ready.Value.ConfigureAwait(false);
+        return await _measured!.UseAsync(async slot =>
         {
             var result = await slot.Update
                 .ExecuteAsync(SqlParameters.Create(update.Id, update.FieldName, update.Value), ct)
@@ -392,23 +333,13 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
             return result.AffectedRows == 0
                 ? new TransportResult(0, 0, $"Document '{update.Id}' was not found for field update.")
                 : new TransportResult(0, 0);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            healthy = false;
-            throw;
-        }
-        finally
-        {
-            await ReturnAsync(slot, healthy).ConfigureAwait(false);
-        }
+        }, ct).ConfigureAwait(false);
     }
 
     private async Task<TransportResult> BulkInsertAsync(BulkInsertOperation<string> bulk, CancellationToken ct)
     {
-        var slot = await RentAsync(ct).ConfigureAwait(false);
-        var healthy = true;
-        try
+        await _ready.Value.ConfigureAwait(false);
+        return await _measured!.UseAsync(async slot =>
         {
             await using var importer = await slot.Connection
                 .BeginBinaryImportAsync(BulkCopySql, ct)
@@ -423,53 +354,8 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
 
             await importer.CompleteAsync(ct).ConfigureAwait(false);
             return new TransportResult(0, 0);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            healthy = false;
-            throw;
-        }
-        finally
-        {
-            await ReturnAsync(slot, healthy).ConfigureAwait(false);
-        }
+        }, ct).ConfigureAwait(false);
     }
-
-    private async Task<MeasuredConnection> RentAsync(CancellationToken ct)
-    {
-        await _ready.Value.ConfigureAwait(false);
-        return await _measured!.Reader.ReadAsync(ct).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Returns a healthy connection to the set. A connection an operation failed on is disposed and
-    /// replaced, because the driver closes it on a protocol-level error and the next operation on
-    /// it would otherwise fail for the wrong reason; if the server is gone, the set is closed so a
-    /// later rent fails fast instead of blocking on an empty set.
-    /// </summary>
-    private async Task ReturnAsync(MeasuredConnection slot, bool healthy)
-    {
-        if (healthy)
-        {
-            _measured!.Writer.TryWrite(slot);
-            return;
-        }
-
-        // Disposing a connection the driver already closed can itself throw; that must not replace
-        // the operation's own error with the teardown failure.
-        try { await slot.DisposeAsync().ConfigureAwait(false); } catch (Exception) { }
-        try
-        {
-            _measured!.Writer.TryWrite(await OpenMeasuredConnectionAsync().ConfigureAwait(false));
-        }
-        catch (Exception ex)
-        {
-            _measured!.Writer.TryComplete(ex);
-        }
-    }
-
-    private static Task ApplyDurabilityAsync(PgConnection connection) =>
-        connection.ExecuteAsync(SetDurabilitySql, CancellationToken.None).AsTask();
 
     private static string RequireMetadata(string value, string what) =>
         string.IsNullOrWhiteSpace(value) || string.Equals(value, "unknown", StringComparison.OrdinalIgnoreCase)
@@ -495,10 +381,7 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
     private async ValueTask DisposeConnectionsAsync()
     {
         if (_measured is not null)
-        {
-            while (_measured.Reader.TryRead(out var slot))
-                await slot.DisposeAsync().ConfigureAwait(false);
-        }
+            await _measured.DisposeAsync().ConfigureAwait(false);
 
         if (_setup is not null)
             await _setup.DisposeAsync().ConfigureAwait(false);
