@@ -1,0 +1,42 @@
+{
+  "Dataset": "cohere-768-1m",
+  "VectorCountCap": null,
+  "DataDirectory": "%HOME%/raven-bench-data",
+  "Seed": 42,
+  "QueryCount": 1000,
+  "K": 10,
+  "TruthDepth": 100,
+  "RecallThreshold": 0.95,
+  "Efforts": {
+    "ravendb": {
+      "Knob": "numberOfCandidates",
+      "Low": 10,
+      "Default": 16,
+      "High": 256
+    },
+    "pgvector": {
+      "Knob": "hnsw.ef_search",
+      "Low": 10,
+      "Default": 40,
+      "High": 400
+    }
+  },
+  "Readers": 1000,
+  "FilterSelectivity": 0.05,
+  "InsertRate": 500,
+  "UnderInsertQueryRate": 100,
+  "Warmup": "10s",
+  "Duration": "30s",
+  "CrossCheck": {
+    "Dataset": "glove-100-angular",
+    "PublishedRecall": 0.96252,
+    "Source": "https://ann-benchmarks.com/glove-100-angular_10_angular.html",
+    "PublishedSettings": "PGVector(lists=1000, probes=100), the pgvector series of the glove-100-angular k=10 page; the page publishes IVFFlat points only",
+    "PublishedIndexKind": "ivfflat",
+    "PublishedBuildOptions": { "lists": 1000 },
+    "PublishedSearchValue": 100,
+    "Tolerance": 0.02,
+    "Evidence": "evidence/ann-benchmarks-glove-100-angular-pgvector.txt",
+    "EvidenceSha256": "b5d5ae6900ec1834195b3f89f5991b308d209d850a129d4b43b2b2d17b9f742b"
+  }
+}

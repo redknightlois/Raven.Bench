@@ -1,16 +1,14 @@
-# Compose file for the vector benchmark's containerized targets. Round one runs every product at its
-# shipped defaults plus the parity settings the harness applies per session, so no service here sets
-# a server option of its own (no shared_buffers, maintenance_work_mem or parallel worker count). The
-# result records the settings in force as the server reports them.
-#
-# The pgvector image is pinned to a release tag that names both the pgvector and the PostgreSQL
-# version. It publishes 5432 like the ycsb postgresql service, so only one of them runs at a time.
+# No service sets a performance option of its own; the result records the settings in force as the
+# server reports them. The pgvector service publishes 5432 like the ycsb postgresql service, so only
+# one of them runs at a time.
 name: ravenbench-vector
 
 services:
   pgvector:
     image: pgvector/pgvector:0.8.1-pg17
     container_name: vector-pgvector
+    # Capacity, not tuning: the pool holds one connection per reader, and the scenario runs 1000 readers.
+    command: ["postgres", "-c", "max_connections=1100"]
     ports:
       - "5432:5432"
     environment:
@@ -21,5 +19,24 @@ services:
       - vector-pgvector-data:/var/lib/postgresql/data
     restart: unless-stopped
 
+  ravendb-7:
+    image: ravendb/ravendb:7.2.6
+    container_name: vector-ravendb-7
+    ports:
+      - "${RAVENDB7_PORT:-8087}:${RAVENDB7_PORT:-8087}"
+      - "${RAVENDB7_TCP_PORT:-38887}:${RAVENDB7_TCP_PORT:-38887}"
+    environment:
+      RAVEN_Setup_Mode: None
+      RAVEN_License_Eula_Accepted: "true"
+      RAVEN_Security_UnsecuredAccessAllowed: PublicNetwork
+      RAVEN_ServerUrl: "http://0.0.0.0:${RAVENDB7_PORT:-8087}"
+      RAVEN_PublicServerUrl: "http://${RAVENDB_HOST:-localhost}:${RAVENDB7_PORT:-8087}"
+      RAVEN_ServerUrl_Tcp: "tcp://0.0.0.0:${RAVENDB7_TCP_PORT:-38887}"
+      RAVEN_PublicServerUrl_Tcp: "tcp://${RAVENDB_HOST:-localhost}:${RAVENDB7_TCP_PORT:-38887}"
+    volumes:
+      - vector-ravendb7-data:/var/lib/ravendb/data
+    restart: unless-stopped
+
 volumes:
   vector-pgvector-data:
+  vector-ravendb7-data:

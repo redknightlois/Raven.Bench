@@ -76,5 +76,8 @@ internal static class Program
         cfg.AddCommand<YcsbCrossCheckCommand>("ycsb-crosscheck")
             .WithDescription("Run ycsb workload C against PostgreSQL through raw (Apex.PgClient) and client (Npgsql) and compare the rows against the run-to-run noise.")
             .WithExample("ycsb-crosscheck", "--target", "postgresql", "--url", "postgresql://bench:bench@localhost:5432/bench", "--database", "ycsb_crosscheck", "--scenario", "benchmarks/ycsb/scenario.json");
+        cfg.AddCommand<VectorCommand>("vector")
+            .WithDescription("Run the vector scenario's load, recall, readers, filtered and under-insert runs against one target, one result per run.")
+            .WithExample("vector", "--target", "pgvector", "--url", "postgresql://bench:bench@localhost:5432/bench", "--database", "vector_run", "--scenario", "benchmarks/vector/scenario.json");
     }
 }
