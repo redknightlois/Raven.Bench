@@ -137,6 +137,22 @@ public class PgVectorTransportIntegrationTests
             Assert.Equal(truth[q], await transport.ExactSearchAsync(queries[q], K, null));
     });
 
+    [RequiresPostgreSqlFact]
+    public async Task The_Vector_Parity_Check_Passes_For_PgVector()
+    {
+        await using var schema = await PgTestSchema.CreateAsync();
+        using var transport = new PgVectorTransport(schema.ConnectionString + ",public", PostgreSqlTestEndpoints.Database, 1, VectorParityCheck.Metric, 16);
+
+        var report = await new VectorParityCheck(seed: 5, baseCount: 200, queryCount: 20, dimensions: 16, k: 10)
+            .RunAsync([VectorParityCheck.PgVector(transport)], CancellationToken.None);
+
+        var result = Assert.Single(report.Results);
+        Assert.True(result.Agreed, result.Failure ?? string.Join(",", result.Mismatches.Select(m => m.Query)));
+        Assert.Equal(20, result.Compared);
+        Assert.Equal(0, await transport.ReadWithWorkerAsync(async (connection, _) =>
+            (await connection.QueryAsync("SELECT count(*)::int8 FROM pg_tables WHERE tablename = 'vectors' AND schemaname = current_schema()", CancellationToken.None))[0].Get<long>(0)));
+    }
+
     private static async Task WithLoadedSet(Func<PgVectorTransport, List<BaseVector>, Task> body)
     {
         await WithTransport(4, async transport =>
