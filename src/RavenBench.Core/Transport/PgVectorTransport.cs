@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Apex.PgClient;
 using Apex.SqlClient;
 using RavenBench.Core.Workload;
@@ -52,15 +53,24 @@ public sealed class ExactSearchUsedIndexException(string indexName, string plan)
     public string IndexName { get; } = indexName;
 }
 
+/// <summary>Thrown when the server has fewer free connections than the pool needs, one per concurrent worker.</summary>
+public sealed class PgVectorConnectionLimitException(int needed, long free, long maxConnections)
+    : InvalidOperationException($"The pool needs {needed} connections, one per concurrent worker, and the server has {free} free under max_connections={maxConnections}. Raise max_connections on the server or lower the concurrency.")
+{
+    public int Needed { get; } = needed;
+    public long Free { get; } = free;
+}
+
 /// <summary>
 /// Drives vector search against PostgreSQL with pgvector through Apex.PgClient. It shares the
 /// PostgreSQL connect path, durability parity and connection set with the ycsb transport. The
 /// <c>vector</c> type travels in binary through <see cref="PgVectorCodec"/>, registered for the oid
 /// the server assigned to the extension. The pinned driver's prepared statements send parameters as
 /// text only, so each search runs as one typed extended-protocol exchange with binary parameters;
-/// each worker connection holds its fixed statement shape and its applied <c>hnsw.ef_search</c>.
+/// each worker connection holds its fixed statement shape and the search settings it applied. The
+/// run database is created through the connection string's own database when it does not exist.
 /// </summary>
-public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
+public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageSize
 {
     /// <summary>Scenario target name for pgvector.</summary>
     public const string Target = "pgvector";
@@ -68,9 +78,17 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
     public const string TableName = "vectors";
     public const string IndexName = "vectors_embedding_hnsw";
 
-    /// <summary>The settings the result records as the server reports them.</summary>
+    /// <summary>The settings the result records as the server reports them; one the server does not know is recorded as absent.</summary>
     public static readonly IReadOnlyList<string> RecordedSettings =
-        [PostgresYcsbTransport.DurabilitySetting, "shared_buffers", "maintenance_work_mem", "max_parallel_maintenance_workers", "work_mem", SearchEffort.PgVectorKnob];
+        [PostgresYcsbTransport.DurabilitySetting, "max_connections", "shared_buffers", "maintenance_work_mem", "max_parallel_maintenance_workers", "work_mem",
+         SearchEffort.PgVectorKnob, "hnsw.iterative_scan", "hnsw.max_scan_tuples"];
+
+    /// <summary>The index kinds a replacement index may use, each with the session knob that sets its search effort.</summary>
+    public static readonly IReadOnlyDictionary<string, string> SearchKnobs = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["hnsw"] = SearchEffort.PgVectorKnob,
+        ["ivfflat"] = "ivfflat.probes"
+    };
 
     internal const string CreateExtensionSql = "CREATE EXTENSION IF NOT EXISTS vector";
     /// <summary>
@@ -83,13 +101,13 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
     internal const string InsertSql = "INSERT INTO " + TableName + " (id, embedding, label) VALUES ($1, $2, $3)";
     internal const string PutSql = InsertSql + " ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding, label = EXCLUDED.label";
     internal const string CountSql = "SELECT count(*)::int8 FROM " + TableName + " WHERE starts_with(id, $1)";
-    internal const string ApplyEffortSql = "SELECT set_config('" + SearchEffort.PgVectorKnob + "', $1, false)";
-    internal const string ResetEffortSql = "RESET " + SearchEffort.PgVectorKnob;
+    internal const string ApplyEffortSql = "SELECT set_config($1, $2, false)";
     internal const string ShowEffortSql = "SHOW " + SearchEffort.PgVectorKnob;
     /// <summary>The definition and options of the named index as the search path resolves it, never a same-named index in another schema.</summary>
     internal const string IndexDefinitionSql = "SELECT pg_get_indexdef(c.oid), coalesce(array_to_string(c.reloptions, ','), '') FROM pg_class c WHERE c.oid = to_regclass($1)";
     internal const string StorageSizeSql = "SELECT pg_total_relation_size('" + TableName + "')::int8";
 
+    private readonly PgConnectOptions _maintenanceOptions;
     private readonly PgConnectOptions _baseOptions;
     private readonly int _maxConcurrency;
     private readonly VectorMetric _metric;
@@ -117,6 +135,7 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
             throw new ArgumentOutOfRangeException(nameof(dimensions), dimensions, $"pgvector stores 1 to {PgVectorCodec.MaxDimensions} dimensions.");
 
         RecordedEndpoint = ConnectionStringRedaction.Redact(connectionString);
+        _maintenanceOptions = PgConnectOptions.Parse(connectionString) with { CachePreparedStatements = false };
         _baseOptions = PostgresYcsbTransport.ResolveOptions(connectionString, databaseName);
         _maxConcurrency = maxConcurrency;
         _metric = metric;
@@ -200,6 +219,26 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
         await _setup.ExecuteAsync($"ANALYZE {TableName}", ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Replaces the HNSW index with one of <paramref name="kind"/> built with <paramref name="options"/>,
+    /// and returns its definition as <c>pg_get_indexdef</c> reports it.
+    /// </summary>
+    public async Task<string> ReplaceIndexAsync(string kind, IReadOnlyDictionary<string, int> options, CancellationToken ct = default)
+    {
+        if (SearchKnobs.ContainsKey(kind) == false)
+            throw new ArgumentException($"Index kind '{kind}' is not one of {string.Join(", ", SearchKnobs.Keys)}.", nameof(kind));
+        if (options.Keys.FirstOrDefault(key => PlainName().IsMatch(key) == false) is { } bad)
+            throw new ArgumentException($"Index option '{bad}' is not a plain option name.", nameof(options));
+
+        await _ready.Value.ConfigureAwait(false);
+        var name = $"vectors_embedding_{kind}";
+        var with = options.Count == 0 ? "" : $" WITH ({string.Join(", ", options.Select(o => $"{o.Key} = {o.Value.ToString(CultureInfo.InvariantCulture)}"))})";
+        await _setup!.ExecuteAsync($"DROP INDEX IF EXISTS {IndexName}", ct).ConfigureAwait(false);
+        await _setup.ExecuteAsync($"CREATE INDEX {name} ON {TableName} USING {kind} (embedding {PgVectorMetrics.OperatorClass(_metric)}){with}", ct).ConfigureAwait(false);
+        await _setup.ExecuteAsync($"ANALYZE {TableName}", ct).ConfigureAwait(false);
+        return (await _setup.QueryAsync(IndexDefinitionSql, SqlParameters.Create(name), ct).ConfigureAwait(false))[0].Get<string>(0);
+    }
+
     /// <summary>Drops the table and its index; a check that loaded a sample leaves nothing behind.</summary>
     public async Task DropTableAsync(CancellationToken ct = default)
     {
@@ -218,7 +257,7 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
 
         var settings = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var name in RecordedSettings)
-            settings[name] = (await _setup.QueryAsync($"SHOW {name}", ct).ConfigureAwait(false))[0].Get<string>(0);
+            settings[name] = (await _setup.QueryAsync("SELECT coalesce(current_setting($1, true), 'absent')", SqlParameters.Create(name), ct).ConfigureAwait(false))[0].Get<string>(0);
 
         var options = index[0].Get<string>(1);
         return new PgVectorServerSettings(
@@ -290,6 +329,7 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
 
     private async Task InitializeAsync()
     {
+        await PrepareServerAsync().ConfigureAwait(false);
         uint oid;
         await using (var bootstrap = await PgConnectionSet<SearchSlot>.ConnectAsync(_baseOptions).ConfigureAwait(false))
         {
@@ -322,6 +362,34 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
         }
     }
 
+    /// <summary>
+    /// Through the connection string's own database: refuses a pool the server cannot hold, then
+    /// creates the run database when it does not exist. The workers open eagerly, so the refusal comes
+    /// by name before anything is created rather than mid-open.
+    /// </summary>
+    private async Task PrepareServerAsync()
+    {
+        await using var connection = await PgConnectionSet<SearchSlot>.ConnectAsync(_maintenanceOptions).ConfigureAwait(false);
+        var row = (await connection.QueryAsync(
+            "SELECT current_setting('max_connections')::int8, current_setting('max_connections')::int8 - current_setting('superuser_reserved_connections')::int8"
+            + " - coalesce(current_setting('reserved_connections', true)::int8, 0) - (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend')",
+            CancellationToken.None).ConfigureAwait(false))[0];
+        var free = row.Get<long>(1);
+        if (free < _maxConcurrency)
+            throw new PgVectorConnectionLimitException(_maxConcurrency, free, row.Get<long>(0));
+
+        if (string.Equals(_maintenanceOptions.Database, _baseOptions.Database, StringComparison.Ordinal))
+            return;
+        if (PlainName().IsMatch(_baseOptions.Database) == false)
+            throw new ArgumentException($"Database name '{_baseOptions.Database}' is not a plain identifier, so the run cannot create it.");
+        var exists = await connection.QueryAsync("SELECT 1 FROM pg_database WHERE datname = $1", SqlParameters.Create(_baseOptions.Database), CancellationToken.None).ConfigureAwait(false);
+        if (exists.Count == 0)
+            await connection.ExecuteAsync($"CREATE DATABASE \"{_baseOptions.Database}\"", CancellationToken.None).ConfigureAwait(false);
+    }
+
+    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
+    private static partial Regex PlainName();
+
     // An existing table built for another set would otherwise take a load of the wrong width.
     private async Task RequireColumnDimensionsAsync(PgConnection connection)
     {
@@ -339,15 +407,15 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
             throw new NotSupportedException($"{nameof(PgVectorTransport)} serves exact search through {nameof(ExactSearchAsync)}, which proves the plan skips the index.");
         if (search.Quantization != VectorQuantization.None)
             throw new NotSupportedException($"{nameof(PgVectorTransport)} stores full float32 vectors; quantization {search.Quantization} is a separate row.");
-        if (search.Effort is { } effort && effort.Knob != SearchEffort.PgVectorKnob)
-            throw new NotSupportedException($"pgvector has no search-effort knob '{effort.Knob}'; its knob is '{SearchEffort.PgVectorKnob}'.");
+        if (search.Effort is { } effort && SearchKnobs.Values.Contains(effort.Knob) == false)
+            throw new NotSupportedException($"pgvector has no search-effort knob '{effort.Knob}'; its knobs are {string.Join(", ", SearchKnobs.Values.Select(k => $"'{k}'"))}.");
 
         await _ready.Value.ConfigureAwait(false);
         var sql = SearchSql(_metric, search.Filter);
         var parameters = SearchParameters(search.QueryVector, search.TopK, search.Filter);
         return await _workers!.UseAsync(async slot =>
         {
-            var inForce = await slot.ApplyEffortAsync(search.Effort?.Value, ct).ConfigureAwait(false);
+            var inForce = await slot.ApplyEffortAsync(search.Effort, ct).ConfigureAwait(false);
             var rows = await slot.Connection.QueryTypedAsync(sql, parameters, ct).ConfigureAwait(false);
             var ids = rows.Select(r => r.Get<string>(0)).ToArray();
             return new TransportResult(0, 0, resultCount: ids.Length) { NeighborIds = ids, EffortInForce = inForce };
@@ -414,38 +482,37 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
             : PgParameter.Create(PgType.Text, row.Label, PgParameterFormat.Binary));
 
     /// <summary>
-    /// One worker connection and the <c>hnsw.ef_search</c> it last applied. A slot is used by one
-    /// operation at a time, so its state needs no lock.
+    /// One worker connection and the search settings it last applied. A slot is used by one operation
+    /// at a time, so its state needs no lock.
     /// </summary>
     private sealed class SearchSlot(PgConnection connection) : IAsyncDisposable
     {
-        private int? _applied;
+        private readonly Dictionary<string, int> _applied = new(StringComparer.Ordinal);
         private int? _serverValue;
 
         public PgConnection Connection { get; } = connection;
 
         /// <summary>
-        /// Sets the session value when the operation carries one; otherwise restores the server value
-        /// and reads it back. Returns the value the next query runs under.
+        /// Sets the session value when the operation carries one; otherwise restores the server values
+        /// and reads <c>hnsw.ef_search</c> back. Returns the effort the next query runs under.
         /// </summary>
-        public async Task<SearchEffort> ApplyEffortAsync(int? value, CancellationToken ct)
+        public async Task<SearchEffort> ApplyEffortAsync(SearchEffort? effort, CancellationToken ct)
         {
-            if (value is { } requested)
+            if (effort is { } requested)
             {
-                if (_applied != requested)
+                if (_applied.TryGetValue(requested.Knob, out var current) == false || current != requested.Value)
                 {
-                    await Connection.QueryTypedAsync(ApplyEffortSql,
-                        PgParameters.Create(PgParameter.Create(PgType.Text, requested.ToString(CultureInfo.InvariantCulture), PgParameterFormat.Binary)), ct).ConfigureAwait(false);
-                    _applied = requested;
+                    await Connection.QueryTypedAsync(ApplyEffortSql, PgParameters.Create(
+                        PgParameter.Create(PgType.Text, requested.Knob, PgParameterFormat.Binary),
+                        PgParameter.Create(PgType.Text, requested.Value.ToString(CultureInfo.InvariantCulture), PgParameterFormat.Binary)), ct).ConfigureAwait(false);
+                    _applied[requested.Knob] = requested.Value;
                 }
-                return SearchEffort.PgVector(requested);
+                return requested;
             }
 
-            if (_applied is not null)
-            {
-                await Connection.ExecuteAsync(ResetEffortSql, ct).ConfigureAwait(false);
-                _applied = null;
-            }
+            foreach (var knob in _applied.Keys)
+                await Connection.ExecuteAsync($"RESET {knob}", ct).ConfigureAwait(false);
+            _applied.Clear();
             _serverValue ??= int.Parse((await Connection.QueryAsync(ShowEffortSql, ct).ConfigureAwait(false))[0].Get<string>(0), CultureInfo.InvariantCulture);
             return SearchEffort.PgVector(_serverValue.Value);
         }
