@@ -13,7 +13,7 @@ public sealed record VectorRow(float[] Embedding, string? Label);
 /// written by the harness.
 /// </summary>
 /// <param name="ExtensionVersion">The <c>extversion</c> of the installed extension.</param>
-/// <param name="IndexDefinition">The HNSW index as <c>pg_indexes.indexdef</c> reports it.</param>
+/// <param name="IndexDefinition">The HNSW index as <c>pg_get_indexdef</c> reports it.</param>
 /// <param name="IndexOptions">The index <c>reloptions</c>; empty when the index was built at the vendor defaults.</param>
 /// <param name="ServerSettings">Each recorded setting and the value <c>SHOW</c> returns for it.</param>
 public sealed record PgVectorServerSettings(
@@ -86,6 +86,8 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
     internal const string ApplyEffortSql = "SELECT set_config('" + SearchEffort.PgVectorKnob + "', $1, false)";
     internal const string ResetEffortSql = "RESET " + SearchEffort.PgVectorKnob;
     internal const string ShowEffortSql = "SHOW " + SearchEffort.PgVectorKnob;
+    /// <summary>The definition and options of the named index as the search path resolves it, never a same-named index in another schema.</summary>
+    internal const string IndexDefinitionSql = "SELECT pg_get_indexdef(c.oid), coalesce(array_to_string(c.reloptions, ','), '') FROM pg_class c WHERE c.oid = to_regclass($1)";
     internal const string StorageSizeSql = "SELECT pg_total_relation_size('" + TableName + "')::int8";
 
     private readonly PgConnectOptions _baseOptions;
@@ -210,9 +212,7 @@ public sealed class PgVectorTransport : IYcsbTransport, IReportsStorageSize
     {
         await _ready.Value.ConfigureAwait(false);
         var extension = await _setup!.QueryAsync("SELECT extversion FROM pg_extension WHERE extname = 'vector'", ct).ConfigureAwait(false);
-        var index = await _setup.QueryAsync(
-            "SELECT i.indexdef, coalesce(array_to_string(c.reloptions, ','), '') FROM pg_indexes i JOIN pg_class c ON c.relname = i.indexname WHERE i.indexname = $1",
-            SqlParameters.Create(IndexName), ct).ConfigureAwait(false);
+        var index = await _setup.QueryAsync(IndexDefinitionSql, SqlParameters.Create(IndexName), ct).ConfigureAwait(false);
         if (index.Count == 0)
             throw new InvalidOperationException($"Index '{IndexName}' does not exist; build it before reading the settings.");
 
