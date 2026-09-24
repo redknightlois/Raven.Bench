@@ -163,6 +163,37 @@ public class PgVectorTransportIntegrationTests
         });
     });
 
+    [RequiresPostgreSqlFact]
+    public async Task A_Missing_Run_Database_Is_Created_Through_The_Given_Connection()
+    {
+        var database = "vector_it_" + Guid.NewGuid().ToString("N")[..12];
+        await using var admin = await PgClient.ConnectAsync(PostgreSqlTestEndpoints.ConnectionString, CancellationToken.None);
+        try
+        {
+            using (var transport = new PgVectorTransport(PostgreSqlTestEndpoints.ConnectionString, database, 1, VectorMetric.Cosine, Dimensions))
+            {
+                await transport.EnsureDatabaseExistsAsync(database);
+                Assert.Equal(0, await transport.GetDocumentCountAsync(""));
+            }
+            var rows = await admin.QueryAsync("SELECT count(*)::int8 FROM pg_database WHERE datname = $1", Apex.SqlClient.SqlParameters.Create(database), CancellationToken.None);
+            Assert.Equal(1, rows[0].Get<long>(0));
+        }
+        finally
+        {
+            await admin.ExecuteAsync($"DROP DATABASE IF EXISTS \"{database}\" WITH (FORCE)", CancellationToken.None);
+        }
+    }
+
+    [RequiresPostgreSqlFact]
+    public async Task A_Pool_Larger_Than_The_Free_Connections_Fails_By_Name_Before_Opening()
+    {
+        await using var schema = await PgTestSchema.CreateAsync();
+        using var transport = new PgVectorTransport(schema.ConnectionString + ",public", PostgreSqlTestEndpoints.Database, 100_000, VectorMetric.Cosine, Dimensions);
+        var ex = await Assert.ThrowsAsync<PgVectorConnectionLimitException>(() => transport.EnsureDatabaseExistsAsync(PostgreSqlTestEndpoints.Database));
+        Assert.Equal(100_000, ex.Needed);
+        Assert.Contains("max_connections", ex.Message);
+    }
+
     private static async Task WithLoadedSet(Func<PgVectorTransport, List<BaseVector>, Task> body)
     {
         await WithTransport(4, async transport =>
