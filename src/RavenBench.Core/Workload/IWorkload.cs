@@ -204,7 +204,14 @@ public sealed record SearchEffort(string Knob, int Value)
     /// </summary>
     public const string RavenDbKnob = "numberOfCandidates";
 
+    /// <summary>
+    /// The pgvector session setting that sets the HNSW search candidate list.
+    /// </summary>
+    public const string PgVectorKnob = "hnsw.ef_search";
+
     public static SearchEffort RavenDb(int value) => new(RavenDbKnob, value);
+
+    public static SearchEffort PgVector(int value) => new(PgVectorKnob, value);
 }
 
 /// <summary>

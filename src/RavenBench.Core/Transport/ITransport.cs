@@ -56,6 +56,12 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     /// Ordered document ids a vector search returned, nearest first (populated for vector search).
     /// </summary>
     public IReadOnlyList<string>? NeighborIds { get; init; }
+
+    /// <summary>
+    /// The search effort the product ran the query under, as its own knob and value (populated where
+    /// the product reports it).
+    /// </summary>
+    public SearchEffort? EffortInForce { get; init; }
 }
 
 public readonly struct CalibrationResult(double ttfbMs, double totalMs, long bytesDown, Version httpVersion, bool isSuccess = true, string? errorDetails = null)
