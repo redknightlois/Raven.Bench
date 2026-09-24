@@ -57,6 +57,21 @@ public class QueryEnvelopeTests
         envelope.Should().Be(new QueryEnvelope("outer", 1, null));
     }
 
+    [Fact]
+    public void Ids_Are_Read_In_Order_Only_When_Asked_And_A_Result_Without_One_Throws()
+    {
+        var body = "{\"Results\":[{\"Label\":\"a\",\"@metadata\":{\"@collection\":\"V\",\"@id\":\"v/2\"}},{\"@metadata\":{\"@id\":\"v/1\"}}],\"IsStale\":false}"u8;
+
+        var envelope = QueryEnvelope.Read(body, readIds: true);
+        envelope.Ids.Should().Equal("v/2", "v/1");
+        envelope.ResultCount.Should().Be(2);
+        envelope.IsStale.Should().BeFalse();
+        QueryEnvelope.Read(body).Ids.Should().BeNull();
+
+        var act = () => QueryEnvelope.Read("{\"Results\":[{\"@metadata\":{}}]}"u8.ToArray(), readIds: true);
+        act.Should().Throw<JsonException>().WithMessage("*@metadata.@id*");
+    }
+
     [Theory]
     [InlineData("[]")]
     [InlineData("{\"Results\":[1,2}")]

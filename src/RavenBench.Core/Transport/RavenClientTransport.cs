@@ -308,10 +308,11 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
                             query = query.AddParameter("minSimilarity", vectorOp.MinimumSimilarity);
                         }
 
-                        if (vectorOp.EfSearch.HasValue)
-                        {
-                            query = query.AddParameter("efSearch", vectorOp.EfSearch.Value);
-                        }
+                        if (vectorOp.Effort != null)
+                            query = query.AddParameter(vectorOp.RavenDbEffortParameter(), vectorOp.Effort.Value);
+
+                        if (vectorOp.Filter != null)
+                            query = query.AddParameter("filterValue", vectorOp.Filter.Value);
 
                         var results = await query.Statistics(out var stats).ToListAsync(ct).ConfigureAwait(false);
 
@@ -321,13 +322,25 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
 
                         long bytesIn = EstimateQueryResponseSize(results, stats);
 
+                        var ids = new string[results.Count];
+                        for (int i = 0; i < results.Count; i++)
+                        {
+                            if (results[i].TryGet(Raven.Client.Constants.Documents.Metadata.Key, out BlittableJsonReaderObject metadata) == false
+                                || metadata.TryGet(Raven.Client.Constants.Documents.Metadata.Id, out string id) == false)
+                                throw new InvalidDataException("Vector search result carries no @metadata.@id.");
+                            ids[i] = id;
+                        }
+
                         return new TransportResult(
                             bytesOut: bytesOut,
                             bytesIn: bytesIn,
                             indexName: stats.IndexName,
                             resultCount: results.Count,
                             isStale: stats.IsStale
-                        );
+                        )
+                        {
+                            NeighborIds = ids
+                        };
                     }
                 }
                 default:

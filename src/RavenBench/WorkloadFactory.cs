@@ -87,7 +87,7 @@ internal static class WorkloadFactory
             minimumSimilarity: opts.VectorMinSimilarity,
             useExactSearch: effectiveExactSearch,
             quantization: effectiveQuantization,
-            efSearch: opts.VectorSearchEf);
+            effort: opts.VectorSearchEf is { } ef ? SearchEffort.RavenDb(ef) : null);
     }
 
     internal static bool IsVectorSearchProfile(WorkloadProfile profile)

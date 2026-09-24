@@ -254,8 +254,10 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                 foreach (var value in vectorOp.QueryVector)
                     json.WriteNumberValue(value);
                 json.WriteEndArray();
-                if (vectorOp.EfSearch.HasValue)
-                    json.WriteNumber("efSearch", vectorOp.EfSearch.Value);
+                if (vectorOp.Effort != null)
+                    json.WriteNumber(vectorOp.RavenDbEffortParameter(), vectorOp.Effort.Value);
+                if (vectorOp.Filter != null)
+                    json.WriteString("filterValue", vectorOp.Filter.Value);
                 if (vectorOp.MinimumSimilarity > 0)
                     json.WriteNumber("minSimilarity", vectorOp.MinimumSimilarity);
                 json.WriteEndObject();
@@ -263,7 +265,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                 json.WriteNumber("PageSize", vectorOp.TopK);
                 json.WriteEndObject();
                 json.Flush();
-                return new RawRequest(HttpMethod.Post, _queriesTarget, body.WrittenMemory, JsonContentType, ReadsEnvelope: true, TimeoutCoversBody: false, IndexName: null);
+                return new RawRequest(HttpMethod.Post, _queriesTarget, body.WrittenMemory, JsonContentType, ReadsEnvelope: true, TimeoutCoversBody: false, IndexName: null, ReadsIds: true);
             }
             default:
                 throw new NotSupportedException($"{nameof(RawHttpTransport)} cannot execute operation type {op.GetType().Name}.");
@@ -363,7 +365,10 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
 
             var envelope = response.Envelope;
             return new TransportResult(exchange.BytesOut, response.BytesIn,
-                indexName: envelope.IndexName ?? request.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
+                indexName: envelope.IndexName ?? request.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale)
+            {
+                NeighborIds = envelope.Ids
+            };
         }
         catch (Exception ex)
         {
@@ -513,13 +518,16 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                 if (NeedsZstdDecode(resp))
                 {
                     using var decompressor = new Decompressor();
-                    envelope = QueryEnvelope.Read(decompressor.Unwrap(wire));
+                    envelope = QueryEnvelope.Read(decompressor.Unwrap(wire), request.ReadsIds);
                 }
                 else
                 {
-                    envelope = QueryEnvelope.Read(wire);
+                    envelope = QueryEnvelope.Read(wire, request.ReadsIds);
                 }
-                return new TransportResult(bytesOut, wireMs.Length, indexName: envelope.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
+                return new TransportResult(bytesOut, wireMs.Length, indexName: envelope.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale)
+                {
+                    NeighborIds = envelope.Ids
+                };
             }).ConfigureAwait(false);
         }
         catch (TaskCanceledException)

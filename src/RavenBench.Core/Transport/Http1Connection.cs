@@ -17,7 +17,8 @@ internal readonly record struct RawRequest(
     string? ContentType,
     bool ReadsEnvelope,
     bool TimeoutCoversBody,
-    string? IndexName);
+    string? IndexName,
+    bool ReadsIds = false);
 
 internal readonly record struct Http1Response(
     int Status,
@@ -40,14 +41,18 @@ internal sealed class Http1Exchange : IValueTaskSource<Http1Response>
     private ManualResetValueTaskSourceCore<Http1Response> _core;
     private int _completed;
 
-    public Http1Exchange(bool readsEnvelope, bool timeoutCoversBody, long bytesOut)
+    public Http1Exchange(bool readsEnvelope, bool timeoutCoversBody, long bytesOut, bool readsIds = false)
     {
         ReadsEnvelope = readsEnvelope;
+        ReadsIds = readsIds;
         TimeoutCoversBody = timeoutCoversBody;
         BytesOut = bytesOut;
     }
 
     public bool ReadsEnvelope { get; }
+
+    /// <summary>Whether the envelope also carries each result's @metadata.@id, in order.</summary>
+    public bool ReadsIds { get; }
     public bool TimeoutCoversBody { get; }
 
     /// <summary>The request's bytes as written to the socket, headers included.</summary>
@@ -165,7 +170,7 @@ internal sealed class Http1Connection
         {
             if (_dead)
             {
-                exchange = new Http1Exchange(request.ReadsEnvelope, request.TimeoutCoversBody, 0);
+                exchange = new Http1Exchange(request.ReadsEnvelope, request.TimeoutCoversBody, 0, request.ReadsIds);
                 exchange.Complete(Http1Response.Failed("The connection is closed."));
                 return exchange;
             }
@@ -189,7 +194,7 @@ internal sealed class Http1Connection
             _pending.Write(CrLf);
             _pending.Write(request.Body.Span);
 
-            exchange = new Http1Exchange(request.ReadsEnvelope, request.TimeoutCoversBody, _pending.WrittenCount - before);
+            exchange = new Http1Exchange(request.ReadsEnvelope, request.TimeoutCoversBody, _pending.WrittenCount - before, request.ReadsIds);
             _inFlight.Enqueue(exchange);
             if (_inFlight.Count == 1)
                 MarkNewHead();
@@ -348,7 +353,7 @@ internal sealed class Http1Connection
 
         try
         {
-            return new Http1Response(_status, _bytesIn, QueryEnvelope.Read(body), null, null, false);
+            return new Http1Response(_status, _bytesIn, QueryEnvelope.Read(body, exchange.ReadsIds), null, null, false);
         }
         catch (JsonException ex)
         {
