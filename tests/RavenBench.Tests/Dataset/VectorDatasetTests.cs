@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -80,7 +81,7 @@ public class VectorDatasetTests : IDisposable
         await Assert.ThrowsAsync<InvalidDataException>(() => set.GetQueriesAsync(files, new QuerySelection(1, 1), 1));
     }
 
-    [Fact]
+    [RequiresUvFact]
     public async Task Parquet_VectorDbBenchLayout_YieldsShapesMetricAndPublishedNeighbours()
     {
         var train = Enumerable.Range(0, 12).Select(i => new EmbRow { id = 100 + i, emb = Row(i, 6) }).ToList();
@@ -107,6 +108,8 @@ public class VectorDatasetTests : IDisposable
         Assert.Equal(VectorMetric.Cosine, set.Metric);
         Assert.Equal(train.Select(t => t.id.ToString()), baseVectors.Select(b => b.Id));
         Assert.Equal(train[5].emb, baseVectors[5].Vector);
+        Assert.Equal(12, await set.BaseCountAsync(files, new QuerySelection(3, 4)));
+        Assert.Single(Directory.GetFiles(dir, "train.parquet.*.vectors"));
         Assert.Equal(4, queries.Queries.Length);
         for (int i = 0; i < 4; i++)
         {
@@ -341,5 +344,21 @@ public class VectorDatasetTests : IDisposable
     {
         public string word { get; set; } = "";
         public double[] vector { get; set; } = [];
+    }
+}
+
+public sealed class RequiresUvFactAttribute : FactAttribute
+{
+    public RequiresUvFactAttribute()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("uv", "--version") { RedirectStandardOutput = true })!;
+            process.WaitForExit();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            Skip = "uv is required to prepare VectorDBBench train files.";
+        }
     }
 }

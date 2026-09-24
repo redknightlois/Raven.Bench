@@ -120,6 +120,15 @@ internal static class DatasetImportCoordinator
         return (targetDatabase, result.DocumentsImported > 0);
     }
 
+    internal static async Task<(string database, bool imported)> ImportPublishedSetAsync(RunOptions opts, IVectorDataset set, Version httpVersion)
+    {
+        var files = await PrepareVectorSetAsync(set, opts);
+        Console.WriteLine($"[Raven.Bench] {set.Name} dataset -> '{PublishedSetImport.DatabaseName(set)}' (engine: {opts.SearchEngine})");
+        var imported = await PublishedSetImport.ImportAsync(opts.Url, set, files, VectorQuerySelection(opts), opts.VectorQuantization, opts.SearchEngine,
+            opts.VectorEdges, opts.VectorCandidates, httpVersion);
+        return (PublishedSetImport.DatabaseName(set), imported);
+    }
+
     internal static async Task WaitForNonStaleIndexesAsync(string serverUrl, string databaseName, Version httpVersion)
     {
         Console.WriteLine("[Raven.Bench] Waiting for indexes to become non-stale...");
@@ -153,7 +162,14 @@ internal static class DatasetImportCoordinator
 
         if (string.IsNullOrEmpty(datasetName))
         {
-            throw new InvalidOperationException("Vector search profiles require --dataset option. Supported: clinicalwords100d, clinicalwords300d, clinicalwords600d, sphere");
+            throw new InvalidOperationException($"Vector search profiles require --dataset option. Supported: clinicalwords100d, clinicalwords300d, clinicalwords600d, sphere, {string.Join(", ", VectorSets.Published.Select(s => s.Name))}");
+        }
+
+        if (VectorSets.FindPublished(datasetName) is { } published)
+        {
+            var files = await PrepareVectorSetAsync(published, opts);
+            return await PublishedSetImport.MetadataAsync(published, files, VectorQuerySelection(opts), VectorTruthDepth(opts),
+                opts.VectorQuantization, opts.SearchEngine, opts.VectorEdges, opts.VectorCandidates);
         }
 
         var engineSuffix = VectorIndexMapping.GetEngineSuffix(opts.SearchEngine);

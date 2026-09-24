@@ -186,7 +186,7 @@ public sealed class ClinicalWordsDatasetProvider : HeldOutVectorDataset
     /// The seeded query selection, held out of the load, with its brute-force truth at depth k.
     /// </summary>
     public async Task<VectorWorkloadMetadata> GenerateQueryVectorsAsync(VerifiedFiles files, QuerySelection selection, int k) =>
-        await VectorSets.BuildMetadataAsync(this, files, selection, k, fieldName: "Embedding", DocumentIdPrefix, await BaseCountAsync(files, selection));
+        await VectorSets.BuildMetadataAsync(this, files, selection, k, fieldName: "Embedding", DocumentIdPrefix);
 
     public string GetDatabaseName(string? profile = null, int? customSize = null) => $"ClinicalWords{_dimensions}D";
 

@@ -1,9 +1,14 @@
+using System.Buffers.Binary;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Parquet;
 using Parquet.Schema;
 using PureHDF;
 using PureHDF.Selections;
 using PureHDF.VOL.Native;
+using RavenBench.Core.Diagnostics;
 using RavenBench.Core.Workload;
 
 namespace RavenBench.Dataset.Vectors;
@@ -59,6 +64,12 @@ public sealed class AnnBenchmarksHdf5Dataset(string name, int dimensions, Vector
                 yield return new BaseVector((start + (ulong)i).ToString(), Row(block, i));
             await Task.Yield();
         }
+    }
+
+    public Task<long> BaseCountAsync(VerifiedFiles files, QuerySelection selection, CancellationToken ct = default)
+    {
+        using var h5 = Open(files);
+        return Task.FromResult((long)h5.Dataset("train").Space.Dimensions[0]);
     }
 
     private NativeFile Open(VerifiedFiles files)
@@ -127,8 +138,65 @@ public sealed class VectorDbBenchParquetDataset(string name, int dimensions, Vec
 
     public async IAsyncEnumerable<BaseVector> ReadBaseAsync(VerifiedFiles files, QuerySelection selection, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var (id, vector) in ParquetVectors.ReadAsync(files.PathOf(train.FileName), "id", "emb", Dimensions, ct).ConfigureAwait(false))
-            yield return new BaseVector(id.ToString(), vector);
+        var record = RecordBytes;
+        var buffer = new byte[record * 4096];
+        await using var stream = new FileStream(PreparedTrain(files), FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true);
+        int read;
+        while ((read = await stream.ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, ct).ConfigureAwait(false)) > 0)
+        {
+            if (read % record != 0)
+                throw new InvalidDataException($"Set '{Name}' prepared train file ends inside a record; prepare it again.");
+            for (int offset = 0; offset < read; offset += record)
+                yield return new BaseVector(
+                    BinaryPrimitives.ReadInt64LittleEndian(buffer.AsSpan(offset)).ToString(),
+                    MemoryMarshal.Cast<byte, float>(buffer.AsSpan(offset + sizeof(long), record - sizeof(long))).ToArray());
+        }
+    }
+
+    public Task<long> BaseCountAsync(VerifiedFiles files, QuerySelection selection, CancellationToken ct = default)
+    {
+        var length = new FileInfo(PreparedTrain(files)).Length;
+        if (length % RecordBytes != 0)
+            throw new InvalidDataException($"Set '{Name}' prepared train file is {length} bytes, not a whole number of {RecordBytes}-byte records; prepare it again.");
+        return Task.FromResult(length / RecordBytes);
+    }
+
+    private int RecordBytes => sizeof(long) + Dimensions * sizeof(float);
+
+    /// <summary>
+    /// The train split as little-endian records of an int64 id and the float32 vector. Parquet readers hold a
+    /// whole row group, and the published train files are one row group, so the split is prepared once beside
+    /// the pinned file with uv; the name carries the pin, so a new pin prepares again.
+    /// </summary>
+    private string PreparedTrain(VerifiedFiles files)
+    {
+        var source = files.PathOf(train.FileName);
+        var prepared = $"{source}.{train.Sha256![..16]}.vectors";
+        if (File.Exists(prepared))
+            return prepared;
+
+        var script = Path.Combine(RepositoryRootLocator.Find(), "datasets", "prepare_vectordbbench_train.py");
+        var info = new ProcessStartInfo("uv") { RedirectStandardError = true };
+        foreach (var argument in new[] { "run", script, source, prepared, Dimensions.ToString() })
+            info.ArgumentList.Add(argument);
+        Process process;
+        try
+        {
+            process = Process.Start(info)!;
+        }
+        catch (Win32Exception)
+        {
+            throw new InvalidOperationException(
+                $"Set '{Name}' reads its train split from a file uv prepares, and uv is not on PATH. Install it (curl -LsSf https://astral.sh/uv/install.sh | sh) and rerun.");
+        }
+        using (process)
+        {
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode != 0 || File.Exists(prepared) == false)
+                throw new InvalidDataException($"Set '{Name}' train split could not be prepared: uv run {script} exited {process.ExitCode}: {error}");
+        }
+        return prepared;
     }
 }
 

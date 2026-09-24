@@ -17,7 +17,7 @@ public sealed class RecallSettings : CommandSettings
     public string Url { get; init; } = "";
 
     [CommandOption("--dataset")]
-    [Description("Dataset: sphere")]
+    [Description("Dataset: sphere, or a published set (glove-100-angular, dbpedia-openai-1000k-angular, cohere-768-100k, cohere-768-1m)")]
     public string? Dataset { get; init; }
 
     [CommandOption("--dataset-profile")]
@@ -141,6 +141,8 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
 
     private static string GetDatabaseName(RecallSettings settings)
     {
+        if (VectorSets.FindPublished(settings.Dataset!) is { } published)
+            return PublishedSetImport.DatabaseName(published);
         if (settings.Dataset?.StartsWith("sphere", StringComparison.OrdinalIgnoreCase) == true)
         {
             var profile = settings.DatasetProfile ?? "100k";
@@ -153,15 +155,27 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
     private static async Task<VectorWorkloadMetadata?> LoadVectorMetadataAsync(RecallSettings settings)
     {
         var engineSuffix = VectorIndexMapping.GetEngineSuffix(settings.SearchEngine);
+        var dataDirectory = settings.DatasetCacheDir ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets");
+        var selection = new QuerySelection(settings.Seed, DatasetImportCoordinator.VectorQueryCount);
+        var depth = CliParsing.ParseRecallKsRaw(settings.VectorRecallKs ?? "1,5,10").Max();
+
+        if (VectorSets.FindPublished(settings.Dataset!) is { } published)
+        {
+            UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, published.Metric);
+            var files = await PinnedFiles.EnsureAsync(published, dataDirectory);
+            var metadata = await PublishedSetImport.MetadataAsync(published, files, selection, depth, settings.VectorQuantization, settings.SearchEngine, null, null);
+            if (string.IsNullOrWhiteSpace(settings.IndexNameOverride) == false)
+                metadata.IndexName = settings.IndexNameOverride;
+            return metadata;
+        }
 
         if (settings.Dataset?.StartsWith("sphere", StringComparison.OrdinalIgnoreCase) == true)
         {
             var profile = settings.DatasetProfile ?? "100k";
             var provider = new SphereDatasetProvider(profile);
             UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, provider.Metric);
-            var files = await PinnedFiles.EnsureAsync(provider, settings.DatasetCacheDir ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets"));
-            var recallKs = CliParsing.ParseRecallKsRaw(settings.VectorRecallKs ?? "1,5,10");
-            var metadata = await provider.GenerateQueryVectorsAsync(files, new QuerySelection(settings.Seed, DatasetImportCoordinator.VectorQueryCount), recallKs.Max());
+            var files = await PinnedFiles.EnsureAsync(provider, dataDirectory);
+            var metadata = await provider.GenerateQueryVectorsAsync(files, selection, depth);
             metadata.IndexName = string.IsNullOrWhiteSpace(settings.IndexNameOverride) == false
                 ? settings.IndexNameOverride
                 : VectorIndexNaming.GetIndexName(SphereDatasetProvider.CollectionName, settings.VectorQuantization, engineSuffix);
