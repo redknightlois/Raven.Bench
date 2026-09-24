@@ -153,6 +153,16 @@ public class PgVectorTransportIntegrationTests
             (await connection.QueryAsync("SELECT count(*)::int8 FROM pg_tables WHERE tablename = 'vectors' AND schemaname = current_schema()", CancellationToken.None))[0].Get<long>(0)));
     }
 
+    [RequiresPostgreSqlFact]
+    public Task The_Settings_Read_Only_The_Index_In_The_Transports_Own_Schema() => WithLoadedSet(async (_, _) =>
+    {
+        await WithTransport(1, async unindexed =>
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => unindexed.ReadServerSettingsAsync());
+            Assert.Contains(PgVectorTransport.IndexName, ex.Message);
+        });
+    });
+
     private static async Task WithLoadedSet(Func<PgVectorTransport, List<BaseVector>, Task> body)
     {
         await WithTransport(4, async transport =>
