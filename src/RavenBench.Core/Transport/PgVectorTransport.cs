@@ -194,6 +194,14 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
         return rows[0].Get<long>(0);
     }
 
+    /// <summary>Reads every id the table holds, including rows whose insert committed after the client stopped counting.</summary>
+    public async Task<HashSet<string>> ReadStoredIdsAsync(CancellationToken ct = default)
+    {
+        await _ready.Value.ConfigureAwait(false);
+        var rows = await _setup!.QueryAsync($"SELECT id FROM {TableName}", ct).ConfigureAwait(false);
+        return rows.Select(r => r.Get<string>(0)).ToHashSet(StringComparer.Ordinal);
+    }
+
     public async Task<string> GetServerVersionAsync()
     {
         await _ready.Value.ConfigureAwait(false);
@@ -221,9 +229,10 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
 
     /// <summary>
     /// Replaces the HNSW index with one of <paramref name="kind"/> built with <paramref name="options"/>,
-    /// and returns its definition as <c>pg_get_indexdef</c> reports it.
+    /// under the <paramref name="session"/> settings, and returns its definition as <c>pg_get_indexdef</c> reports it.
+    /// The session settings are reset after the build.
     /// </summary>
-    public async Task<string> ReplaceIndexAsync(string kind, IReadOnlyDictionary<string, int> options, CancellationToken ct = default)
+    public async Task<string> ReplaceIndexAsync(string kind, IReadOnlyDictionary<string, int> options, IReadOnlyDictionary<string, string> session, CancellationToken ct = default)
     {
         if (SearchKnobs.ContainsKey(kind) == false)
             throw new ArgumentException($"Index kind '{kind}' is not one of {string.Join(", ", SearchKnobs.Keys)}.", nameof(kind));
@@ -233,8 +242,14 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
         await _ready.Value.ConfigureAwait(false);
         var name = $"vectors_embedding_{kind}";
         var with = options.Count == 0 ? "" : $" WITH ({string.Join(", ", options.Select(o => $"{o.Key} = {o.Value.ToString(CultureInfo.InvariantCulture)}"))})";
+        if (session.Keys.FirstOrDefault(key => PlainName().IsMatch(key) == false) is { } badSetting)
+            throw new ArgumentException($"Session setting '{badSetting}' is not a plain setting name.", nameof(session));
+        foreach (var (setting, value) in session)
+            await _setup!.QueryAsync("SELECT set_config($1, $2, false)", SqlParameters.Create(setting, value), ct).ConfigureAwait(false);
         await _setup!.ExecuteAsync($"DROP INDEX IF EXISTS {IndexName}", ct).ConfigureAwait(false);
         await _setup.ExecuteAsync($"CREATE INDEX {name} ON {TableName} USING {kind} (embedding {PgVectorMetrics.OperatorClass(_metric)}){with}", ct).ConfigureAwait(false);
+        foreach (var setting in session.Keys)
+            await _setup.ExecuteAsync($"RESET {setting}", ct).ConfigureAwait(false);
         await _setup.ExecuteAsync($"ANALYZE {TableName}", ct).ConfigureAwait(false);
         return (await _setup.QueryAsync(IndexDefinitionSql, SqlParameters.Create(name), ct).ConfigureAwait(false))[0].Get<string>(0);
     }

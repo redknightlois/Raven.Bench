@@ -34,6 +34,7 @@
     "PublishedSettings": "PGVector(lists=1000, probes=100), the pgvector series of the glove-100-angular k=10 page; the page publishes IVFFlat points only",
     "PublishedIndexKind": "ivfflat",
     "PublishedBuildOptions": { "lists": 1000 },
+    "BuildSession": { "maintenance_work_mem": "512MB" },
     "PublishedSearchValue": 100,
     "Tolerance": 0.02,
     "Evidence": "evidence/ann-benchmarks-glove-100-angular-pgvector.txt",

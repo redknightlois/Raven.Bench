@@ -139,6 +139,16 @@ public class VectorRunMathTests
     }
 
     [Fact]
+    public void CrossCheckRemainder_SkipsASliceWriteThatCommittedWithoutBeingCounted()
+    {
+        var slice = Enumerable.Range(0, 4).Select(i => new BaseVector($"s{i}", [i])).ToList();
+        // One acknowledged write (s0) and one write that committed after the client stopped counting (s2).
+        var stored = new HashSet<string> { "base", "s0", "s2" };
+
+        VectorRunMath.MissingFromServer(slice, stored).Select(v => v.Id).Should().Equal("s1", "s3");
+    }
+
+    [Fact]
     public void ResourceCheck_RefusesByName_WhenMemoryOrDiskIsShort()
     {
         const long needed = 1000L * 100 * sizeof(float) * VectorResourceCheck.FootprintFactor;

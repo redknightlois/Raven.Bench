@@ -217,7 +217,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         var (underInsertRamp, underInsertInfo) = await UnderInsertAsync(target, queries.Queries, quietTopK, slice, set.Metric, effort, inForce.Recall, url, database, warmup, duration, nodeExporter, ct);
 
         // cross-check: last, because it replaces the index the other runs measured.
-        var crossCheck = await CrossCheckAsync(target, set, queries.Queries, quietTopK, slice, underInsertInfo.Inserted, split.LoadedCount, nodeExporter, ct);
+        var crossCheck = await CrossCheckAsync(target, set, queries, slice, split.LoadedCount, productSettings, datasetInfo.TruthSource, nodeExporter, ct);
 
         var common = (Target: targetName, Product: productName, Version: serverVersion, Container: container, Settings: productSettings, Dataset: datasetInfo, Fingerprint: fingerprint, Durability: target.Durability);
         VectorRunResult Result(string run, List<StepResult> steps, List<HistogramArtifact>? histograms, Func<VectorRunInfo, VectorRunInfo> fill)
@@ -273,30 +273,37 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
     }
 
     /// <summary>
-    /// For pgvector on the cross-check set: rebuilds the published index kind with the published
-    /// options, searches at the published setting, and scores against the base plus every acknowledged insert.
+    /// For pgvector on the cross-check set: inserts every slice vector the under-insert run left out, so the
+    /// index holds the whole base, rebuilds the published index kind with the published options, searches at
+    /// the published setting, and scores against the set's own truth for its query split.
     /// </summary>
-    private async Task<VectorCrossCheckInfo?> CrossCheckAsync(IVectorTarget target, IVectorDataset set, float[][] queries, IReadOnlyList<BaseVector>[] quietTopK,
-        IReadOnlyList<BaseVector> slice, long inserted, long loaded, NodeExporterClient? nodeExporter, CancellationToken ct)
+    private async Task<VectorCrossCheckInfo?> CrossCheckAsync(IVectorTarget target, IVectorDataset set, VectorQuerySet queries,
+        IReadOnlyList<BaseVector> slice, long loaded, IReadOnlyDictionary<string, string> defaultSettings, string truthSource, NodeExporterClient? nodeExporter, CancellationToken ct)
     {
         var check = scenario.CrossCheck;
         if (target is not PgVectorTarget pgvector || string.Equals(set.Name, check.Dataset, StringComparison.OrdinalIgnoreCase) == false)
             return null;
 
-        var knob = PgVectorTransport.SearchKnobs[check.PublishedIndexKind];
-        VectorCrossCheckInfo Info(string? definition, long? searched, double? measured, string verdict) => new(check.Dataset, check.PublishedRecall, check.Source,
-            check.PublishedSettings, check.PublishedIndexKind, check.PublishedBuildOptions, knob, check.PublishedSearchValue, definition, searched, measured,
-            check.Evidence, check.EvidenceSha256, check.Tolerance, verdict);
-        if (scenario.VectorCountCap is { } cap)
-            return Info(null, null, null, $"skipped: the run loads the first {cap} base vectors and the published figure is for the whole set");
+        foreach (var missing in VectorRunMath.MissingFromServer(slice, await pgvector.ReadStoredIdsAsync(ct)))
+        {
+            var result = await target.Transport.ExecuteAsync(target.InsertOperation(new LabelledVector(missing.Id, missing.Vector, VectorSplit.LabelOut)), ct);
+            if (result.IsSuccess == false)
+                throw new InvalidOperationException($"Insert of slice vector '{missing.Id}' for the cross-check failed: {result.ErrorDetails}");
+        }
 
-        var definition = await pgvector.ReplaceIndexAsync(check.PublishedIndexKind, check.PublishedBuildOptions, ct);
-        var (_, ids) = await SequentialAsync(target, queries, scenario.K, new SearchEffort(knob, check.PublishedSearchValue), filter: null, nodeExporter, ct);
-        var measured = ids.Select((r, q) => VectorRunMath.Recall(r, VectorRunMath.TruthWithInserts(queries[q], quietTopK[q], slice, [inserted], set.Metric, scenario.K)[inserted], scenario.K)).Average();
+        var knob = PgVectorTransport.SearchKnobs[check.PublishedIndexKind];
+        var defaultBuild = VectorBuildState.DefaultBuild(check.PublishedIndexKind, check.PublishedBuildOptions, defaultSettings["indexdef"]);
+        var definition = await pgvector.ReplaceIndexAsync(check.PublishedIndexKind, check.PublishedBuildOptions, check.BuildSession, ct);
+        var (_, ids) = await SequentialAsync(target, queries.Queries, scenario.K, new SearchEffort(knob, check.PublishedSearchValue), filter: null, nodeExporter, ct);
+        var measured = ids.Select((r, q) => VectorRunMath.Recall(r, queries.Neighbors[q], scenario.K)).Average();
         var distance = Math.Abs(measured - check.PublishedRecall);
-        return Info(definition, loaded + inserted, measured, distance <= check.Tolerance
-            ? $"near: |{measured:F4} - {check.PublishedRecall:F4}| = {distance:F4} <= {check.Tolerance}"
-            : $"not near: |{measured:F4} - {check.PublishedRecall:F4}| = {distance:F4} > {check.Tolerance}");
+        var verdict = scenario.VectorCountCap is { } cap
+            ? $"skipped: capped at {cap} vectors; the published figure is for the whole set"
+            : distance <= check.Tolerance
+                ? $"near: |{measured:F4} - {check.PublishedRecall:F4}| = {distance:F4} <= {check.Tolerance}"
+                : $"not near: |{measured:F4} - {check.PublishedRecall:F4}| = {distance:F4} > {check.Tolerance}";
+        return new VectorCrossCheckInfo(check.Dataset, check.PublishedRecall, check.Source, check.PublishedSettings, check.PublishedIndexKind, check.PublishedBuildOptions, check.BuildSession,
+            knob, check.PublishedSearchValue, definition, defaultBuild, truthSource, loaded + slice.Count, measured, check.Evidence, check.EvidenceSha256, check.Tolerance, verdict);
     }
 
     private async Task<(BenchmarkRunner.RampResult Ramp, VectorUnderInsertInfo Info)> UnderInsertAsync(IVectorTarget target, float[][] queries,
