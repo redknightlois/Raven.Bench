@@ -6,11 +6,10 @@ name: ravenbench-vector
 services:
   pgvector:
     image: pgvector/pgvector:0.8.1-pg17
-    container_name: vector-pgvector
     # Capacity, not tuning: the pool holds one connection per reader, and the scenario runs 1000 readers.
     command: ["postgres", "-c", "max_connections=1100"]
     ports:
-      - "5432:5432"
+      - "${PGVECTOR_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: bench
       POSTGRES_PASSWORD: bench
@@ -21,7 +20,6 @@ services:
 
   ravendb-7:
     image: ravendb/ravendb:7.2.6
-    container_name: vector-ravendb-7
     ports:
       - "${RAVENDB7_PORT:-8087}:${RAVENDB7_PORT:-8087}"
       - "${RAVENDB7_TCP_PORT:-38887}:${RAVENDB7_TCP_PORT:-38887}"

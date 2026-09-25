@@ -86,6 +86,7 @@ esac
 # The host port of the containerized RavenDB service is overridable, so a database host can move it
 # and a caller can point the script's default endpoint away from a port already in use.
 RAVENDB7_PORT="${RAVENDB7_PORT:-8087}"
+PGVECTOR_PORT="${PGVECTOR_PORT:-5432}"
 
 case "$TARGET" in
   ravendb)
@@ -99,8 +100,8 @@ case "$TARGET" in
     COMPOSE_SERVICE="ravendb-7"
     ;;
   pgvector)
-    DEFAULT_URL="postgresql://bench:bench@localhost:5432/bench"
-    DEFAULT_PORT=5432
+    DEFAULT_URL="postgresql://bench:bench@localhost:$PGVECTOR_PORT/bench"
+    DEFAULT_PORT="$PGVECTOR_PORT"
     COMPOSE_SERVICE="pgvector"
     ;;
 esac
@@ -231,10 +232,12 @@ require_docker_to_start() {
 
 STARTED_COMPOSE=0
 stop_started_container() {
+  local status=$?
   if [[ "$STARTED_COMPOSE" -eq 1 ]]; then
     echo "Stopping the $TARGET container the script started."
     docker compose -f "$COMPOSE_FILE" rm -s -f "$COMPOSE_SERVICE" >/dev/null 2>&1 || true
   fi
+  exit "$status"
 }
 trap stop_started_container EXIT
 
@@ -302,6 +305,12 @@ fi
 RUN_ARGS+=("${PASSTHROUGH[@]}")
 
 echo "Running the vector runs against $TARGET."
-PATH="$HOME/.dotnet:$PATH" dotnet run --project "$REPO_ROOT/src/RavenBench/RavenBench.csproj" -c Release -- "${RUN_ARGS[@]}"
+VECTOR_STATUS=0
+PATH="$HOME/.dotnet:$PATH" dotnet run --project "$REPO_ROOT/src/RavenBench/RavenBench.csproj" -c Release -- "${RUN_ARGS[@]}" || VECTOR_STATUS=$?
+if [[ "$VECTOR_STATUS" -ne 0 ]]; then
+  # 137 is SIGKILL, which the kernel OOM killer sends.
+  echo "error: the vector command against $TARGET exited with status $VECTOR_STATUS before writing every result." >&2
+  exit "$VECTOR_STATUS"
+fi
 
 echo "Results: ${RESULT_PREFIX}-<load|recall|readers|filtered|under-insert>.json"

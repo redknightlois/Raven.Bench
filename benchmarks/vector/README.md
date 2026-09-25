@@ -22,9 +22,9 @@ The script is endpoint-driven. It probes the target's endpoint first. It starts 
 |---|---|---|
 | `ravendb` | http://localhost:8081 | never |
 | `ravendb-7` | http://localhost:8087 (`RAVENDB7_PORT`) | `ravendb-7` |
-| `pgvector` | postgresql://bench:bench@localhost:5432/bench | `pgvector` |
+| `pgvector` | postgresql://bench:bench@localhost:5432/bench (`PGVECTOR_PORT`) | `pgvector` |
 
-The `pgvector` service publishes 5432 like the ycsb `postgresql` service, so only one of them runs at a time.
+The `pgvector` service publishes 5432 like the ycsb `postgresql` service, so only one of them runs at a time unless `PGVECTOR_PORT` moves it. The compose project name (`COMPOSE_PROJECT_NAME`) decides the container names, so two runs on one host use two project names and two ports.
 
 The shipped scenario runs the plan's default set, cohere-768-1m. A small set for a quick run is any set with a cap on its base vectors, for example:
 
