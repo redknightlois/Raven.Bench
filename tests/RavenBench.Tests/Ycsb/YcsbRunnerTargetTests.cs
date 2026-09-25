@@ -23,6 +23,7 @@ namespace RavenBench.Tests.Ycsb;
 /// touches the RavenDB-only setup, an unknown target names the offending value, and the result
 /// records the endpoint and the durability of the target that ran.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class YcsbRunnerTargetTests
 {
     [Fact]

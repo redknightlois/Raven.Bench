@@ -23,6 +23,7 @@ namespace RavenBench.Tests.Ycsb;
 /// Drives the full ycsb sequence against a real (embedded) RavenDB server, the way the repository
 /// already tests other full-run paths: state-based, no transport mock.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class YcsbRunnerIntegrationTests : EmbeddedRavenTestBase
 {
     [Fact]
