@@ -26,6 +26,8 @@ The script is endpoint-driven. It probes the target's endpoint first. It starts 
 
 The `pgvector` service publishes 5432 like the ycsb `postgresql` service, so only one of them runs at a time unless `PGVECTOR_PORT` moves it. The compose project name (`COMPOSE_PROJECT_NAME`) decides the container names, so two runs on one host use two project names and two ports.
 
+Before the load, the run checks that available memory and free disk under the data directory each hold twice the raw base (vectors x dimensions x 4 bytes), and it stops by name when either is short.
+
 The shipped scenario runs the plan's default set, cohere-768-1m. A small set for a quick run is any set with a cap on its base vectors, for example:
 
 ```
