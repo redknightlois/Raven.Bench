@@ -137,4 +137,13 @@ public class VectorRunMathTests
         VectorRunMath.Recall(["1", "2"], ["1", "2", "3", "4"], 4).Should().Be(0.5);
         VectorRunMath.Recall(["4", "3", "2", "1"], ["1", "2", "3", "4"], 4).Should().Be(1.0);
     }
+
+    [Fact]
+    public void ResourceCheck_RefusesByName_WhenMemoryOrDiskIsShort()
+    {
+        const long needed = 1000L * 100 * sizeof(float) * VectorResourceCheck.FootprintFactor;
+        VectorResourceCheck.Require(1000, 100, needed, needed);
+        FluentActions.Invoking(() => VectorResourceCheck.Require(1000, 100, needed - 1, needed)).Should().Throw<VectorResourceException>().WithMessage("Available memory*");
+        FluentActions.Invoking(() => VectorResourceCheck.Require(1000, 100, needed, needed - 1)).Should().Throw<VectorResourceException>().WithMessage("Free disk*");
+    }
 }

@@ -130,6 +130,8 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         var queries = await set.GetQueriesAsync(files, selection, scenario.TruthDepth, ct);
         var split = new VectorSplit(await set.BaseCountAsync(files, selection, ct), scenario.Seed, scenario.InsertCount(warmup, duration), scenario.FilterSelectivity);
 
+        VectorResourceCheck.Require(split.BaseCount, set.Dimensions, Environment.ExpandEnvironmentVariables(scenario.DataDirectory));
+
         // One pass outside any product: the insert slice, the labelled subset, and the vectors of the quiet truth.
         var slice = new List<BaseVector>();
         var labelled = new List<BaseVector>();

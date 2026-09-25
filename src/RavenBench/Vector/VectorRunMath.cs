@@ -94,3 +94,39 @@ public static class VectorRunMath
         return (double)truth.Take(k).Count(top.Contains) / k;
     }
 }
+
+/// <summary>Thrown before the load when this host lacks the memory or disk a set needs.</summary>
+public sealed class VectorResourceException(string message) : Exception(message);
+
+/// <summary>
+/// Stops a run before the load when the host cannot hold the set. Rule: the raw float32 base plus an index of the
+/// same order, so twice the raw size, must fit both in available memory and in free disk under the data directory.
+/// The rule is a floor, not a sizing model; a product that builds a larger index can still run out later.
+/// </summary>
+public static class VectorResourceCheck
+{
+    public const int FootprintFactor = 2;
+
+    public static void Require(long baseCount, int dimensions, string dataDirectory) =>
+        Require(baseCount, dimensions, AvailableMemoryBytes(), new DriveInfo(Path.GetFullPath(dataDirectory)).AvailableFreeSpace);
+
+    public static void Require(long baseCount, int dimensions, long availableMemory, long freeDisk)
+    {
+        var needed = baseCount * dimensions * sizeof(float) * FootprintFactor;
+        if (availableMemory < needed)
+            throw new VectorResourceException($"Available memory {availableMemory:N0} bytes is below the {needed:N0} bytes the set needs ({baseCount:N0} x {dimensions} float32 x {FootprintFactor}).");
+        if (freeDisk < needed)
+            throw new VectorResourceException($"Free disk {freeDisk:N0} bytes under the data directory is below the {needed:N0} bytes the set needs ({baseCount:N0} x {dimensions} float32 x {FootprintFactor}).");
+    }
+
+    // MemAvailable on Linux; elsewhere the runtime's view of the memory it may use.
+    private static long AvailableMemoryBytes()
+    {
+        if (File.Exists("/proc/meminfo"))
+        {
+            var line = File.ReadLines("/proc/meminfo").First(l => l.StartsWith("MemAvailable:", StringComparison.Ordinal));
+            return long.Parse(line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1], System.Globalization.CultureInfo.InvariantCulture) * 1024;
+        }
+        return GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+    }
+}
