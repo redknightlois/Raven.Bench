@@ -16,6 +16,7 @@ using Xunit;
 
 namespace RavenBench.Tests.Dataset;
 
+[Collection(LiveServers.Name)]
 public class PublishedSetImportTests : IDisposable
 {
     private const string Url = "http://localhost:8081";

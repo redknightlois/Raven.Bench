@@ -17,6 +17,7 @@ namespace RavenBench.Tests.Transport;
 /// own schema, with <c>public</c> behind it so the extension's type and operators resolve, and drops
 /// the schema when it finishes.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class PgVectorTransportIntegrationTests
 {
     private const int Dimensions = 8;

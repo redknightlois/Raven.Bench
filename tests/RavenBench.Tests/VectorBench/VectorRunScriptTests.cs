@@ -14,6 +14,7 @@ using Xunit;
 namespace RavenBench.Tests.VectorBench;
 
 /// <summary>Drives the vector folder's entry script and holds it to the ycsb script's endpoint and Docker behaviour.</summary>
+[Collection(LiveServers.Name)]
 public class VectorRunScriptTests
 {
     [Fact]

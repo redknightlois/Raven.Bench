@@ -57,6 +57,7 @@ internal sealed class TinyHeldOutSet : HeldOutVectorDataset
 }
 
 /// <summary>The five runs end to end against the real products, on a set small enough to run on any host.</summary>
+[Collection(LiveServers.Name)]
 public class VectorRunnerIntegrationTests
 {
     private const int Cap = 2000;
