@@ -106,6 +106,7 @@ public class VectorRunnerIntegrationTests
         check.MeasuredIndexDefinition.Should().Contain("ivfflat").And.Contain("lists='4'");
         check.MeasuredRecall.Should().Be(1.0, "an index searched at the published setting answers like the published run");
         check.Verdict.Should().StartWith("near");
+        check.DefaultBuild.Should().StartWith("not the pgvector default build");
         info["filtered"].ProductSettings.Should().ContainKey("hnsw.iterative_scan");
         info["filtered"].Filtered!.RecallStatement.Should().Contain("hnsw.iterative_scan=");
     }

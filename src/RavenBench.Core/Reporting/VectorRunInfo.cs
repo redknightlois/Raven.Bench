@@ -48,7 +48,7 @@ public sealed record VectorUnderInsertInfo(
 
 /// <summary>
 /// The pgvector recall over the published index kind, build options and search setting, compared
-/// with the published figure. The measured fields are null when the check was skipped, and the verdict says why.
+/// with the published figure. Every field is set on every row; a capped row states a verdict that is not "near".
 /// </summary>
 public sealed record VectorCrossCheckInfo(
     string Dataset,
@@ -57,11 +57,14 @@ public sealed record VectorCrossCheckInfo(
     string PublishedSettings,
     string PublishedIndexKind,
     IReadOnlyDictionary<string, int> PublishedBuildOptions,
+    IReadOnlyDictionary<string, string> BuildSession,
     string SearchKnob,
     int SearchValue,
-    string? MeasuredIndexDefinition,
-    long? SearchedVectors,
-    double? MeasuredRecall,
+    string MeasuredIndexDefinition,
+    string DefaultBuild,
+    string TruthSource,
+    long SearchedVectors,
+    double MeasuredRecall,
     string Evidence,
     string EvidenceSha256,
     double Tolerance,
@@ -105,4 +108,25 @@ public sealed record VectorRunInfo
     /// <summary>The effort readers, filtered and under-insert ran at, and why.</summary>
     public VectorEffortPoint? EffortInForce { get; init; }
     public string? EffortStatement { get; init; }
+}
+
+public static class VectorBuildState
+{
+    public const string AtDefaultBuild = "the pgvector default build";
+
+    /// <summary>
+    /// States whether the published index kind and build options match the round-one index definition as
+    /// <c>pg_get_indexdef</c> reports it, which names the access method and carries a <c>WITH (...)</c> clause only for set options.
+    /// </summary>
+    public static string DefaultBuild(string publishedKind, IReadOnlyDictionary<string, int> publishedOptions, string defaultIndexDefinition)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(defaultIndexDefinition, @"\bUSING\s+(\w+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (match.Success == false)
+            throw new InvalidOperationException($"The default index definition '{defaultIndexDefinition}' names no access method.");
+        var defaultHasOptions = defaultIndexDefinition.Contains(" WITH (", StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(match.Groups[1].Value, publishedKind, StringComparison.OrdinalIgnoreCase) && publishedOptions.Count == 0 && defaultHasOptions == false)
+            return AtDefaultBuild;
+        var published = publishedOptions.Count == 0 ? "no build options" : "WITH (" + string.Join(", ", publishedOptions.Select(o => $"{o.Key}={o.Value}")) + ")";
+        return $"not {AtDefaultBuild}: the published point is {publishedKind} with {published}; the default build is '{defaultIndexDefinition}'";
+    }
 }

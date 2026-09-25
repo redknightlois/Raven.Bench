@@ -46,6 +46,10 @@ public sealed class VectorSplit
 
 public static class VectorRunMath
 {
+    /// <summary>The slice vectors the server does not hold; the stored ids decide, not a client count of acknowledged writes.</summary>
+    public static IEnumerable<BaseVector> MissingFromServer(IEnumerable<BaseVector> slice, IReadOnlySet<string> storedIds) =>
+        slice.Where(v => storedIds.Contains(v.Id) == false);
+
     /// <summary>
     /// The lowest effort value whose measured recall reaches the threshold, taken in effort order
     /// whatever order the scenario lists the settings in; null when no setting reaches it.

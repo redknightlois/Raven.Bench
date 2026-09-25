@@ -232,7 +232,9 @@ public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
     }
 
     /// <summary>Replaces the HNSW index the runs measured with another index kind; the cross-check runs it last.</summary>
-    public Task<string> ReplaceIndexAsync(string kind, IReadOnlyDictionary<string, int> options, CancellationToken ct) => transport.ReplaceIndexAsync(kind, options, ct);
+    public Task<string> ReplaceIndexAsync(string kind, IReadOnlyDictionary<string, int> options, IReadOnlyDictionary<string, string> session, CancellationToken ct) => transport.ReplaceIndexAsync(kind, options, session, ct);
+
+    public Task<HashSet<string>> ReadStoredIdsAsync(CancellationToken ct) => transport.ReadStoredIdsAsync(ct);
 
     public Task CleanupAsync() => transport.DropTableAsync();
 

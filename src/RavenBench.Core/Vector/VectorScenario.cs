@@ -57,6 +57,12 @@ public sealed record VectorCrossCheck
     /// <summary>The build options of the published index, for example <c>lists</c> for IVFFlat.</summary>
     public required Dictionary<string, int> PublishedBuildOptions { get; init; }
 
+    /// <summary>
+    /// Session settings applied only while the cross-check index is built, for example <c>maintenance_work_mem</c>,
+    /// which an IVFFlat build needs to hold its lists. Round one never runs under them.
+    /// </summary>
+    public required Dictionary<string, string> BuildSession { get; init; }
+
     /// <summary>The value of the index kind's search knob in the published run, for example <c>ivfflat.probes</c>.</summary>
     public required int PublishedSearchValue { get; init; }
 
