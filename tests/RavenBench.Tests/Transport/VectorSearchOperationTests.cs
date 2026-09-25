@@ -24,6 +24,7 @@ namespace RavenBench.Tests.Transport;
 /// The one typed vector search operation: its RQL, its refusal of an unsupported metric before load,
 /// and each RavenDB transport mode serving it against the live server.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class VectorSearchOperationTests
 {
     private const string Url = "http://localhost:8081";
