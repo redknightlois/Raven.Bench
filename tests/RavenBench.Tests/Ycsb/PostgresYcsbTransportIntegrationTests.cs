@@ -19,6 +19,7 @@ namespace RavenBench.Tests.Ycsb;
 /// works in its own schema so parallel classes do not share the fixed <c>ycsb</c> table, and drops
 /// the schema when it finishes.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class PostgresYcsbTransportIntegrationTests
 {
     private const int Seed = 42;

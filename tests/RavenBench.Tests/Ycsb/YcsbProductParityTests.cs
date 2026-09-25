@@ -21,6 +21,7 @@ namespace RavenBench.Tests.Ycsb;
 /// back from PostgreSQL, MongoDB and DocumentDB equal the ones read back from RavenDB. The only
 /// permitted differences are the id field/column and key order.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class YcsbProductParityTests : EmbeddedRavenTestBase
 {
     private const int Seed = 42;

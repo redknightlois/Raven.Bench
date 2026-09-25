@@ -20,6 +20,7 @@ namespace RavenBench.Tests.Ycsb;
 /// environment gate skips one endpoint at a time, and the test body then uses the real server.
 /// Each test uses its own database and drops it when it finishes.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class MongoYcsbTransportIntegrationTests
 {
     private const int Seed = 42;

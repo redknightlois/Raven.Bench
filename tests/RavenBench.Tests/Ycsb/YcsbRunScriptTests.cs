@@ -20,6 +20,7 @@ namespace RavenBench.Tests.Ycsb;
 /// Drives the folder's entry script and pins that the folder carries the one command, the
 /// self-contained compose file and the README. The test runs the script, not a copy of its logic.
 /// </summary>
+[Collection(LiveServers.Name)]
 public class YcsbRunScriptTests
 {
     [Fact]
