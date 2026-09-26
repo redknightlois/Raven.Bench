@@ -56,6 +56,7 @@ public sealed class AggregateSettings : CommandSettings
     [CommandOption("--filter-selectivity")] [Description("Overrides the scenario key filterSelectivity.")] public double? FilterSelectivity { get; init; }
     [CommandOption("--concurrency")] [Description("Overrides the scenario key concurrency.")] public int? Concurrency { get; init; }
     [CommandOption("--write-rate")] [Description("Overrides the scenario key writeRate.")] public double? WriteRate { get; init; }
+    [CommandOption("--writers")] [Description("Overrides the scenario key writers.")] public int? Writers { get; init; }
     [CommandOption("--under-write-query-rate")] [Description("Overrides the scenario key underWriteQueryRate.")] public double? UnderWriteQueryRate { get; init; }
     [CommandOption("--warmup")] [Description("Overrides the scenario key warmup.")] public string? Warmup { get; init; }
     [CommandOption("--duration")] [Description("Overrides the scenario key duration.")] public string? Duration { get; init; }
@@ -98,6 +99,7 @@ internal static class AggregateScenarioResolver
             FilterSelectivity = Pick("--filter-selectivity", s.FilterSelectivity, file.FilterSelectivity),
             Concurrency = Pick("--concurrency", s.Concurrency, file.Concurrency),
             WriteRate = Pick("--write-rate", s.WriteRate, file.WriteRate),
+            Writers = Pick("--writers", s.Writers, file.Writers),
             UnderWriteQueryRate = Pick("--under-write-query-rate", s.UnderWriteQueryRate, file.UnderWriteQueryRate),
             Warmup = PickText("--warmup", s.Warmup, file.Warmup),
             Duration = PickText("--duration", s.Duration, file.Duration),

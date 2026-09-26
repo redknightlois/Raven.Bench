@@ -37,7 +37,10 @@ public sealed record AggregateQueryInfo(
     bool ClientBound,
     IReadOnlyList<AggregateStepAnswers> StepAnswers);
 
-/// <summary>The under-write run: the quiet step and the under-write step at one query rate, the writer, and freshness.</summary>
+/// <summary>
+/// The under-write run: the quiet step and the under-write step at one query rate, the bulk writers
+/// (<c>Writer</c>), the probe writer (<c>Probe</c>), and freshness, which comes from the probe alone.
+/// </summary>
 public sealed record AggregateUnderWriteInfo(
     double QueryRate,
     string QueryPolicy,
@@ -49,7 +52,8 @@ public sealed record AggregateUnderWriteInfo(
     string WriteLatencyDefinition,
     FreshnessInfo Freshness,
     bool ClientBound,
-    IReadOnlyList<AggregateStepAnswers> StepAnswers);
+    IReadOnlyList<AggregateStepAnswers> StepAnswers,
+    HeldWriteRate Probe);
 
 /// <summary>
 /// Present only on a result from the aggregate entry point: the run, the resolved scenario and
