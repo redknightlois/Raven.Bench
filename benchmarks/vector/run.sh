@@ -18,7 +18,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The physical path: MSBuild must see one path per project, and a path through a symbolic link gives it two.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCENARIO_DEFAULT="$SCRIPT_DIR/scenario.json"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
