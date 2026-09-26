@@ -72,6 +72,8 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     // Wire-accurate only without transparent decompression; gzip/brotli/deflate are measured post-inflate.
     public bool ReportsWireBytes => _compression is CompressionMode.Identity or CompressionMode.Zstd;
 
+    /// <summary>A vector search returns only each hit's id and metadata, not the stored document.</summary>
+    public bool VectorSearchIdsOnly { get; init; }
 
     /// <param name="pipelineDepth">
     /// Requests per connection in flight at once. Above 1 it needs the socket path, which serves plain
@@ -248,7 +250,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
             {
                 var json = StartJson(out var body);
                 json.WriteStartObject();
-                json.WriteString("Query", vectorOp.ToRqlQuery());
+                json.WriteString("Query", vectorOp.ToRqlQuery(VectorSearchIdsOnly));
                 json.WritePropertyName("QueryParameters");
                 json.WriteStartObject();
                 json.WritePropertyName("vector");

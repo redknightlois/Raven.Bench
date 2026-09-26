@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Indexes;
 using Raven.Client.Documents.Indexes.Vector;
@@ -61,7 +62,7 @@ public interface IVectorTarget : IDisposable
 }
 
 /// <summary>
-/// RavenDB over the raw HTTP transport, the published path. The vectors are stored as float32 and the
+/// RavenDB over the raw HTTP transport, the published path. A search returns ids only, the same payload pgvector returns. The vectors are stored as float32 and the
 /// index holds them unquantized, with the build parameters left at the server defaults.
 /// </summary>
 public sealed class RavenDbVectorTarget : IVectorTarget
@@ -78,7 +79,7 @@ public sealed class RavenDbVectorTarget : IVectorTarget
         UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, metric);
         _url = url;
         _database = database;
-        _transport = new RawHttpTransport(url, database, CompressionMode.Identity, HttpVersion.Version11);
+        _transport = new RawHttpTransport(url, database, CompressionMode.Identity, HttpVersion.Version11) { VectorSearchIdsOnly = true };
     }
 
     public IYcsbTransport Transport => _transport;
@@ -145,16 +146,41 @@ public sealed class RavenDbVectorTarget : IVectorTarget
         var index = await store.Maintenance.SendAsync(new GetIndexOperation(IndexName), ct)
                     ?? throw new InvalidOperationException($"Index '{IndexName}' does not exist; load before reading the settings.");
         var vector = index.Fields["Vector"].Vector;
-        // Null build parameters mean the server applies its own defaults; the run never sets them.
-        return new Dictionary<string, string>
+        var settings = new Dictionary<string, string>
         {
             ["index"] = IndexName,
             ["index.map"] = index.Maps.Single(),
             ["index.SearchEngineType"] = index.Configuration.TryGetValue("Indexing.Static.SearchEngineType", out var engine) ? engine : "server-default",
-            ["vector.DestinationEmbeddingType"] = vector.DestinationEmbeddingType.ToString(),
-            ["vector.NumberOfEdges"] = vector.NumberOfEdges?.ToString(CultureInfo.InvariantCulture) ?? "server-default",
-            ["vector.NumberOfCandidatesForIndexing"] = vector.NumberOfCandidatesForIndexing?.ToString(CultureInfo.InvariantCulture) ?? "server-default"
+            ["vector.DestinationEmbeddingType"] = vector.DestinationEmbeddingType.ToString()
         };
+        JsonElement? configuration = null;
+        string? unreadable = null;
+        try
+        {
+            using var response = await store.GetRequestExecutor().HttpClient.GetAsync($"{_url.TrimEnd('/')}/databases/{Uri.EscapeDataString(_database)}/admin/configuration/settings", ct);
+            response.EnsureSuccessStatusCode();
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            configuration = document.RootElement.Clone();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException)
+        {
+            unreadable = ex.Message;
+        }
+        void Record(string name, int? setByBenchmark, string key)
+        {
+            var reason = unreadable;
+            if (setByBenchmark is { } value)
+                BuildSetting.Record(settings, name, value, true, key);
+            else if (configuration is { } root && RavenDbConfiguration.TryEffective(root, key, out var effective, out reason))
+                BuildSetting.Record(settings, name, effective, false, $"the server's {key}");
+            else
+                BuildSetting.Unreadable(settings, name, reason!);
+        }
+        Record("vector.NumberOfEdges", vector.NumberOfEdges, "Indexing.Corax.VectorSearch.DefaultNumberOfEdges");
+        Record("vector.NumberOfCandidatesForIndexing", vector.NumberOfCandidatesForIndexing, "Indexing.Corax.VectorSearch.DefaultNumberOfCandidatesForIndexing");
+        // Applies only to a search that passes no numberOfCandidates; every scenario search passes its effort.
+        Record("vector.NumberOfCandidatesForQuerying", null, "Indexing.Corax.VectorSearch.DefaultNumberOfCandidatesForQuerying");
+        return settings;
     }
 
     public async Task CleanupAsync()
@@ -164,6 +190,67 @@ public sealed class RavenDbVectorTarget : IVectorTarget
     }
 
     public void Dispose() => _transport.Dispose();
+}
+
+/// <summary>
+/// Records an index build value in force as two settings: the value under its name and, under the name
+/// plus <c>.source</c>, whether the benchmark set it or the product default applies.
+/// </summary>
+public static class BuildSetting
+{
+    public const string SetByBenchmark = "set by benchmark";
+
+    public static void Record(IDictionary<string, string> settings, string name, int value, bool setByBenchmark, string defaultSource)
+    {
+        settings[name] = value.ToString(CultureInfo.InvariantCulture);
+        settings[name + ".source"] = setByBenchmark ? SetByBenchmark : $"default: {defaultSource}, not set by the benchmark";
+    }
+
+    public static void Unreadable(IDictionary<string, string> settings, string name, string reason)
+    {
+        settings[name] = "unreadable";
+        settings[name + ".source"] = $"unreadable: {reason}";
+    }
+}
+
+/// <summary>Reads the value RavenDB applies for one setting from a database's configuration settings response.</summary>
+public static class RavenDbConfiguration
+{
+    /// <summary>
+    /// The database value, else the server value, else the built-in default, as the server reports them.
+    /// Returns false with the reason when the response does not carry the key or its value is not an integer.
+    /// </summary>
+    public static bool TryEffective(JsonElement root, string key, out int value, out string? reason)
+    {
+        value = 0;
+        reason = null;
+        if (root.TryGetProperty("Settings", out var settings) == false || settings.ValueKind != JsonValueKind.Array)
+        {
+            reason = "the configuration response carries no Settings array";
+            return false;
+        }
+        foreach (var setting in settings.EnumerateArray())
+        {
+            if (setting.TryGetProperty("Metadata", out var metadata) == false || metadata.TryGetProperty("Keys", out var keys) == false
+                || keys.EnumerateArray().Any(k => k.GetString() == key) == false)
+                continue;
+            var text = Configured(setting, "DatabaseValues", key) ?? Configured(setting, "ServerValues", key)
+                       ?? (metadata.TryGetProperty("DefaultValue", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null);
+            if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+                return true;
+            reason = $"the server reports '{text}' for {key}, not an integer";
+            return false;
+        }
+        reason = $"the configuration response does not list {key}";
+        return false;
+    }
+
+    private static string? Configured(JsonElement setting, string scope, string key) =>
+        setting.TryGetProperty(scope, out var values) && values.ValueKind == JsonValueKind.Object
+        && values.TryGetProperty(key, out var entry) && entry.TryGetProperty("HasValue", out var has) && has.ValueKind == JsonValueKind.True
+        && entry.TryGetProperty("Value", out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()
+            : null;
 }
 
 /// <summary>pgvector over the Apex.PgClient transport: binary COPY load, HNSW at the vendor defaults.</summary>
@@ -228,8 +315,21 @@ public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
         };
         foreach (var (name, value) in reported.ServerSettings)
             settings[name] = value;
+        try
+        {
+            var (m, efConstruction) = await transport.ReadHnswBuildParametersAsync(ct);
+            BuildSetting.Record(settings, "hnsw.m", m, IsSet(reported.IndexOptions, "m"), "the pgvector default");
+            BuildSetting.Record(settings, "hnsw.ef_construction", efConstruction, IsSet(reported.IndexOptions, "ef_construction"), "the pgvector default");
+        }
+        catch (Exception ex) when (ex is Apex.PgClient.PgException or InvalidDataException)
+        {
+            BuildSetting.Unreadable(settings, "hnsw.m", ex.Message);
+            BuildSetting.Unreadable(settings, "hnsw.ef_construction", ex.Message);
+        }
         return settings;
     }
+
+    private static bool IsSet(IReadOnlyList<string> reloptions, string option) => reloptions.Any(o => o.StartsWith(option + "=", StringComparison.Ordinal));
 
     /// <summary>Replaces the HNSW index the runs measured with another index kind; the cross-check runs it last.</summary>
     public Task<string> ReplaceIndexAsync(string kind, IReadOnlyDictionary<string, int> options, IReadOnlyDictionary<string, string> session, CancellationToken ct) => transport.ReplaceIndexAsync(kind, options, session, ct);

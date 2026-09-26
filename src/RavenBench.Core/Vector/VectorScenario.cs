@@ -19,6 +19,12 @@ public sealed class VectorScenarioException : Exception
     }
 }
 
+/// <summary>
+/// The under-insert slice, the insert rate over the warmup and the duration, is not smaller than the base
+/// vectors it is drawn from. The message names each scenario key and option that sets the slice and the value it needs.
+/// </summary>
+public sealed class InsertSliceTooLargeException(string message) : Exception(message);
+
 /// <summary>The three search-effort settings of one product, as the product's own knob and values.</summary>
 public sealed record VectorEffortSettings
 {
@@ -122,6 +128,25 @@ public sealed record VectorScenario
 
     /// <summary>The vectors the under-insert run inserts: the insert rate over the measured duration and its warmup.</summary>
     public int InsertCount(TimeSpan warmup, TimeSpan duration) => (int)Math.Ceiling(InsertRate * (warmup + duration).TotalSeconds);
+
+    /// <summary>
+    /// Throws <see cref="InsertSliceTooLargeException"/> when the insert slice leaves no loaded vector of
+    /// <paramref name="baseCount"/>. The run calls it before anything is fetched or loaded.
+    /// </summary>
+    public void RequireInsertSliceBelow(long baseCount, TimeSpan warmup, TimeSpan duration)
+    {
+        var slice = InsertCount(warmup, duration);
+        if (slice < baseCount)
+            return;
+        var seconds = (warmup + duration).TotalSeconds;
+        // Rounded down, so each named value keeps the slice below the base.
+        static string AtMost(double value) => (Math.Floor(value * 1000) / 1000).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        throw new InsertSliceTooLargeException(
+            $"The under-insert slice of {slice} vectors (InsertRate {InsertRate} x (Warmup {Warmup} + Duration {Duration})) must be smaller than the {baseCount} base vectors. " +
+            $"Set one of: scenario key 'InsertRate' (--insert-rate) to at most {AtMost((baseCount - 1) / seconds)}; " +
+            $"scenario keys 'Warmup' and 'Duration' (--warmup, --duration) to at most {AtMost((baseCount - 1) / InsertRate)}s together; " +
+            $"scenario key 'VectorCountCap' (--vector-count-cap) to at least {slice + 1}, on a set that holds that many base vectors.");
+    }
 
     public VectorEffortSettings EffortsFor(string family) =>
         Efforts.TryGetValue(family, out var settings)

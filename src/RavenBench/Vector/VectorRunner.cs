@@ -117,7 +117,10 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
         var set = setOverride ?? ResolveSet(scenario.Dataset);
         if (scenario.VectorCountCap is { } cap)
+        {
+            scenario.RequireInsertSliceBelow(cap, warmup, duration);
             set = new CappedVectorDataset(set, cap);
+        }
         using var target = BuildTarget(targetName, url, database, set.Metric, set.Dimensions, scenario.Readers);
         var efforts = scenario.EffortsFor(target.EffortFamily);
         if (efforts.Knob != target.Effort(efforts.Default).Knob)
@@ -128,7 +131,9 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         var files = await PinnedFiles.EnsureAsync(set, Environment.ExpandEnvironmentVariables(scenario.DataDirectory), ct: ct);
         var selection = new QuerySelection(scenario.Seed, scenario.QueryCount);
         var queries = await set.GetQueriesAsync(files, selection, scenario.TruthDepth, ct);
-        var split = new VectorSplit(await set.BaseCountAsync(files, selection, ct), scenario.Seed, scenario.InsertCount(warmup, duration), scenario.FilterSelectivity);
+        var baseCount = await set.BaseCountAsync(files, selection, ct);
+        scenario.RequireInsertSliceBelow(baseCount, warmup, duration);
+        var split = new VectorSplit(baseCount, scenario.Seed, scenario.InsertCount(warmup, duration), scenario.FilterSelectivity);
 
         VectorResourceCheck.Require(split.BaseCount, set.Dimensions, Environment.ExpandEnvironmentVariables(scenario.DataDirectory));
 

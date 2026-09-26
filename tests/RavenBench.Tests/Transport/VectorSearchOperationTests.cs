@@ -46,6 +46,14 @@ public class VectorSearchOperationTests
     }
 
     [Fact]
+    public void Rql_IdsOnly_ProjectsTheDocumentId()
+    {
+        var op = new VectorSearchOperation { QueryVector = [1f], FieldName = "Vector", ExpectedIndex = IndexName };
+
+        Assert.Equal(op.ToRqlQuery() + " select id()", op.ToRqlQuery(idsOnly: true));
+    }
+
+    [Fact]
     public void Rql_EffortNamingAnotherProductsKnob_IsRefused()
     {
         var op = new VectorSearchOperation { QueryVector = [1f], FieldName = "Vector", Effort = new SearchEffort("hnsw.ef_search", 40) };
@@ -99,6 +107,7 @@ public class VectorSearchOperationTests
             var transports = new ITransport[]
             {
                 new RawHttpTransport(Url, database, CompressionMode.Identity, HttpVersion.Version11),
+                new RawHttpTransport(Url, database, CompressionMode.Identity, HttpVersion.Version11) { VectorSearchIdsOnly = true },
                 new RavenClientTransport(Url, database, CompressionMode.Identity, HttpVersion.Version11),
                 new RavenClientTransport(Url, database, CompressionMode.Identity, HttpVersion.Version11, mapEntities: true)
             };

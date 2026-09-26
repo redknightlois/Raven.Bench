@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json.Nodes;
@@ -118,5 +119,29 @@ public class VectorScenarioTests
             .Should().Throw<VectorScenarioException>().WithMessage("*elastic*");
         FluentActions.Invoking(() => VectorRunner.ResolveSet("nope"))
             .Should().Throw<VectorScenarioException>().WithMessage("*nope*");
+    }
+
+    [Fact]
+    public void An_Insert_Slice_Covering_The_Base_Is_Refused_With_Every_Key_Option_And_Needed_Value()
+    {
+        var scenario = VectorScenario.Load(ShippedScenario) with { InsertRate = 500, Warmup = "10s", Duration = "30s" };
+
+        var act = () => scenario.RequireInsertSliceBelow(20000, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30));
+
+        var message = act.Should().Throw<InsertSliceTooLargeException>().Which.Message;
+        foreach (var name in new[] { "'InsertRate'", "--insert-rate", "'Warmup'", "--warmup", "'Duration'", "--duration", "'VectorCountCap'", "--vector-count-cap" })
+            message.Should().Contain(name);
+        // (20000 - 1) / 40 s, (20000 - 1) / 500 per s, 20000 + 1.
+        message.Should().Contain("at most 499.975;").And.Contain("at most 39.998s").And.Contain("at least 20001");
+    }
+
+    [Fact]
+    public void The_Readme_Small_Set_Fits_The_Shipped_Scenario()
+    {
+        var scenario = VectorScenario.Load(ShippedScenario) with { InsertRate = 100 };
+        var readme = File.ReadAllText(Path.Combine(RepositoryRootLocator.Find(), "benchmarks", "vector", "README.md"));
+        readme.Should().Contain("--vector-count-cap 20000 --insert-rate 100");
+
+        scenario.RequireInsertSliceBelow(20000, CliParsing.ParseDuration(scenario.Warmup), CliParsing.ParseDuration(scenario.Duration));
     }
 }
