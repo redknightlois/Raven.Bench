@@ -42,6 +42,21 @@ public class LatencyRecorderTests
     }
 
     [Fact]
+    public void P999_Is_The_Histogram_Percentile_Not_The_Max_With_One_Outlier()
+    {
+        var recorder = new LatencyRecorder(recordLatencies: true);
+        for (int i = 1; i <= 2000; i++)
+            recorder.Record(i);
+        recorder.Record(1_000_000);
+
+        var snapshot = recorder.Snapshot();
+        var values = new[] { 50, 90, 99, 99.9, 99.99 }.Select(snapshot.GetPercentile).ToArray();
+
+        values.Should().BeInAscendingOrder();
+        values[3].Should().BeLessThan(snapshot.MaxMicros).And.BeLessThan(2100);
+    }
+
+    [Fact]
     public void Snapshot_MultipleCalls_Should_SeeSameData()
     {
         // INVARIANT: Snapshot() returns data from interval since last call
