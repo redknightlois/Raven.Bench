@@ -168,3 +168,14 @@ public static class AggregateShapes
         return list.Count > 0 ? list : throw new InvalidOperationException($"No embedded {product} aggregate index definitions under '{prefix}'.");
     }
 }
+
+/// <summary>
+/// Sets the category and the amount of one aggregate document. The values are data on the
+/// operation; each transport owns the product syntax that writes them.
+/// </summary>
+public sealed class AggregateUpdateOperation : OperationBase
+{
+    public required string Id { get; init; }
+    public required string Category { get; init; }
+    public required long Amount { get; init; }
+}

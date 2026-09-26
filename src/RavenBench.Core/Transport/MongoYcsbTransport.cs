@@ -118,6 +118,7 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         BulkInsertOperation<string> bulk => Guarded(() => BulkInsertAsync(bulk, ct), ct),
         BulkInsertOperation<AggregateDocument> bulk => Guarded(() => BulkInsertAggregatesAsync(bulk, ct), ct),
         GroupedAggregateOperation aggregate => Guarded(() => AggregateAsync(aggregate, ct), ct),
+        AggregateUpdateOperation update => Guarded(() => UpdateAggregateAsync(update, ct), ct),
         _ => throw new NotSupportedException($"{nameof(MongoYcsbTransport)} cannot execute operation type {op.GetType().Name}.")
     };
 
@@ -384,6 +385,17 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         {
             // Expected: the collection already exists.
         }
+    }
+
+    private async Task<TransportResult> UpdateAggregateAsync(AggregateUpdateOperation update, CancellationToken ct)
+    {
+        var set = Builders<BsonDocument>.Update
+            .Set(AggregateDocument.CategoryField, update.Category)
+            .Set(AggregateDocument.AmountField, new BsonInt64(update.Amount));
+        var result = await _aggregates.UpdateOneAsync(ReadFilter(update.Id), set, cancellationToken: ct).ConfigureAwait(false);
+        return result.MatchedCount == 0
+            ? new TransportResult(0, 0, $"Aggregate document '{update.Id}' was not found for update.")
+            : new TransportResult(0, 0);
     }
 
     private async Task<TransportResult> BulkInsertAggregatesAsync(BulkInsertOperation<AggregateDocument> bulk, CancellationToken ct)

@@ -1,0 +1,19 @@
+{
+  "seed": 42,
+  "documentCount": 10000000,
+  "documentSize": 1024,
+  "categoryCardinality": 100,
+  "regionCardinality": 10000,
+  "distribution": "uniform",
+  "distributionExponent": null,
+  "countTopN": 20,
+  "regionTopN": 100,
+  "filterSelectivity": 0.01,
+  "concurrency": 64,
+  "writeRate": 2000,
+  "underWriteQueryRate": 100,
+  "warmup": "10s",
+  "duration": "30s",
+  "nonStaleTimeout": "60m",
+  "dataDirectory": "%HOME%/raven-bench-data/aggregate"
+}

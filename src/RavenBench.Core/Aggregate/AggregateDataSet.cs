@@ -157,14 +157,35 @@ public sealed class AggregateDataSet(AggregateDataSpec spec)
 
     public AggregateDataSetSummary Summarize(IEnumerable<AggregateDocument> documents)
     {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        long count = 0;
+        using var digest = new AggregateSetDigest(Spec);
         foreach (var d in documents)
-        {
-            hash.AppendData(Encoding.UTF8.GetBytes($"{d.Id}\t{d.Category}\t{d.Region}\t{d.Amount}\t{d.Timestamp}\t{d.Payload}\n"));
-            count++;
-        }
-        return new AggregateDataSetSummary(count, Convert.ToHexStringLower(hash.GetHashAndReset()), Spec.Distribution.ToString(),
-            Spec.CategoryCardinality, Spec.RegionCardinality);
+            digest.Add(d);
+        return digest.Summary();
     }
+}
+
+/// <summary>
+/// Hashes documents as they are emitted and counts each category, so a load that streams the set
+/// records its summary in the same pass.
+/// </summary>
+public sealed class AggregateSetDigest(AggregateDataSpec spec) : IDisposable
+{
+    private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+    private readonly Dictionary<string, long> _categories = new(StringComparer.Ordinal);
+    private long _count;
+
+    public IReadOnlyDictionary<string, long> CategoryCounts => _categories;
+
+    public void Add(AggregateDocument d)
+    {
+        _hash.AppendData(Encoding.UTF8.GetBytes($"{d.Id}\t{d.Category}\t{d.Region}\t{d.Amount}\t{d.Timestamp}\t{d.Payload}\n"));
+        _categories[d.Category] = _categories.GetValueOrDefault(d.Category) + 1;
+        _count++;
+    }
+
+    /// <summary>The count and checksum of every document added so far; the hash is not consumed.</summary>
+    public AggregateDataSetSummary Summary() => new(_count, Convert.ToHexStringLower(_hash.GetCurrentHash()), spec.Distribution.ToString(),
+        spec.CategoryCardinality, spec.RegionCardinality);
+
+    public void Dispose() => _hash.Dispose();
 }
