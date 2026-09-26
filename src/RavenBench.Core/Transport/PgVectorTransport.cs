@@ -230,7 +230,8 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
     /// <summary>
     /// Replaces the HNSW index with one of <paramref name="kind"/> built with <paramref name="options"/>,
     /// under the <paramref name="session"/> settings, and returns its definition as <c>pg_get_indexdef</c> reports it.
-    /// The session settings are reset after the build.
+    /// The drop, the build and the session settings share one transaction: the settings end with it, and a
+    /// failed or cancelled build keeps the old index.
     /// </summary>
     public async Task<string> ReplaceIndexAsync(string kind, IReadOnlyDictionary<string, int> options, IReadOnlyDictionary<string, string> session, CancellationToken ct = default)
     {
@@ -244,14 +245,77 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
         var with = options.Count == 0 ? "" : $" WITH ({string.Join(", ", options.Select(o => $"{o.Key} = {o.Value.ToString(CultureInfo.InvariantCulture)}"))})";
         if (session.Keys.FirstOrDefault(key => PlainName().IsMatch(key) == false) is { } badSetting)
             throw new ArgumentException($"Session setting '{badSetting}' is not a plain setting name.", nameof(session));
-        foreach (var (setting, value) in session)
-            await _setup!.QueryAsync("SELECT set_config($1, $2, false)", SqlParameters.Create(setting, value), ct).ConfigureAwait(false);
-        await _setup!.ExecuteAsync($"DROP INDEX IF EXISTS {IndexName}", ct).ConfigureAwait(false);
-        await _setup.ExecuteAsync($"CREATE INDEX {name} ON {TableName} USING {kind} (embedding {PgVectorMetrics.OperatorClass(_metric)}){with}", ct).ConfigureAwait(false);
-        foreach (var setting in session.Keys)
-            await _setup.ExecuteAsync($"RESET {setting}", ct).ConfigureAwait(false);
-        await _setup.ExecuteAsync($"ANALYZE {TableName}", ct).ConfigureAwait(false);
+        await InTransactionAsync(_setup!, commit: true, async () =>
+        {
+            foreach (var (setting, value) in session)
+                await _setup!.QueryAsync("SELECT set_config($1, $2, true)", SqlParameters.Create(setting, value), ct).ConfigureAwait(false);
+            await _setup!.ExecuteAsync($"DROP INDEX IF EXISTS {IndexName}", ct).ConfigureAwait(false);
+            await _setup.ExecuteAsync($"CREATE INDEX {name} ON {TableName} USING {kind} (embedding {PgVectorMetrics.OperatorClass(_metric)}){with}", ct).ConfigureAwait(false);
+            return true;
+        }, ct).ConfigureAwait(false);
+        await _setup!.ExecuteAsync($"ANALYZE {TableName}", ct).ConfigureAwait(false);
         return (await _setup.QueryAsync(IndexDefinitionSql, SqlParameters.Create(name), ct).ConfigureAwait(false))[0].Get<string>(0);
+    }
+
+    /// <summary>The value of one setting on the setup connection, or <c>absent</c> when the server does not know it.</summary>
+    internal async Task<string> ReadSettingAsync(string name, CancellationToken ct = default)
+    {
+        await _ready.Value.ConfigureAwait(false);
+        return (await _setup!.QueryAsync("SELECT coalesce(current_setting($1, true), 'absent')", SqlParameters.Create(name), ct).ConfigureAwait(false))[0].Get<string>(0);
+    }
+
+    /// <summary>
+    /// The <c>m</c> and <c>ef_construction</c> the HNSW index was built with, read from its metapage through
+    /// <c>pageinspect</c>. The extension is created inside a transaction that always rolls back, so the
+    /// database keeps no trace of it. Throws <see cref="InvalidDataException"/> when block 0 is not an HNSW metapage.
+    /// </summary>
+    public async Task<(int M, int EfConstruction)> ReadHnswBuildParametersAsync(CancellationToken ct = default)
+    {
+        await _ready.Value.ConfigureAwait(false);
+        return await InTransactionAsync(_setup!, commit: false, async () =>
+        {
+            await _setup!.ExecuteAsync("CREATE EXTENSION IF NOT EXISTS pageinspect", ct).ConfigureAwait(false);
+            var row = (await _setup.QueryAsync(HnswMetaPageSql, SqlParameters.Create(IndexName), ct).ConfigureAwait(false))[0];
+            if (row.Get<long>(0) != HnswMagicNumber)
+                throw new InvalidDataException($"Block 0 of index '{IndexName}' carries magic 0x{row.Get<long>(0):X8}, not the HNSW metapage magic 0x{HnswMagicNumber:X8}.");
+            return ((int)row.Get<long>(1), (int)row.Get<long>(2));
+        }, ct).ConfigureAwait(false);
+    }
+
+    private const long HnswMagicNumber = 0xA953A953;
+
+    // HnswMetaPageData after the 24-byte page header; PostgreSQL gives | and << equal precedence, so each shift is parenthesized: magic uint32 at 24, m uint16 at 36, efConstruction uint16 at 38, little-endian.
+    private const string HnswMetaPageSql =
+        "SELECT get_byte(p, 24)::int8 | (get_byte(p, 25)::int8 << 8) | (get_byte(p, 26)::int8 << 16) | (get_byte(p, 27)::int8 << 24), " +
+        "(get_byte(p, 36) | (get_byte(p, 37) << 8))::int8, (get_byte(p, 38) | (get_byte(p, 39) << 8))::int8 " +
+        "FROM (SELECT get_raw_page($1, 0) AS p) page";
+
+    /// <summary>
+    /// Runs the body in one transaction and commits or rolls back at its end. A failure rolls back; a failed
+    /// rollback is attached to the failure that ended the body and never replaces it.
+    /// </summary>
+    private static async Task<T> InTransactionAsync<T>(PgConnection connection, bool commit, Func<Task<T>> body, CancellationToken ct)
+    {
+        await connection.ExecuteAsync("BEGIN", ct).ConfigureAwait(false);
+        T result;
+        try
+        {
+            result = await body().ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            try
+            {
+                await connection.ExecuteAsync("ROLLBACK", CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception rollback)
+            {
+                throw new AggregateException(failure, rollback);
+            }
+            throw;
+        }
+        await connection.ExecuteAsync(commit ? "COMMIT" : "ROLLBACK", CancellationToken.None).ConfigureAwait(false);
+        return result;
     }
 
     /// <summary>Drops the table and its index; a check that loaded a sample leaves nothing behind.</summary>
@@ -272,7 +336,7 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
 
         var settings = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var name in RecordedSettings)
-            settings[name] = (await _setup.QueryAsync("SELECT coalesce(current_setting($1, true), 'absent')", SqlParameters.Create(name), ct).ConfigureAwait(false))[0].Get<string>(0);
+            settings[name] = await ReadSettingAsync(name, ct).ConfigureAwait(false);
 
         var options = index[0].Get<string>(1);
         return new PgVectorServerSettings(

@@ -130,6 +130,31 @@ public class PgVectorTransportIntegrationTests
     });
 
     [RequiresPostgreSqlFact]
+    public Task A_Failed_Index_Replacement_Leaves_No_Session_Setting_And_Keeps_The_Old_Index() => WithLoadedSet(async (transport, _) =>
+    {
+        var before = await transport.ReadSettingAsync("maintenance_work_mem");
+        var session = new Dictionary<string, string> { ["maintenance_work_mem"] = "77MB" };
+
+        await Assert.ThrowsAnyAsync<PgException>(() => transport.ReplaceIndexAsync("hnsw", new Dictionary<string, int> { ["no_such_option"] = 1 }, session));
+
+        Assert.Equal(before, await transport.ReadSettingAsync("maintenance_work_mem"));
+        Assert.Equal((16, 64), await transport.ReadHnswBuildParametersAsync());
+    });
+
+    [RequiresPostgreSqlFact]
+    public Task A_Successful_Index_Replacement_Leaves_No_Session_Setting_And_Records_Its_Build_Values() => WithLoadedSet(async (transport, _) =>
+    {
+        var before = await transport.ReadSettingAsync("maintenance_work_mem");
+
+        await transport.ReplaceIndexAsync("hnsw", new Dictionary<string, int> { ["m"] = 8, ["ef_construction"] = 32 }, new Dictionary<string, string> { ["maintenance_work_mem"] = "77MB" });
+
+        Assert.Equal(before, await transport.ReadSettingAsync("maintenance_work_mem"));
+        Assert.Equal((8, 32), await transport.ReadHnswBuildParametersAsync());
+        Assert.Equal(0, await transport.ReadWithWorkerAsync(async (connection, _) =>
+            (await connection.QueryAsync("SELECT count(*)::int8 FROM pg_extension WHERE extname = 'pageinspect'", CancellationToken.None))[0].Get<long>(0)));
+    });
+
+    [RequiresPostgreSqlFact]
     public Task Exact_Search_Skips_The_Index_And_Returns_The_Brute_Force_Truth() => WithLoadedSet(async (transport, set) =>
     {
         var queries = Seeded(10, seed: 11);

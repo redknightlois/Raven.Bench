@@ -165,7 +165,10 @@ public class VectorSearchOperation : OperationBase
     /// Includes quantization, exact search mode, and similarity threshold.
     /// Uses explicit index names to enable proper staleness control.
     /// </summary>
-    public string ToRqlQuery()
+    public string ToRqlQuery() => ToRqlQuery(idsOnly: false);
+
+    /// <param name="idsOnly">Projects each hit to its document id, so the response carries no stored document.</param>
+    public string ToRqlQuery(bool idsOnly)
     {
         var embeddingSelector = GetEmbeddingSelector();
         string searchClause = Effort != null
@@ -183,7 +186,8 @@ public class VectorSearchOperation : OperationBase
 
         var indexName = ExpectedIndex ?? VectorIndexNaming.GetIndexName("Words", Quantization, "");
 
-        return $"from index '{indexName}' where {whereClause}";
+        var query = $"from index '{indexName}' where {whereClause}";
+        return idsOnly ? query + " select id()" : query;
     }
 
     /// <summary>

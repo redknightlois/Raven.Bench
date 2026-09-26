@@ -28,10 +28,10 @@ The `pgvector` service publishes 5432 like the ycsb `postgresql` service, so onl
 
 Before the load, the run checks that available memory and free disk under the data directory each hold twice the raw base (vectors x dimensions x 4 bytes), and it stops by name when either is short.
 
-The shipped scenario runs the plan's default set, cohere-768-1m. A small set for a quick run is any set with a cap on its base vectors, for example:
+The shipped scenario runs the plan's default set, cohere-768-1m. A small set for a quick run is any set with a cap on its base vectors. The under-insert slice, `InsertRate` times `Warmup` plus `Duration`, is held out of that cap and must leave vectors to load, so a small cap also lowers the insert rate, for example:
 
 ```
-./benchmarks/vector/run.sh --target ravendb --dataset glove-100-angular --vector-count-cap 20000
+./benchmarks/vector/run.sh --target ravendb --dataset glove-100-angular --vector-count-cap 20000 --insert-rate 100
 ```
 
 ## The three Docker situations
