@@ -211,19 +211,26 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
             if (rows.Count == 0)
                 return (IReadOnlyDictionary<string, string>?)null;
 
-            // The driver returns jsonb in binary form, so the statement casts it to text. jsonb
-            // reorders keys, so only parsed values may be compared.
-            using var stored = System.Text.Json.JsonDocument.Parse(rows[0].Get<string>(0));
-            var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
-            for (int i = 0; i < PayloadGenerator.FieldCount; i++)
-            {
-                var name = PayloadGenerator.FieldName(i);
-                if (stored.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
-                    fields[name] = value.GetString()!;
-            }
-
-            return fields;
+            return ParseStoredFields(rows[0].Get<string>(0));
         });
+
+    /// <summary>
+    /// The ten string fields of one stored document, read from its jsonb text. jsonb reorders keys,
+    /// so only parsed values may be compared.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> ParseStoredFields(string storedJson)
+    {
+        using var stored = System.Text.Json.JsonDocument.Parse(storedJson);
+        var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
+        for (int i = 0; i < PayloadGenerator.FieldCount; i++)
+        {
+            var name = PayloadGenerator.FieldName(i);
+            if (stored.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
+                fields[name] = value.GetString()!;
+        }
+
+        return fields;
+    }
 
     /// <inheritdoc />
     public Task DeleteStoredDocumentAsync(string id, CancellationToken ct) =>
