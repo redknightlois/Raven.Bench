@@ -183,6 +183,16 @@ The Npgsql modes run the same SQL on the same table as Apex, apply and record `s
 ./benchmarks/ycsb/run.sh --target postgresql --transport client-entity
 ```
 
+## The Npgsql cross-check
+
+The cross-check tests that the Apex rows are not an artefact of an unusual client:
+
+```
+./benchmarks/ycsb/run.sh --target postgresql --cross-check
+```
+
+It loads the keyspace once through `raw`, then runs every closed-loop workload C row of the scenario through `raw` and then through `client`, with the same scenario, seed and table. For each row it reports both medians of `MaxStepThroughput` side by side, their difference, and a verdict. The noise rule: the difference is within noise when |median(client) - median(raw)| <= max(range(raw), range(client)), where the range is the largest minus the smallest repetition of that row in one mode. The rule needs at least two repetitions per mode; with fewer, the command fails instead of giving a verdict. The result `<prefix>-crosscheck.json` names the result files each row compared and states the rule; the per-run results are written as `<prefix>-raw-<run>.json` and `<prefix>-client-<run>.json`. The raw pass always runs first, so a warm cache favours the client pass; compare the verdict with that order in mind.
+
 ## Port table
 
 Every service, its host port and its default endpoint. The two containerized RavenDB host ports

@@ -73,5 +73,8 @@ internal static class Program
         cfg.AddCommand<YcsbCommand>("ycsb")
             .WithDescription("Run the ycsb scenario's load, C, A, B and insert-stream sequence, one result per run.")
             .WithExample("ycsb", "--url", "http://localhost:10101", "--database", "ycsb", "--scenario", "benchmarks/ycsb/scenario.json");
+        cfg.AddCommand<YcsbCrossCheckCommand>("ycsb-crosscheck")
+            .WithDescription("Run ycsb workload C against PostgreSQL through raw (Apex.PgClient) and client (Npgsql) and compare the rows against the run-to-run noise.")
+            .WithExample("ycsb-crosscheck", "--target", "postgresql", "--url", "postgresql://bench:bench@localhost:5432/bench", "--database", "ycsb_crosscheck", "--scenario", "benchmarks/ycsb/scenario.json");
     }
 }

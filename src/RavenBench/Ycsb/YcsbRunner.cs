@@ -38,23 +38,34 @@ public sealed class YcsbRunner
     private readonly YcsbSettings _settings;
     private readonly DockerDatabaseContainerLocator _containerLocator;
     private readonly NativeMachineFingerprintSource _fingerprintSource;
+    private readonly TransportKind? _transportOverride;
+    private readonly Func<YcsbRunIdentity, bool> _include;
 
     // Distinguishes the default histogram directory of two runners in one process, so parallel
     // gated tests never share an artifact path when neither supplies an output prefix.
     private readonly string _runToken = Guid.NewGuid().ToString("N")[..8];
 
     public YcsbRunner(YcsbScenario scenario, YcsbSettings settings)
+        : this(scenario, settings, transportOverride: null, include: _ => true)
+    {
+    }
+
+    /// <param name="transportOverride">The mode to run instead of the one <c>--transport</c> names; null keeps the option's mode.</param>
+    /// <param name="include">Selects the runs of the scenario's set this invocation runs.</param>
+    internal YcsbRunner(YcsbScenario scenario, YcsbSettings settings, TransportKind? transportOverride, Func<YcsbRunIdentity, bool> include)
     {
         _scenario = scenario;
         _settings = settings;
+        _transportOverride = transportOverride;
+        _include = include;
         _containerLocator = new DockerDatabaseContainerLocator();
         _fingerprintSource = new NativeMachineFingerprintSource();
     }
 
     public async Task<List<YcsbRunResult>> RunAsync()
     {
-        var transportKind = ResolveTransportKind(_scenario.Target, _settings.Transport);
-        var plan = YcsbRunPlan.Build(_scenario);
+        var transportKind = _transportOverride ?? ResolveTransportKind(_scenario.Target, _settings.Transport);
+        var plan = YcsbRunPlan.Build(_scenario).Where(_include).ToList();
         var docSizeBytes = CliParsing.ParseSize(_scenario.DocumentSize);
         var warmup = CliParsing.ParseDuration(_scenario.Warmup);
         var duration = CliParsing.ParseDuration(_scenario.Duration);
@@ -122,7 +133,7 @@ public sealed class YcsbRunner
                 BulkDepth = _settings.BulkDepth,
                 MaxErrorRate = CliParsing.ParsePercent(_settings.MaxErrors),
                 LinkMbps = _settings.LinkMbps,
-                LatencyHistogramsDir = HistogramPrefixFor(identity.ResultName),
+                LatencyHistogramsDir = HistogramPrefixFor(ArtifactName(identity)),
                 // A ycsb run always exports both the HdrHistogram log and the CSV, so the result
                 // names two artifacts that exist for every step and no two runs collide.
                 LatencyHistogramsFormat = HistogramExportFormat.Both
@@ -395,6 +406,14 @@ public sealed class YcsbRunner
         throw new YcsbScenarioException(
             $"The '{_scenario.Target}' endpoint does not carry a port, so the container that serves it cannot be identified. Name the port in --url.");
     }
+
+    /// <summary>
+    /// The name a run's artifacts carry. A runner whose mode was set by its caller prefixes the mode,
+    /// so two modes over one scenario and one output prefix never share a path.
+    /// </summary>
+    internal string ArtifactName(YcsbRunIdentity identity) => _transportOverride is { } mode
+        ? $"{CliParsing.FormatTransport(mode)}-{identity.ResultName}"
+        : identity.ResultName;
 
     /// <summary>
     /// The per-run histogram prefix. It carries the run identity so the five runs never share an
