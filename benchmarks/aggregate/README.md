@@ -1,0 +1,80 @@
+# The aggregate benchmark
+
+RavenDB map-reduce indexes against MongoDB 8.0 Community aggregation pipelines. The question: over grouped counts and sums while writes keep coming, what throughput and latency does each product sustain, and how fresh is each answer?
+
+## Prerequisites
+
+- The .NET 10 SDK on the client (`dotnet` on PATH, or under `~/.dotnet`).
+- The target: the external RavenDB server for `ravendb`, or Docker for the containerized `ravendb-7` and `mongodb` services when no endpoint answers.
+- A writable `dataDirectory` outside the repository. The run writes the emitted set's manifest there (count and checksum per scenario), and refuses a directory inside the repository.
+- Optional: node_exporter on the database host, for server CPU during every step and server CPU and disk writes during the build.
+
+## The one command
+
+```
+./benchmarks/aggregate/run.sh --target <ravendb|ravendb-7|mongodb|mongodb-indexed>
+```
+
+The script is endpoint-driven, exactly as the vector folder's script. It probes the target's endpoint first. It starts a container from this folder's compose file only when no `--url` is given and the default endpoint does not answer. A caller-supplied `--url` is used as given and makes no Docker call. Every option other than `--target` is forwarded to the `aggregate` command, and every option that sets a scenario key is recorded in the result under `Aggregate.Overrides`, beside `Aggregate.ResolvedScenario`.
+
+- `ravendb`: http://localhost:8081, never started by the script.
+- `ravendb-7`: http://localhost:8087 (`RAVENDB7_PORT`), compose service `ravendb-7`.
+- `mongodb` and `mongodb-indexed`: mongodb://localhost:27017 (`MONGODB_PORT`), compose service `mongodb`. The two targets are one server and one transport; `mongodb-indexed` differs only in creating the indexes in `src/RavenBench.Core/Aggregate/Indexes/mongodb`.
+
+The `mongodb` service publishes 27017 like the ycsb `mongodb` service, so only one of them runs at a time unless `MONGODB_PORT` moves it.
+
+The shipped scenario holds the plan's defaults (10M documents of 1 KB, 100 categories, 10,000 regions). A small run for a quick check sets the document count on the command line, for example:
+
+```
+./benchmarks/aggregate/run.sh --target mongodb-indexed --documents 20000 --write-rate 200 --duration 10s
+```
+
+## The three Docker situations
+
+- Docker is not installed: the script says so and names the compose command to run on another host, then `--url`.
+- Docker is installed but the daemon is not reachable: the script says so and names the `docker` group, sudo or `--url`.
+- The compose start fails or the container does not become ready: the script says which target and how long it waited.
+
+## The database host is not the client
+
+Run the target and node_exporter on the database host, and the script on the client:
+
+```
+# database host
+docker compose -f benchmarks/aggregate/docker-compose.yml up -d mongodb
+docker run -d --net=host --pid=host -v /:/host:ro,rslave quay.io/prometheus/node-exporter:latest --path.rootfs=/host
+
+# client
+./benchmarks/aggregate/run.sh --target mongodb --url mongodb://db-host:27017 --node-exporter-url http://db-host:9100/metrics
+```
+
+For `ravendb-7`, set `RAVENDB_HOST=db-host` on the database host before `up`, so the server advertises a URL the client can reach. When node_exporter does not answer, the run continues and every server figure names why it is unavailable; it never records a zero in its place.
+
+## What each row means
+
+Every run leaves `results/<target>-<run id>-<run>.json` in the extended summary format of the ycsb and vector runs: the resolved scenario and the overrides, the target, its version and image digest, the durability parity setting, the emitted set (`DataSet`: count, checksum, distribution and cardinalities), the per-step table, the HdrHistogram paths, the machine fingerprint, and the server columns with their source.
+
+- `build`: loads the seeded set, then creates the RavenDB map-reduce indexes (`src/RavenBench.Core/Aggregate/Indexes/ravendb`, one per shape) or the `mongodb-indexed` supporting indexes, and waits until every shape answers and, on RavenDB, every index reports non-stale in the server's index statistics. It reports the wall time split into load and index time, server CPU and disk bytes written during the build (node_exporter, host-wide), and the on-disk size by the product's own statistic. A figure that cannot be read carries `Unavailable` with the reason.
+- `count-by-category`: documents per category over the whole collection, top `countTopN`.
+- `sum-by-region`: sum of `amount` per region, top `regionTopN`.
+- `filtered-group`: sum of `amount` per region for one category, top `regionTopN`. The category is the emitted category whose share of the set is nearest `filterSelectivity`; the result names it in `FilterCategory`.
+- Each of the three query rows runs a closed loop at `concurrency` to find the ceiling, then the fixed-rate runner at that rate (`FixedRate`), measuring latency from the scheduled time, p50 to p99.99, with queries per second and server CPU. A step where the load host saturated carries the client-bound marking and must not be published.
+- `under-write`: count-by-category at `underWriteQueryRate`, first quiet, then while one writer updates `amount` and `category` at `writeRate`. It reports query p99 and throughput for both steps, the write latency (send to acknowledgement), the requested and the held write rate (`Writer.RequestedPerSecond`, `Writer.HeldPerSecond`, acknowledged writes over the writer's measured duration), and freshness. When the writer did not hold the requested rate, `Writer.HeldRequested` is false.
+
+Every query step records `StepAnswers`: the answers and the stale answers, counted from the stale flag of each response. MongoDB never marks an answer stale, so its count is zero, present in the result. No query waits for a non-stale answer; the policy is named on every row as `QueryPolicy`, because waiting hides the cost this benchmark exists to show.
+
+## Freshness
+
+Freshness has one definition for every product: the time from a write's acknowledgement until the first query answer received that reflects it. It is measured from the answers, never from an index ETag, a stale flag or an assumption that a pipeline is always fresh.
+
+The writer makes every write observable in the count-by-category answer. The tracked group is the category with the most documents after the load. Every write moves one document from another category into it, one write in flight, so the tracked count after the k-th acknowledged write is the baseline plus k, and nothing else raises it. The tracked category stays first in the answer, so any top N shows it. An answer reflects write k when its count for the tracked category is at least baseline plus k. An answer received before the acknowledgement never counts as a reflection, so no freshness value is negative. Acknowledgements and answers are timed with the monotonic clock the fixed-rate runner schedules with.
+
+`Freshness` reports the observed writes as a distribution (p50, p90, p99, max), the observed count, and the unobserved count: writes no answer reflected before the run ended. It is its own field and is not folded into throughput or latency. Its resolution is the query interval, one over `underWriteQueryRate`.
+
+## Costs
+
+The cost of a run follows from the scenario: the build writes `documentCount` documents of `documentSize` bytes once and builds one index per shape, each query row runs `warmup + duration` twice (closed loop, then fixed rate), under-write runs it twice more, and the writer updates `writeRate` documents per second for the second of those. No figure measured on a shared development box belongs in this file or in the defaults.
+
+## Adding a query shape
+
+A shape is a `GroupedAggregateOperation`: a group field, a count or a sum over a named field, an optional typed equality or range filter, and a top N. Add its name and operation to `AggregateShapes`, a RavenDB map-reduce index whose name is the operation's `IndexName` under `src/RavenBench.Core/Aggregate/Indexes/ravendb`, and the MongoDB index that supports it under `src/RavenBench.Core/Aggregate/Indexes/mongodb`. The transports translate the operation; no RQL or pipeline is written anywhere else. The runner picks the shape up from `AggregateShapes.All`, and `parity --aggregate` compares it on every product.

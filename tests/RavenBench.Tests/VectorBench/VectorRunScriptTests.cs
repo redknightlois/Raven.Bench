@@ -146,7 +146,7 @@ public class VectorRunScriptTests
         }
     }
 
-    private enum FakeDocker
+    internal enum FakeDocker
     {
         Missing,
         NoDaemon,
@@ -155,7 +155,7 @@ public class VectorRunScriptTests
 
     // The tools the scripts need, a dotnet that records its call, and a docker per situation:
     // absent, failing every call, or answering `docker info` and failing everything else.
-    private static string FakeBin(FakeDocker docker)
+    internal static string FakeBin(FakeDocker docker)
     {
         var directory = Directory.CreateTempSubdirectory("vector-fakes-").FullName;
         foreach (var tool in new[] { "dirname", "date", "mkdir", "sleep", "cat", "head" })
@@ -169,7 +169,7 @@ public class VectorRunScriptTests
         return directory;
     }
 
-    private static string Calls(string bin) => File.Exists(Path.Combine(bin, "calls.log")) ? File.ReadAllText(Path.Combine(bin, "calls.log")) : "";
+    internal static string Calls(string bin) => File.Exists(Path.Combine(bin, "calls.log")) ? File.ReadAllText(Path.Combine(bin, "calls.log")) : "";
 
     private static string Which(string name) =>
         (Environment.GetEnvironmentVariable("PATH") ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries).Select(d => Path.Combine(d, name)).FirstOrDefault(File.Exists)
@@ -182,9 +182,9 @@ public class VectorRunScriptTests
         File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
-    private static string Folder(string name) => Path.Combine(RepositoryRootLocator.Find(), "benchmarks", name);
+    internal static string Folder(string name) => Path.Combine(RepositoryRootLocator.Find(), "benchmarks", name);
 
-    private static int FreeTcpPort()
+    internal static int FreeTcpPort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -193,7 +193,7 @@ public class VectorRunScriptTests
         return port;
     }
 
-    private static (int ExitCode, string Output) RunBash(string script, string[] arguments, IReadOnlyDictionary<string, string>? environment, bool clear = false)
+    internal static (int ExitCode, string Output) RunBash(string script, string[] arguments, IReadOnlyDictionary<string, string>? environment, bool clear = false)
     {
         var startInfo = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         startInfo.ArgumentList.Add(script);

@@ -1,0 +1,34 @@
+# No service sets a performance option of its own; the result records the settings in force as the
+# server reports them. The mongodb service publishes 27017 like the ycsb mongodb service, so only one
+# of them runs at a time.
+name: ravenbench-aggregate
+
+services:
+  mongodb:
+    image: ${MONGODB_IMAGE:-mongo:8.0.30}
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - aggregate-mongodb-data:/data/db
+    restart: unless-stopped
+
+  ravendb-7:
+    image: ravendb/ravendb:7.2.6
+    ports:
+      - "${RAVENDB7_PORT:-8087}:${RAVENDB7_PORT:-8087}"
+      - "${RAVENDB7_TCP_PORT:-38887}:${RAVENDB7_TCP_PORT:-38887}"
+    environment:
+      RAVEN_Setup_Mode: None
+      RAVEN_License_Eula_Accepted: "true"
+      RAVEN_Security_UnsecuredAccessAllowed: PublicNetwork
+      RAVEN_ServerUrl: "http://0.0.0.0:${RAVENDB7_PORT:-8087}"
+      RAVEN_PublicServerUrl: "http://${RAVENDB_HOST:-localhost}:${RAVENDB7_PORT:-8087}"
+      RAVEN_ServerUrl_Tcp: "tcp://0.0.0.0:${RAVENDB7_TCP_PORT:-38887}"
+      RAVEN_PublicServerUrl_Tcp: "tcp://${RAVENDB_HOST:-localhost}:${RAVENDB7_TCP_PORT:-38887}"
+    volumes:
+      - aggregate-ravendb7-data:/var/lib/ravendb/data
+    restart: unless-stopped
+
+volumes:
+  aggregate-mongodb-data:
+  aggregate-ravendb7-data:
