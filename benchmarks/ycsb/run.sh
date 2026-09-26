@@ -45,10 +45,15 @@ Examples:
   ./benchmarks/ycsb/run.sh --target mongodb --seed 7 --doc-count 1000
   ./benchmarks/ycsb/run.sh --target postgresql --url postgresql://bench:bench@db-host:5432/bench
   ./benchmarks/ycsb/run.sh --target postgresql --transport client
+  ./benchmarks/ycsb/run.sh --target postgresql --cross-check
+
+--cross-check runs workload C through --transport raw and --transport client on the postgresql
+target over one loaded keyspace, and compares the rows against the run-to-run noise.
 EOF
 }
 
 TARGET=""
+COMMAND="ycsb"
 PASSTHROUGH=()
 
 while [[ $# -gt 0 ]]; do
@@ -59,6 +64,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target=*)
       TARGET="${1#*=}"
+      shift
+      ;;
+    --cross-check)
+      COMMAND="ycsb-crosscheck"
       shift
       ;;
     -h|--help)
@@ -84,6 +93,11 @@ case "$TARGET" in
     exit 2
     ;;
 esac
+
+if [[ "$COMMAND" == "ycsb-crosscheck" && "$TARGET" != "postgresql" ]]; then
+  echo "error: --cross-check compares the PostgreSQL transports; target '$TARGET' is not 'postgresql'." >&2
+  exit 2
+fi
 
 # The host ports of the two containerized RavenDB services are overridable, so a database host can
 # move them and a caller can point the script's default endpoint away from a port already in use.
@@ -349,7 +363,7 @@ if ! wait_for_endpoint "$HOST" "$PORT"; then
   exit 1
 fi
 
-RUN_ARGS=(ycsb --target "$TARGET")
+RUN_ARGS=("$COMMAND" --target "$TARGET")
 
 if ! has_option --url "${PASSTHROUGH[@]}"; then
   RUN_ARGS+=(--url "$DEFAULT_URL")

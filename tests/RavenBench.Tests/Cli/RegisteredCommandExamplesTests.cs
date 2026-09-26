@@ -16,6 +16,7 @@ public class RegisteredCommandExamplesTests
     [InlineData("recall")]
     [InlineData("index-build")]
     [InlineData("ycsb")]
+    [InlineData("ycsb-crosscheck")]
     public void Registered_Example_Parses_During_Startup_Validation(string command)
     {
         var app = new CommandApp();

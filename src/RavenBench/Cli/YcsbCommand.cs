@@ -57,7 +57,7 @@ public sealed class YcsbCommand : AsyncCommand<YcsbSettings>
         return 0;
     }
 
-    private static string? OutputPathFor(YcsbSettings settings, string runName)
+    internal static string? OutputPathFor(YcsbSettings settings, string runName)
     {
         if (string.IsNullOrWhiteSpace(settings.OutputDir) == false)
             return $"{settings.OutputDir}-{runName}.json";
