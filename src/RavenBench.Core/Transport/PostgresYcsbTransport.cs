@@ -364,12 +364,12 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
         }, ct).ConfigureAwait(false);
     }
 
-    private static string RequireMetadata(string value, string what) =>
+    internal static string RequireMetadata(string value, string what) =>
         string.IsNullOrWhiteSpace(value) || string.Equals(value, "unknown", StringComparison.OrdinalIgnoreCase)
             ? throw new InvalidOperationException($"The PostgreSQL server reported no {what} at connect.")
             : value;
 
-    private static async Task<TransportResult> GuardedAsync(Func<Task<TransportResult>> body, CancellationToken ct)
+    internal static async Task<TransportResult> GuardedAsync(Func<Task<TransportResult>> body, CancellationToken ct)
     {
         try
         {

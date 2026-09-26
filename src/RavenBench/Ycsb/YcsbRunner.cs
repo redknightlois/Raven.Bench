@@ -53,6 +53,7 @@ public sealed class YcsbRunner
 
     public async Task<List<YcsbRunResult>> RunAsync()
     {
+        var transportKind = ResolveTransportKind(_scenario.Target, _settings.Transport);
         var plan = YcsbRunPlan.Build(_scenario);
         var docSizeBytes = CliParsing.ParseSize(_scenario.DocumentSize);
         var warmup = CliParsing.ParseDuration(_scenario.Warmup);
@@ -62,7 +63,7 @@ public sealed class YcsbRunner
         var closedStep = CliParsing.ParseStepPlan(_scenario.Concurrency).Normalize();
 
         using var nodeExporter = await NodeExporterClient.ConnectAsync(CliParsing.ParseNodeExporterUrl(_settings.NodeExporterUrl));
-        var context = await BuildContextAsync(url, database, ResolveConcurrencyCeiling(_scenario, url, database));
+        var context = await BuildContextAsync(url, database, transportKind, ResolveConcurrencyCeiling(_scenario, url, database));
         using var transport = context.Transport;
         var payloadKind = context.TransportKind == TransportKind.ClientEntity ? PayloadKind.Entity : PayloadKind.Json;
 
@@ -214,6 +215,8 @@ public sealed class YcsbRunner
                 ProductName = transport.ProductName,
                 ServerVersion = serverVersion,
                 Durability = context.Durability,
+                ClientLibrary = context.ClientLibrary,
+                ClientLibraryVersion = context.ClientLibraryVersion,
                 ImageReference = databaseContainer?.ImageReference,
                 ImageDigest = databaseContainer?.ImageDigest,
                 LoadedSize = outcome.LoadedSize,
@@ -261,10 +264,10 @@ public sealed class YcsbRunner
     /// carries the facts the result records for the target that actually ran. An unknown target
     /// fails naming the value rather than falling back to a default.
     /// </summary>
-    private async Task<RunContext> BuildContextAsync(string url, string database, int maxConcurrency)
+    private async Task<RunContext> BuildContextAsync(string url, string database, TransportKind transportKind, int maxConcurrency)
     {
         if (IsRavenTarget(_scenario.Target))
-            return await BuildRavenContextAsync(url, database);
+            return await BuildRavenContextAsync(url, database, transportKind);
 
         if (IsMongoTarget(_scenario.Target))
         {
@@ -284,10 +287,24 @@ public sealed class YcsbRunner
 
         if (string.Equals(_scenario.Target, PostgresYcsbTransport.Target, StringComparison.OrdinalIgnoreCase))
         {
-            var transport = new PostgresYcsbTransport(url, database, maxConcurrency);
+            // raw drives Apex.PgClient; both client modes drive Npgsql, the counterpart of the RavenDB client.
+            var viaNpgsql = transportKind != TransportKind.Raw;
+            IYcsbTransport transport;
+            string recordedEndpoint;
+            if (viaNpgsql)
+            {
+                var npgsql = new NpgsqlYcsbTransport(url, database, maxConcurrency, mapEntities: transportKind == TransportKind.ClientEntity);
+                (transport, recordedEndpoint) = (npgsql, npgsql.RecordedEndpoint);
+            }
+            else
+            {
+                var apex = new PostgresYcsbTransport(url, database, maxConcurrency);
+                (transport, recordedEndpoint) = (apex, apex.RecordedEndpoint);
+            }
+
             return new RunContext(
                 transport,
-                transport.RecordedEndpoint,
+                recordedEndpoint,
                 ClientCompression: "n/a",
                 EffectiveHttpVersion: "n/a",
                 // PostgreSQL writes at synchronous_commit=on, the parity setting recorded for the target.
@@ -296,19 +313,20 @@ public sealed class YcsbRunner
                     Setting = PostgresYcsbTransport.DurabilitySetting,
                     Value = PostgresYcsbTransport.DurabilityValue
                 },
-                TransportKind: TransportKind.Raw,
+                TransportKind: transportKind,
                 Compression: CompressionMode.Identity,
                 HttpVersion: "auto",
-                StrictHttpVersion: false);
+                StrictHttpVersion: false,
+                ClientLibrary: viaNpgsql ? NpgsqlYcsbTransport.ClientLibraryName : null,
+                ClientLibraryVersion: viaNpgsql ? NpgsqlYcsbTransport.ClientLibraryVersion : null);
         }
 
         throw new YcsbScenarioException(
             $"Scenario key 'Target' is '{_scenario.Target}'; valid targets are '{RavendbTarget}', '{Ravendb6Target}', '{Ravendb7Target}', '{PostgresYcsbTransport.Target}', '{MongoYcsbTransport.MongoDbTarget}' and '{MongoYcsbTransport.DocumentDbTarget}'.");
     }
 
-    private async Task<RunContext> BuildRavenContextAsync(string url, string database)
+    private async Task<RunContext> BuildRavenContextAsync(string url, string database, TransportKind transportKind)
     {
-        var transportKind = CliParsing.ParseTransport(_settings.Transport);
         var compression = CliParsing.ParseCompression(_settings.Compression);
 
         var negotiatedHttpVersion = await HttpVersionNegotiator.NegotiateVersionAsync(
@@ -411,7 +429,23 @@ public sealed class YcsbRunner
         TransportKind TransportKind,
         CompressionMode Compression,
         string HttpVersion,
-        bool StrictHttpVersion);
+        bool StrictHttpVersion,
+        string? ClientLibrary = null,
+        string? ClientLibraryVersion = null);
+
+    /// <summary>
+    /// The mode <c>--transport</c> selects for a target. RavenDB and PostgreSQL define all three
+    /// modes; a Mongo target defines only raw and refuses the others by name, before the run loads,
+    /// connects or creates anything.
+    /// </summary>
+    internal static TransportKind ResolveTransportKind(string target, string transport)
+    {
+        var kind = CliParsing.ParseTransport(transport);
+        if (kind != TransportKind.Raw && IsMongoTarget(target))
+            throw new YcsbScenarioException(
+                $"Target '{target}' has no '--transport {CliParsing.FormatTransport(kind)}' mode; it runs only '--transport raw'.");
+        return kind;
+    }
 
     /// <summary>
     /// The largest concurrency any run of the invocation reaches, which sizes a transport's

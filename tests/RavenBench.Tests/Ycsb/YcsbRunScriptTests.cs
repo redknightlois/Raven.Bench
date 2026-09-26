@@ -61,6 +61,20 @@ public class YcsbRunScriptTests
     }
 
     [RequiresBashFact]
+    public void A_Client_Mode_On_A_Mongo_Target_Is_Refused_By_Name_Before_Any_Probe()
+    {
+        var folder = Folder();
+        foreach (var (target, mode) in new[] { ("mongodb", "client"), ("documentdb", "client-entity") })
+        {
+            // Nothing answers on port 1: a script that probed or connected first would name the endpoint instead.
+            var (exitCode, output) = RunBash(Path.Combine(folder, "run.sh"), "--target", target, "--url", "mongodb://localhost:1", "--transport", mode);
+
+            exitCode.Should().NotBe(0);
+            output.Should().Contain($"'{target}'").And.Contain(mode).And.NotContain("did not answer");
+        }
+    }
+
+    [RequiresBashFact]
     public void A_Caller_Supplied_Dead_Endpoint_Fails_And_Writes_No_Result()
     {
         var folder = Folder();

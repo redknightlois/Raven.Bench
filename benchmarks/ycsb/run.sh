@@ -44,6 +44,7 @@ Examples:
   ./benchmarks/ycsb/run.sh --target ravendb
   ./benchmarks/ycsb/run.sh --target mongodb --seed 7 --doc-count 1000
   ./benchmarks/ycsb/run.sh --target postgresql --url postgresql://bench:bench@db-host:5432/bench
+  ./benchmarks/ycsb/run.sh --target postgresql --transport client
 EOF
 }
 
@@ -301,6 +302,15 @@ stop_started_container() {
   fi
 }
 trap stop_started_container EXIT
+
+# A target without a client mode refuses it before any probe or container start.
+if [[ "$TARGET" == "mongodb" || "$TARGET" == "documentdb" ]] && has_option --transport "${PASSTHROUGH[@]}"; then
+  TRANSPORT="$(value_of --transport "${PASSTHROUGH[@]}")"
+  if [[ "$TRANSPORT" != "raw" ]]; then
+    echo "error: target '$TARGET' has no '--transport $TRANSPORT' mode; it runs only '--transport raw'." >&2
+    exit 2
+  fi
+fi
 
 URL="$DEFAULT_URL"
 URL_WAS_GIVEN=0
