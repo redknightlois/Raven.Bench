@@ -7,16 +7,19 @@ public sealed class NodeExporterException(string message, Exception? inner = nul
 
 /// <summary>
 /// The node_exporter series one scrape carries: per-CPU, per-mode seconds from
-/// node_cpu_seconds_total, and the two memory gauges.
+/// node_cpu_seconds_total, the two memory gauges, and the bytes written to disk summed over every
+/// device node_exporter reports, null when the host exposes no disk series.
 /// </summary>
 public sealed record NodeExporterSample(
     IReadOnlyDictionary<string, double> CpuSeconds,
     double MemTotalBytes,
-    double MemAvailableBytes)
+    double MemAvailableBytes,
+    double? DiskWrittenBytes = null)
 {
     public const string CpuSeries = "node_cpu_seconds_total";
     public const string MemTotalSeries = "node_memory_MemTotal_bytes";
     public const string MemAvailableSeries = "node_memory_MemAvailable_bytes";
+    public const string DiskWrittenSeries = "node_disk_written_bytes_total";
 
     /// <summary>
     /// Parses the Prometheus text exposition format. Keys of <see cref="CpuSeries"/> are the raw
@@ -25,7 +28,7 @@ public sealed record NodeExporterSample(
     public static NodeExporterSample Parse(string text)
     {
         var cpu = new Dictionary<string, double>(StringComparer.Ordinal);
-        double? memTotal = null, memAvailable = null;
+        double? memTotal = null, memAvailable = null, diskWritten = null;
 
         foreach (var rawLine in text.Split('\n'))
         {
@@ -44,7 +47,7 @@ public sealed record NodeExporterSample(
             // A sample may carry a trailing timestamp; the value is the first field.
             var valueText = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
 
-            if (name != CpuSeries && name != MemTotalSeries && name != MemAvailableSeries)
+            if (name != CpuSeries && name != MemTotalSeries && name != MemAvailableSeries && name != DiskWrittenSeries)
                 continue;
             if (valueText == null || double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) == false)
                 throw new NodeExporterException($"node_exporter: series {name} has an unreadable value '{valueText}'.");
@@ -54,6 +57,7 @@ public sealed record NodeExporterSample(
                 case CpuSeries: cpu[labels] = value; break;
                 case MemTotalSeries: memTotal = value; break;
                 case MemAvailableSeries: memAvailable = value; break;
+                case DiskWrittenSeries: diskWritten = (diskWritten ?? 0) + value; break;
             }
         }
 
@@ -66,7 +70,7 @@ public sealed record NodeExporterSample(
         if (memAvailable == null)
             throw new NodeExporterException($"node_exporter: series {MemAvailableSeries} missing.");
 
-        return new NodeExporterSample(cpu, memTotal.Value, memAvailable.Value);
+        return new NodeExporterSample(cpu, memTotal.Value, memAvailable.Value, diskWritten);
     }
 
     internal static bool IsIdle(string labels) => labels.Contains("mode=\"idle\"", StringComparison.Ordinal);

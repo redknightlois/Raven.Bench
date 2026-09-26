@@ -79,5 +79,8 @@ internal static class Program
         cfg.AddCommand<VectorCommand>("vector")
             .WithDescription("Run the vector scenario's load, recall, readers, filtered and under-insert runs against one target, one result per run.")
             .WithExample("vector", "--target", "pgvector", "--url", "postgresql://bench:bench@localhost:5432/bench", "--database", "vector_run", "--scenario", "benchmarks/vector/scenario.json");
+        cfg.AddCommand<AggregateCommand>("aggregate")
+            .WithDescription("Run the aggregate scenario's build, count-by-category, sum-by-region, filtered-group and under-write runs against one target, one result per run.")
+            .WithExample("aggregate", "--target", "mongodb", "--url", "mongodb://localhost:27017", "--database", "aggregate_run", "--scenario", "benchmarks/aggregate/scenario.json");
     }
 }

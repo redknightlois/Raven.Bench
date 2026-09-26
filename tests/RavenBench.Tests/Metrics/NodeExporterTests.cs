@@ -52,6 +52,19 @@ public class NodeExporterTests
         NodeExporterSample.Parse(Scrape(1, 1, 1, 1)).UsedMemoryMB.Should().Be(2048);
     }
 
+    [Fact]
+    public void Disk_Written_Bytes_Sum_Every_Device_And_Are_Null_Without_The_Series()
+    {
+        var withDisks = Scrape(1, 1, 1, 1) + """
+
+            node_disk_written_bytes_total{device="sda"} 1000
+            node_disk_written_bytes_total{device="nvme0n1"} 234
+            """;
+
+        NodeExporterSample.Parse(withDisks).DiskWrittenBytes.Should().Be(1234);
+        NodeExporterSample.Parse(Scrape(1, 1, 1, 1)).DiskWrittenBytes.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(NodeExporterSample.CpuSeries)]
     [InlineData(NodeExporterSample.MemTotalSeries)]

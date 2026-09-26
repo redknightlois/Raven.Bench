@@ -227,7 +227,7 @@ public sealed class AggregateParityCheck
         transport.ExecuteAsync,
         () => transport.DropAggregateCollectionAsync(CancellationToken.None));
 
-    internal static async Task LoadInBatchesAsync(IYcsbTransport transport, IReadOnlyList<AggregateDocument> sample, CancellationToken ct)
+    internal static async Task LoadInBatchesAsync(IYcsbTransport transport, IEnumerable<AggregateDocument> sample, CancellationToken ct)
     {
         foreach (var batch in sample.Chunk(LoadBatchSize))
         {

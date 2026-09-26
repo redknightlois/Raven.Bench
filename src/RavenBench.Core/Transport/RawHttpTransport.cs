@@ -190,6 +190,14 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                 json.WriteString("value", updateOp.Value);
                 return PatchRequest(updateOp.Id, json, body);
             }
+            case AggregateUpdateOperation aggregateUpdateOp:
+            {
+                var json = StartJson(out var body);
+                StartPatch(json, $"this.{AggregateDocument.CategoryField} = args.category; this.{AggregateDocument.AmountField} = args.amount;");
+                json.WriteString("category", aggregateUpdateOp.Category);
+                json.WriteNumber("amount", aggregateUpdateOp.Amount);
+                return PatchRequest(aggregateUpdateOp.Id, json, body);
+            }
             case DocumentPatchOperation patchOp:
             {
                 var json = StartJson(out var body);

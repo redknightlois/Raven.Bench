@@ -56,4 +56,7 @@ public sealed class BenchmarkSummary
 
     /// <summary>Present only on a result from the vector entry point.</summary>
     public VectorRunInfo? Vector { get; init; }
+
+    /// <summary>Present only on a result from the aggregate entry point.</summary>
+    public AggregateRunInfo? Aggregate { get; init; }
 }
