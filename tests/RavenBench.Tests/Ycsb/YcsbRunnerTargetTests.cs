@@ -157,7 +157,7 @@ public class YcsbRunnerTargetTests
             Database = database,
             Scenario = "unused.json",
             BulkBatchSize = 5,
-            Transport = "client",
+            Transport = "raw",
             Compression = "gzip",
             HttpVersion = "3.0",
             StrictHttpVersion = true
@@ -278,7 +278,7 @@ public class YcsbRunnerTargetTests
             Database = PostgreSqlTestEndpoints.Database,
             Scenario = "unused.json",
             BulkBatchSize = 5,
-            Transport = "client",
+            Transport = "raw",
             Compression = "gzip",
             HttpVersion = "3.0",
             StrictHttpVersion = true

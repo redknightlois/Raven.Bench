@@ -50,7 +50,7 @@ public sealed class ParitySettings : CommandSettings
 
 /// <summary>
 /// Runs the parity check on demand: over a sample of seeded documents, every typed operation must
-/// leave the same state on RavenDB, PostgreSQL, MongoDB and DocumentDB. Full agreement exits zero;
+/// leave the same state on RavenDB, PostgreSQL through each transport mode, MongoDB and DocumentDB. Full agreement exits zero;
 /// any disagreement, or any product the check could not reach, exits non-zero.
 /// </summary>
 public sealed class ParityCommand : AsyncCommand<ParitySettings>
@@ -63,16 +63,21 @@ public sealed class ParityCommand : AsyncCommand<ParitySettings>
         // The first product is the reference, so RavenDB over raw HTTP comes first.
         using var ravendb = new RawHttpTransport(Required(settings.RavenDbUrl, "--ravendb-url"), database, CompressionMode.Identity, HttpVersion.Version11);
         var postgreSqlDatabase = string.IsNullOrWhiteSpace(settings.PostgreSqlDatabase) ? database : settings.PostgreSqlDatabase;
-        using var postgresql = new PostgresYcsbTransport(Required(settings.PostgreSqlUrl, "--postgresql-url"), postgreSqlDatabase, maxConcurrency: 1);
+        var postgreSqlUrl = Required(settings.PostgreSqlUrl, "--postgresql-url");
+        using var postgresql = new PostgresYcsbTransport(postgreSqlUrl, postgreSqlDatabase, maxConcurrency: 1);
+        using var npgsql = new NpgsqlYcsbTransport(postgreSqlUrl, postgreSqlDatabase, maxConcurrency: 1, mapEntities: false);
+        using var npgsqlEntity = new NpgsqlYcsbTransport(postgreSqlUrl, postgreSqlDatabase, maxConcurrency: 1, mapEntities: true);
         using var mongodb = new MongoYcsbTransport(Required(settings.MongoDbUrl, "--mongodb-url"), database, MongoYcsbTransport.MongoDbTarget);
         using var documentdb = new MongoYcsbTransport(Required(settings.DocumentDbUrl, "--documentdb-url"), database, MongoYcsbTransport.DocumentDbTarget);
 
         // Named by the target that selects it, not by the server, so a product the check cannot
-        // reach is still named in the report.
+        // reach is still named in the report. PostgreSQL appears once per transport mode.
         var products = new[]
         {
             new YcsbParityProduct(YcsbRunner.RavendbTarget, ravendb.RecordedEndpoint, database, ravendb),
             new YcsbParityProduct(PostgresYcsbTransport.Target, postgresql.RecordedEndpoint, postgreSqlDatabase, postgresql),
+            new YcsbParityProduct(PostgreSqlModeName(TransportKind.Client), npgsql.RecordedEndpoint, postgreSqlDatabase, npgsql),
+            new YcsbParityProduct(PostgreSqlModeName(TransportKind.ClientEntity), npgsqlEntity.RecordedEndpoint, postgreSqlDatabase, npgsqlEntity),
             new YcsbParityProduct(MongoYcsbTransport.MongoDbTarget, mongodb.RecordedEndpoint, database, mongodb),
             new YcsbParityProduct(MongoYcsbTransport.DocumentDbTarget, documentdb.RecordedEndpoint, database, documentdb)
         };
@@ -110,6 +115,9 @@ public sealed class ParityCommand : AsyncCommand<ParitySettings>
         foreach (var statement in report.LeftBehind)
             AnsiConsole.MarkupLine($"Left behind: {Markup.Escape(statement)}");
     }
+
+    /// <summary>The report name of PostgreSQL through one Npgsql mode, such as <c>postgresql/client</c>.</summary>
+    internal static string PostgreSqlModeName(TransportKind kind) => $"{PostgresYcsbTransport.Target}/{CliParsing.FormatTransport(kind)}";
 
     private static string Required(string? value, string optionName) =>
         string.IsNullOrWhiteSpace(value) ? throw new ArgumentException($"{optionName} is required") : value;

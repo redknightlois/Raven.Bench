@@ -126,6 +126,12 @@ public sealed record YcsbRunInfo
     public required string ServerVersion { get; init; }
     public required DurabilityParity Durability { get; init; }
 
+    /// <summary>The client library that drove a PostgreSQL client mode. Absent for every other mode and target.</summary>
+    public string? ClientLibrary { get; init; }
+
+    /// <summary>The version of the loaded client library assembly. Present exactly when the client library is.</summary>
+    public string? ClientLibraryVersion { get; init; }
+
     /// <summary>
     /// The image reference that ran a containerized target. Absent for the external RavenDB
     /// target, because that server did not run in a container the benchmark used.

@@ -181,6 +181,15 @@ internal static class CliParsing
         };
     }
 
+    /// <summary>The <c>--transport</c> spelling of a mode, the inverse of <see cref="ParseTransport"/>.</summary>
+    internal static string FormatTransport(TransportKind kind) => kind switch
+    {
+        TransportKind.Raw => "raw",
+        TransportKind.Client => "client",
+        TransportKind.ClientEntity => "client-entity",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
+    };
+
     internal static KeyDistributionKind ParseDistribution(string distribution)
     {
         return distribution.Trim().ToLowerInvariant() switch

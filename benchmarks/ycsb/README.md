@@ -166,6 +166,23 @@ says so, so the next load run does not find ids that already exist. PostgreSQL c
 on demand, so `--postgresql-database` names an existing one; the other three are created by the
 check.
 
+PostgreSQL is checked once per transport mode: `postgresql` through Apex.PgClient, `postgresql/client` through Npgsql with the stored JSON passed through, and `postgresql/client-entity` through Npgsql with documents mapped to and from the entity. Each mode has its own rows in the report.
+
+## Transport modes
+
+`--transport` selects how the harness talks to the target. RavenDB and PostgreSQL define all three modes:
+
+- `raw` (the default and the published path): raw HTTP for RavenDB, Apex.PgClient on the wire protocol for PostgreSQL.
+- `client`: the RavenDB .NET client, or Npgsql, with the document passed through as stored JSON.
+- `client-entity`: the same clients, with documents mapped to and from the `YcsbRecord` entity.
+
+The Npgsql modes run the same SQL on the same table as Apex, apply and record `synchronous_commit=on`, take connections from Npgsql's pool sized to the scenario's concurrency ceiling, prepare their statements, and bulk load through binary COPY. Every result records its mode in `Options.Transport`; a result from an Npgsql mode also records `Ycsb.ClientLibrary` and `Ycsb.ClientLibraryVersion`, read from the loaded assembly. MongoDB and DocumentDB define only `raw`: `--transport client` or `client-entity` on them fails by name before the run connects to anything.
+
+```
+./benchmarks/ycsb/run.sh --target postgresql --transport client
+./benchmarks/ycsb/run.sh --target postgresql --transport client-entity
+```
+
 ## Port table
 
 Every service, its host port and its default endpoint. The two containerized RavenDB host ports
