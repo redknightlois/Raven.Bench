@@ -1,0 +1,7 @@
+{
+  "Name": "Aggregate/Sum/amount/By/region/Where/category",
+  "Maps": [
+    "from d in docs.Aggregates select new { region = d.region, category = d.category, value = (long)d.amount }"
+  ],
+  "Reduce": "from r in results group r by new { r.region, r.category } into g select new { region = g.Key.region, category = g.Key.category, value = g.Sum(x => (long)x.value) }"
+}

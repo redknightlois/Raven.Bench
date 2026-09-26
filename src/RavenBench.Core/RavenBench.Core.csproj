@@ -22,4 +22,8 @@
         <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
     </ItemGroup>
 
+    <ItemGroup>
+        <EmbeddedResource Include="Aggregate/Indexes/**/*.json" LogicalName="$(AssemblyName).Aggregate.Indexes.$([System.IO.Path]::GetFileName($([System.IO.Path]::GetDirectoryName(%(Identity))))).%(Filename)%(Extension)" />
+    </ItemGroup>
+
 </Project>

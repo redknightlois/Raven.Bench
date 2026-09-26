@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using RavenBench.Core.Aggregate;
 using RavenBench.Core.Workload;
 using RavenBench.Core.Ycsb;
 using RavenBench.Core;
@@ -18,6 +19,12 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
 {
     /// <summary>Scenario target name for MongoDB Community.</summary>
     public const string MongoDbTarget = "mongodb";
+
+    /// <summary>
+    /// Scenario target name for MongoDB Community with the supporting aggregate indexes. It differs
+    /// from <see cref="MongoDbTarget"/> only in that it creates those indexes.
+    /// </summary>
+    public const string MongoDbIndexedTarget = "mongodb-indexed";
 
     /// <summary>Scenario target name for Microsoft DocumentDB.</summary>
     public const string DocumentDbTarget = "documentdb";
@@ -44,6 +51,7 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
     private readonly IMongoClient _client;
     private readonly IMongoDatabase _database;
     private readonly IMongoCollection<BsonDocument> _collection;
+    private readonly IMongoCollection<BsonDocument> _aggregates;
 
     /// <param name="connectionString">The full connection string; the transport never records it verbatim.</param>
     /// <param name="databaseName">The database the run addresses; the collection lives in it.</param>
@@ -61,11 +69,13 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         ProductName = target switch
         {
             _ when string.Equals(target, MongoDbTarget, StringComparison.OrdinalIgnoreCase) => MongoDbProductName,
+            _ when string.Equals(target, MongoDbIndexedTarget, StringComparison.OrdinalIgnoreCase) => MongoDbProductName,
             _ when string.Equals(target, DocumentDbTarget, StringComparison.OrdinalIgnoreCase) => DocumentDbProductName,
             _ => throw new ArgumentException(
-                $"Unknown Mongo target '{target}'. Known targets are '{MongoDbTarget}' and '{DocumentDbTarget}'.", nameof(target))
+                $"Unknown Mongo target '{target}'. Known targets are '{MongoDbTarget}', '{MongoDbIndexedTarget}' and '{DocumentDbTarget}'.", nameof(target))
         };
 
+        Target = target.ToLowerInvariant();
         RecordedEndpoint = RedactConnectionString(connectionString);
 
         var settings = MongoClientSettings.FromConnectionString(NormalizeConnectionString(connectionString));
@@ -75,7 +85,11 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         _client = new MongoClient(settings);
         _database = _client.GetDatabase(databaseName);
         _collection = _database.GetCollection<BsonDocument>(CollectionName);
+        _aggregates = _database.GetCollection<BsonDocument>(AggregateDocument.MongoCollection);
     }
+
+    /// <summary>The scenario target this transport was built for.</summary>
+    public string Target { get; }
 
     /// <summary>The product the target actually ran, supplied because the server reports no product name.</summary>
     public string ProductName { get; }
@@ -102,6 +116,8 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         InsertOperation<string> insert => Guarded(() => InsertAsync(insert, ct), ct),
         UpdateFieldOperation update => Guarded(() => UpdateFieldAsync(update, ct), ct),
         BulkInsertOperation<string> bulk => Guarded(() => BulkInsertAsync(bulk, ct), ct),
+        BulkInsertOperation<AggregateDocument> bulk => Guarded(() => BulkInsertAggregatesAsync(bulk, ct), ct),
+        GroupedAggregateOperation aggregate => Guarded(() => AggregateAsync(aggregate, ct), ct),
         _ => throw new NotSupportedException($"{nameof(MongoYcsbTransport)} cannot execute operation type {op.GetType().Name}.")
     };
 
@@ -290,6 +306,99 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         // is the bulk path and its throughput is the load row.
         await _collection.InsertManyAsync(batch, new InsertManyOptions { IsOrdered = false }, ct).ConfigureAwait(false);
         return new TransportResult(0, 0);
+    }
+
+    /// <summary>The stored form of an aggregate document: the emitted fields unchanged, the amount as a 64-bit integer.</summary>
+    internal static BsonDocument ToStoredAggregate(AggregateDocument d) => new()
+    {
+        { "_id", d.Id },
+        { AggregateDocument.CategoryField, d.Category },
+        { AggregateDocument.RegionField, d.Region },
+        { AggregateDocument.AmountField, new BsonInt64(d.Amount) },
+        { AggregateDocument.TimestampField, d.Timestamp },
+        { AggregateDocument.PayloadField, d.Payload }
+    };
+
+    /// <summary>
+    /// The pipeline of a grouped aggregate: <c>$match</c> on the filter, <c>$group</c> by the key,
+    /// then <c>$sort</c> by value descending and key ascending in binary order, and <c>$limit</c>.
+    /// Binary string order is the shared ordinal tie break, so the server cut is the shared cut.
+    /// </summary>
+    private static BsonDocument[] AggregatePipeline(GroupedAggregateOperation op)
+    {
+        op.Validate();
+        var stages = new List<BsonDocument>(5);
+        switch (op.Filter)
+        {
+            case null:
+                break;
+            case EqualityFilter eq:
+                stages.Add(new BsonDocument("$match", new BsonDocument(eq.Field, eq.Value)));
+                break;
+            case RangeFilter range:
+                stages.Add(new BsonDocument("$match", new BsonDocument(range.Field, new BsonDocument { { "$gte", range.Lower }, { "$lt", range.Upper } })));
+                break;
+            default:
+                throw new NotSupportedException($"{nameof(MongoYcsbTransport)} cannot filter by {op.Filter.GetType().Name}.");
+        }
+        BsonValue value = op.Kind == AggregateKind.Count ? new BsonInt64(1) : "$" + op.SumField;
+        stages.Add(new BsonDocument("$group", new BsonDocument { { "_id", "$" + op.GroupBy }, { "value", new BsonDocument("$sum", value) } }));
+        stages.Add(new BsonDocument("$sort", new BsonDocument { { "value", -1 }, { "_id", 1 } }));
+        stages.Add(new BsonDocument("$limit", op.TopN));
+        return stages.ToArray();
+    }
+
+    /// <summary>
+    /// Creates the repository-defined supporting indexes when the target is <see cref="MongoDbIndexedTarget"/>,
+    /// and nothing otherwise. This is the only behavior that depends on the target. A repeated
+    /// call with the same definitions succeeds.
+    /// </summary>
+    public async Task EnsureAggregateIndexesAsync(CancellationToken ct)
+    {
+        await EnsureCollectionAsync(AggregateDocument.MongoCollection).ConfigureAwait(false);
+        if (Target != MongoDbIndexedTarget)
+            return;
+        var models = AggregateShapes.MongoIndexes().Select(spec => new CreateIndexModel<BsonDocument>(
+            BsonDocument.Parse(spec.GetProperty("key").GetRawText()),
+            new CreateIndexOptions { Name = spec.GetProperty("name").GetString() }));
+        await _aggregates.Indexes.CreateManyAsync(models, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The names of every index on the aggregate collection.</summary>
+    public async Task<IReadOnlyList<string>> ListAggregateIndexNamesAsync(CancellationToken ct)
+    {
+        using var cursor = await _aggregates.Indexes.ListAsync(ct).ConfigureAwait(false);
+        return (await cursor.ToListAsync(ct).ConfigureAwait(false)).Select(i => i["name"].AsString).ToList();
+    }
+
+    /// <summary>Drops the aggregate collection and its indexes; dropping a missing collection succeeds.</summary>
+    public Task DropAggregateCollectionAsync(CancellationToken ct) => _database.DropCollectionAsync(AggregateDocument.MongoCollection, ct);
+
+    private async Task EnsureCollectionAsync(string name)
+    {
+        try
+        {
+            await _database.CreateCollectionAsync(name).ConfigureAwait(false);
+        }
+        catch (MongoCommandException ex) when (ex.CodeName == "NamespaceExists" || ex.Code == 48)
+        {
+            // Expected: the collection already exists.
+        }
+    }
+
+    private async Task<TransportResult> BulkInsertAggregatesAsync(BulkInsertOperation<AggregateDocument> bulk, CancellationToken ct)
+    {
+        await _aggregates.InsertManyAsync(bulk.Documents.Select(d => ToStoredAggregate(d.Document)), new InsertManyOptions { IsOrdered = false }, ct).ConfigureAwait(false);
+        return new TransportResult(0, 0);
+    }
+
+    // A pipeline computes at read time, so the product never marks the answer stale.
+    private async Task<TransportResult> AggregateAsync(GroupedAggregateOperation op, CancellationToken ct)
+    {
+        using var cursor = await _aggregates.AggregateAsync<BsonDocument>(AggregatePipeline(op), cancellationToken: ct).ConfigureAwait(false);
+        var rows = await cursor.ToListAsync(ct).ConfigureAwait(false);
+        var groups = rows.Select(r => new AggregateGroup(r["_id"].AsString, r["value"].AsInt64)).ToList();
+        return new TransportResult(0, 0, resultCount: groups.Count, isStale: false) { Groups = groups };
     }
 
     private static async Task<TransportResult> Guarded(Func<Task<TransportResult>> body, CancellationToken ct)

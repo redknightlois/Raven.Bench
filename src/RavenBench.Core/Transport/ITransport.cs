@@ -62,6 +62,11 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     /// the product reports it).
     /// </summary>
     public SearchEffort? EffortInForce { get; init; }
+
+    /// <summary>
+    /// The groups a grouped aggregate returned, in the shared aggregate order (populated for grouped aggregates).
+    /// </summary>
+    public IReadOnlyList<AggregateGroup>? Groups { get; init; }
 }
 
 public readonly struct CalibrationResult(double ttfbMs, double totalMs, long bytesDown, Version httpVersion, bool isSuccess = true, string? errorDetails = null)
