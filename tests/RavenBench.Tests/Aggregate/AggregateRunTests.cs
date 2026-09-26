@@ -106,7 +106,7 @@ public class AggregateRunTests
         using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(600));
         var acks = new ConcurrentQueue<long>();
 
-        var held = await PacedWriter.RunAsync(1_000, async (_, ct) =>
+        var held = await PacedWriter.RunAsync(1_000, 1, async (_, ct) =>
         {
             await Task.Delay(20, CancellationToken.None);
             return true;
@@ -123,7 +123,7 @@ public class AggregateRunTests
     public async Task A_Writer_Stopped_Before_It_Starts_Still_Acknowledges_Its_First_Write()
     {
         var tokens = new List<CancellationToken>();
-        var held = await PacedWriter.RunAsync(1_000, (_, ct) => { tokens.Add(ct); return Task.FromResult(true); }, _ => { }, new CancellationToken(canceled: true));
+        var held = await PacedWriter.RunAsync(1_000, 1, (_, ct) => { tokens.Add(ct); return Task.FromResult(true); }, _ => { }, new CancellationToken(canceled: true));
 
         held.Acknowledged.Should().Be(1);
         tokens.Should().ContainSingle().Which.CanBeCanceled.Should().BeFalse();
@@ -132,10 +132,150 @@ public class AggregateRunTests
     [Fact]
     public async Task A_Writer_With_No_Document_Left_Stops_And_Says_Why()
     {
-        var held = await PacedWriter.RunAsync(1_000, (n, _) => Task.FromResult(n < 3), _ => { }, CancellationToken.None);
+        int sent = 0;
+        var held = await PacedWriter.RunAsync(1_000, 1, (_, _) => Task.FromResult(Interlocked.Increment(ref sent) <= 3), _ => { }, CancellationToken.None);
 
         held.Acknowledged.Should().Be(3);
         held.StopReason.Should().Contain("no document");
+    }
+
+    [Fact]
+    public async Task Writers_Hold_The_Rate_Up_To_Their_Count_Over_The_Latency()
+    {
+        const int writers = 8;
+        const double latencyMs = 20;
+        async Task<HeldWriteRate> Run(double rate)
+        {
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+            return await PacedWriter.RunAsync(rate, writers, async (_, _) => { await Task.Delay(TimeSpan.FromMilliseconds(latencyMs), CancellationToken.None); return true; }, _ => { }, stop.Token);
+        }
+
+        var capped = await Run(10_000);
+        var ceiling = writers * 1000 / latencyMs;
+        capped.HeldPerSecond.Should().BeLessThanOrEqualTo(ceiling * 1.05).And.BeGreaterThan(ceiling / 4, "timer resolution stretches each delay, but eight writers overlap");
+        capped.HeldRequested.Should().BeFalse();
+        capped.Shortfall.Should().Contain($"{writers} writer(s)");
+
+        var held = await Run(ceiling / 4);
+        held.HeldRequested.Should().BeTrue();
+        held.Shortfall.Should().BeNull();
+        held.Writers.Should().Be(writers);
+    }
+
+    [Fact]
+    public void A_Held_Rate_Below_The_Requested_Rate_Is_Reported_With_Its_Reason()
+    {
+        var below = HeldWriteRate.Of(1_000, 4, acknowledged: 500, seconds: 1, "the run ended", [8.0]);
+        below.HeldRequested.Should().BeFalse();
+        below.Shortfall.Should().Contain("500 of 1000").And.Contain("the run ended");
+
+        var at = HeldWriteRate.Of(1_000, 4, acknowledged: 1_000, seconds: 1, "the run ended", [2.0]);
+        at.HeldRequested.Should().BeTrue();
+        at.Shortfall.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_Failing_Write_Stops_Every_Writer_And_Propagates()
+    {
+        int sent = 0;
+        var act = () => PacedWriter.RunAsync(1_000, 4, (_, _) => Interlocked.Increment(ref sent) == 5 ? throw new InvalidOperationException("boom") : Task.FromResult(true), _ => { }, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("boom");
+    }
+
+    private static (List<AggregateDocument> Documents, Dictionary<string, long> Counts, string Tracked) SmallSet()
+    {
+        var documents = new AggregateDataSet(new AggregateDataSpec(5, 2_000, 64, 10, 20, new GroupDistribution(GroupDistribution.Uniform, null))).Generate().ToList();
+        var counts = documents.GroupBy(d => d.Category).ToDictionary(g => g.Key, g => (long)g.Count());
+        var tracked = AggregateOrdering.Top(counts.Select(c => new AggregateGroup(c.Key, c.Value)), 1)[0].Key;
+        return (documents, counts, tracked);
+    }
+
+    private static long MaxOtherCount(IEnumerable<string> categories, string tracked) =>
+        categories.Where(c => c != tracked).GroupBy(c => c).Max(g => (long)g.Count());
+
+    [Fact]
+    public void Bulk_Updates_Never_Touch_The_Tracked_Group_And_The_Probe_Only_Moves_Into_It()
+    {
+        var (documents, counts, tracked) = SmallSet();
+        var bulk = UnderWriteSplit.BulkWriters(documents, counts, tracked, writers: 8, documentsPerWriter: 50, seed: 1);
+        var category = documents.ToDictionary(d => d.Id, d => d.Category);
+
+        var bulkIds = new HashSet<string>();
+        for (int i = 0; i < 5_000; i++)
+        {
+            var op = bulk[i % bulk.Length].Next();
+            category[op.Id].Should().NotBe(tracked);
+            op.Category.Should().NotBe(tracked).And.NotBe(category[op.Id]);
+            category[op.Id] = op.Category;
+            bulkIds.Add(op.Id);
+        }
+        foreach (var probe in UnderWriteSplit.ProbeSources(documents, tracked).Take(100))
+        {
+            probe.Category.Should().NotBe(tracked);
+            bulkIds.Should().NotContain(probe.Id, "the probe and the bulk writers never share a document");
+        }
+    }
+
+    [Fact]
+    public void Too_Many_Bulk_Writers_For_The_Room_Below_The_Tracked_Group_Fail_Fast()
+    {
+        var (documents, counts, tracked) = SmallSet();
+        var room = counts.Where(c => c.Key != tracked).Sum(c => Math.Max(0, counts[tracked] - c.Value - 1));
+
+        var act = () => UnderWriteSplit.BulkWriters(documents, counts, tracked, writers: (int)room + 1, documentsPerWriter: 1, seed: 1);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*bulk writer*");
+    }
+
+    [Fact]
+    public async Task The_Tracked_Count_Is_The_Baseline_Plus_K_Under_A_Concurrent_Bulk_Load()
+    {
+        var (documents, counts, tracked) = SmallSet();
+        const int writers = 8;
+        var bulk = UnderWriteSplit.BulkWriters(documents, counts, tracked, writers, documentsPerWriter: 50, seed: 1);
+        using var probeSources = UnderWriteSplit.ProbeSources(documents, tracked).GetEnumerator();
+        var store = new ConcurrentDictionary<string, string>(documents.ToDictionary(d => d.Id, d => d.Category));
+        long Count(string group) => store.Values.Count(c => c == group);
+        var baseline = counts[tracked];
+        int probesInFlight = 0, maxProbesInFlight = 0;
+        var violations = new ConcurrentQueue<string>();
+
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var bulkRun = PacedWriter.RunAsync(20_000, writers, async (w, _) =>
+        {
+            var op = bulk[w].Next();
+            await Task.Yield();
+            store[op.Id] = op.Category;
+            return true;
+        }, _ =>
+        {
+            var snapshot = store.Values.ToList();
+            if (MaxOtherCount(snapshot, tracked) >= snapshot.Count(c => c == tracked))
+                violations.Enqueue("a bulk write put another group level with or above the tracked group");
+        }, stop.Token);
+        long k = 0;
+        var probeRun = PacedWriter.RunAsync(200, 1, async (_, _) =>
+        {
+            var inFlight = Interlocked.Increment(ref probesInFlight);
+            maxProbesInFlight = Math.Max(maxProbesInFlight, inFlight);
+            probeSources.MoveNext().Should().BeTrue();
+            await Task.Yield();
+            store[probeSources.Current.Id] = tracked;
+            Interlocked.Decrement(ref probesInFlight);
+            return true;
+        }, _ =>
+        {
+            k++;
+            if (Count(tracked) != baseline + k)
+                violations.Enqueue($"after probe write {k} the tracked count is {Count(tracked)}");
+        }, stop.Token);
+        var (bulkHeld, probeHeld) = (await bulkRun, await probeRun);
+
+        bulkHeld.Acknowledged.Should().BeGreaterThan(probeHeld.Acknowledged);
+        violations.Should().BeEmpty();
+        maxProbesInFlight.Should().Be(1);
+        Count(tracked).Should().Be(baseline + probeHeld.Acknowledged);
     }
 
     [Fact]
@@ -193,6 +333,7 @@ public class AggregateRunTests
 
     [Theory]
     [InlineData("writeRate")]
+    [InlineData("writers")]
     [InlineData("duration")]
     [InlineData("dataDirectory")]
     [InlineData("documentCount")]
@@ -212,6 +353,8 @@ public class AggregateRunTests
     [InlineData("regionCardinality", "0")]
     [InlineData("distribution", "\"pareto\"")]
     [InlineData("writeRate", "0")]
+    [InlineData("writers", "0")]
+    [InlineData("writers", "-1")]
     [InlineData("nosuchKey", "1")]
     public void An_Invalid_Or_Unknown_Parameter_Throws_Naming_It(string key, string value)
     {
@@ -238,13 +381,14 @@ public class AggregateRunTests
     public void An_Override_Is_Recorded_And_Resolved()
     {
         var file = AggregateScenario.FromJson(JsonDocument.Parse(DefaultScenario().ToJsonString()).RootElement);
-        var settings = new AggregateSettings { DocumentCount = 500, WriteRate = 50 };
+        var settings = new AggregateSettings { DocumentCount = 500, WriteRate = 50, Writers = 7 };
 
-        var (resolved, overrides) = AggregateScenarioResolver.Resolve(file, settings, ["aggregate", "--documents", "500", "--write-rate=50"]);
+        var (resolved, overrides) = AggregateScenarioResolver.Resolve(file, settings, ["aggregate", "--documents", "500", "--write-rate=50", "--writers", "7"]);
 
         resolved.DocumentCount.Should().Be(500);
         resolved.WriteRate.Should().Be(50);
-        overrides.Should().Equal(new Dictionary<string, string> { ["--documents"] = "500", ["--write-rate"] = "50" });
+        resolved.Writers.Should().Be(7);
+        overrides.Should().Equal(new Dictionary<string, string> { ["--documents"] = "500", ["--write-rate"] = "50", ["--writers"] = "7" });
     }
 
     [Fact]
@@ -290,7 +434,7 @@ public class AggregateRunnerLiveTests
     {
         Seed = 3, DocumentCount = 600, DocumentSize = 256, CategoryCardinality = 10, RegionCardinality = 50,
         Distribution = GroupDistribution.Uniform, DistributionExponent = null, CountTopN = 5, RegionTopN = 20, FilterSelectivity = 0.1,
-        Concurrency = 2, WriteRate = 50, UnderWriteQueryRate = 40, Warmup = "200ms", Duration = "1s", NonStaleTimeout = "2m", DataDirectory = dataDirectory
+        Concurrency = 2, WriteRate = 50, Writers = 4, UnderWriteQueryRate = 40, Warmup = "200ms", Duration = "1s", NonStaleTimeout = "2m", DataDirectory = dataDirectory
     };
 
     private static async Task<List<AggregateRunResult>> RunAsync(string target, string url)
@@ -332,8 +476,12 @@ public class AggregateRunnerLiveTests
         var underWrite = results[^1].Summary.Aggregate!.UnderWrite!;
         // The writer always sends and awaits its first write, so one acknowledgement does not depend on the host's speed.
         underWrite.Writer.Acknowledged.Should().BeGreaterThan(0);
+        underWrite.Writer.Writers.Should().Be(4);
+        underWrite.Probe.Acknowledged.Should().BeGreaterThan(0);
+        underWrite.Probe.Writers.Should().Be(1);
         var freshness = underWrite.Freshness;
-        freshness.Writes.Should().Be(underWrite.Writer.Acknowledged);
+        freshness.Writes.Should().Be(underWrite.Probe.Acknowledged, "freshness comes from the probe alone");
+        freshness.AnswersWithTrackedGroupNotFirst.Should().Be(0);
         (freshness.Observed + freshness.Unobserved).Should().Be(freshness.Writes, "every acknowledged write is observed or counted as unobserved");
         // How many writes an index catches up with inside the run depends on the host, so the check is on what the answers produced, not on a count.
         freshness.Distribution.Count.Should().Be(freshness.Observed, "every freshness value comes from an answer");

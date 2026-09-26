@@ -11,6 +11,7 @@
   "filterSelectivity": 0.01,
   "concurrency": 64,
   "writeRate": 2000,
+  "writers": 64,
   "underWriteQueryRate": 100,
   "warmup": "10s",
   "duration": "30s",

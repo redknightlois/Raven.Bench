@@ -30,8 +30,11 @@ public sealed record AggregateScenario
     /// <summary>The closed-loop concurrency, and the worker count of the fixed-rate runs.</summary>
     public required int Concurrency { get; init; }
 
-    /// <summary>The updates per second the under-write writer is asked to hold.</summary>
+    /// <summary>The updates per second the under-write bulk writers are asked to hold.</summary>
     public required double WriteRate { get; init; }
+
+    /// <summary>The most bulk updates in flight at once during under-write.</summary>
+    public required int Writers { get; init; }
 
     /// <summary>The fixed count-by-category query rate of the quiet and the under-write steps.</summary>
     public required double UnderWriteQueryRate { get; init; }
@@ -57,6 +60,7 @@ public sealed record AggregateScenario
         Require(FilterSelectivity is > 0 and < 1, "filterSelectivity", FilterSelectivity, "a fraction in (0, 1)");
         Require(Concurrency >= 1, "concurrency", Concurrency, "at least 1");
         Require(WriteRate > 0, "writeRate", WriteRate, "a positive rate");
+        Require(Writers >= 1, "writers", Writers, "at least 1");
         Require(UnderWriteQueryRate >= 1, "underWriteQueryRate", UnderWriteQueryRate, "at least one query per second");
         Require(string.IsNullOrWhiteSpace(DataDirectory) == false, "dataDirectory", DataDirectory, "a directory");
         foreach (var (name, value) in new[] { ("warmup", Warmup), ("duration", Duration), ("nonStaleTimeout", NonStaleTimeout) })
@@ -82,7 +86,7 @@ public sealed record AggregateScenario
     private static readonly string[] Keys =
     [
         "seed", "documentCount", "documentSize", "categoryCardinality", "regionCardinality", "distribution", "distributionExponent",
-        "countTopN", "regionTopN", "filterSelectivity", "concurrency", "writeRate", "underWriteQueryRate", "warmup", "duration",
+        "countTopN", "regionTopN", "filterSelectivity", "concurrency", "writeRate", "writers", "underWriteQueryRate", "warmup", "duration",
         "nonStaleTimeout", "dataDirectory"
     ];
 
@@ -125,6 +129,7 @@ public sealed record AggregateScenario
             FilterSelectivity = Get("filterSelectivity", JsonValueKind.Number).GetDouble(),
             Concurrency = Get("concurrency", JsonValueKind.Number).GetInt32(),
             WriteRate = Get("writeRate", JsonValueKind.Number).GetDouble(),
+            Writers = Get("writers", JsonValueKind.Number).GetInt32(),
             UnderWriteQueryRate = Get("underWriteQueryRate", JsonValueKind.Number).GetDouble(),
             Warmup = Get("warmup", JsonValueKind.String).GetString()!,
             Duration = Get("duration", JsonValueKind.String).GetString()!,

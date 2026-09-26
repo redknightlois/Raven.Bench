@@ -62,7 +62,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
     public static readonly IReadOnlyList<string> Runs = ["build", AggregateShapes.CountByCategory, AggregateShapes.SumByRegion, AggregateShapes.FilteredGroup, "under-write"];
 
     public const string QueryPolicy = "no-wait: each query reads the answer the product has now and records its stale flag";
-    public const string WriteLatencyDefinition = "from sending an update to its acknowledgement, one update in flight";
+    public const string WriteLatencyDefinition = "from sending an update to its acknowledgement; the bulk writers keep up to writers updates in flight, the probe one";
 
     public async Task<List<AggregateRunResult>> RunAsync(CancellationToken ct = default)
     {
@@ -133,13 +133,13 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             var countWorkload = new AggregateQueryWorkload(() => Operation(AggregateShapes.CountByCategory));
             var quiet = await RampAsync(transport, countWorkload, url, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write-quiet", nodeExporter);
             var tracker = new FreshnessTracker(tracked.Key, tracked.Value);
-            var (underWrite, writer) = await UnderWriteAsync(transport, dataSet, tracker, countWorkload, queryRate, url, database, warmup, duration, nodeExporter, ct);
+            var (underWrite, writer, probe) = await UnderWriteAsync(transport, dataSet, digest.CategoryCounts, tracker, countWorkload, queryRate, url, database, warmup, duration, nodeExporter, ct);
             var underWriteSteps = quiet.Steps.Concat(underWrite.Steps).ToList();
             var freshness = tracker.Complete();
             var underWriteInfo = new AggregateUnderWriteInfo(scenario.UnderWriteQueryRate, QueryPolicy, quiet.Steps[^1].Throughput, quiet.Steps[^1].Raw.P99,
                 underWrite.Steps[^1].Throughput, underWrite.Steps[^1].Raw.P99, writer, WriteLatencyDefinition, freshness,
-                underWriteSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)), Answers(underWriteSteps));
-            Console.WriteLine($"[Aggregate] under-write: writer held {writer.HeldPerSecond:F0} of {writer.RequestedPerSecond:F0} updates/s; freshness observed {freshness.Observed}, unobserved {freshness.Unobserved}, p50 {freshness.Distribution.P50:F1} ms, p99 {freshness.Distribution.P99:F1} ms");
+                underWriteSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)), Answers(underWriteSteps), probe);
+            Console.WriteLine($"[Aggregate] under-write: bulk writers held {writer.HeldPerSecond:F0} of {writer.RequestedPerSecond:F0} updates/s{(writer.Shortfall is null ? "" : $" ({writer.Shortfall})")}; probe held {probe.HeldPerSecond:F0} of {probe.RequestedPerSecond:F0} updates/s; freshness observed {freshness.Observed}, unobserved {freshness.Unobserved}, p50 {freshness.Distribution.P50:F1} ms, p99 {freshness.Distribution.P99:F1} ms");
 
             var durability = isRavenDb
                 ? new DurabilityParity { Setting = "durability", Value = "ravendb-default" }
@@ -265,23 +265,34 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         return (step, new AggregateBuildInfo(clock.Elapsed.TotalSeconds, loadSeconds, clock.Elapsed.TotalSeconds - loadSeconds, indexes, serverCpu, disk, onDisk));
     }
 
-    private async Task<(BenchmarkRunner.RampResult Ramp, HeldWriteRate Writer)> UnderWriteAsync(IYcsbTransport transport, AggregateDataSet dataSet, FreshnessTracker tracker,
-        IWorkload workload, int queryRate, string url, string database, TimeSpan warmup, TimeSpan duration, NodeExporterClient? nodeExporter, CancellationToken ct)
+    /// <summary>
+    /// Runs the bulk writers at <c>writeRate</c> and the probe at the query rate, both for the whole
+    /// under-write step. Freshness takes only the probe's acknowledgements: the probe is the only
+    /// writer that moves a document into the tracked group, one update in flight, so the tracked count
+    /// after the k-th acknowledged probe write is the baseline plus k.
+    /// </summary>
+    private async Task<(BenchmarkRunner.RampResult Ramp, HeldWriteRate Writer, HeldWriteRate Probe)> UnderWriteAsync(IYcsbTransport transport, AggregateDataSet dataSet,
+        IReadOnlyDictionary<string, long> categoryCounts, FreshnessTracker tracker, IWorkload workload, int queryRate, string url, string database, TimeSpan warmup, TimeSpan duration,
+        NodeExporterClient? nodeExporter, CancellationToken ct)
     {
-        // Every update moves a document from another category into the tracked one, in emitted order, so the tracked count rises by one per acknowledged update.
-        using var pool = dataSet.Generate().Where(d => AggregateOrdering.KeyComparer.Equals(d.Category, tracker.TrackedGroup) == false).GetEnumerator();
-        var amounts = new Random(SeedMixer.Derive(scenario.Seed, "under-write"));
+        // Each writer owns about as many documents as its share of the step's updates.
+        var documentsPerWriter = (long)Math.Ceiling(scenario.WriteRate * (warmup + duration).TotalSeconds / scenario.Writers);
+        var bulkWriters = UnderWriteSplit.BulkWriters(dataSet.Generate(), categoryCounts, tracker.TrackedGroup, scenario.Writers, documentsPerWriter, SeedMixer.Derive(scenario.Seed, "under-write-bulk"));
+        using var probeSources = UnderWriteSplit.ProbeSources(dataSet.Generate(), tracker.TrackedGroup).GetEnumerator();
+        var probeAmounts = new Random(SeedMixer.Derive(scenario.Seed, "under-write"));
+
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var writer = Task.Run(() => PacedWriter.RunAsync(scenario.WriteRate, async (_, token) =>
+        var writer = Task.Run(() => PacedWriter.RunAsync(scenario.WriteRate, scenario.Writers, async (w, token) =>
         {
-            if (pool.MoveNext() == false)
-                return false;
-            var op = new AggregateUpdateOperation { Id = pool.Current.Id, Category = tracker.TrackedGroup, Amount = amounts.NextInt64(1, AggregateDataSet.MaxAmount + 1) };
-            var result = await transport.ExecuteAsync(op, token);
-            if (result.Cancelled)
-                throw new OperationCanceledException(token);
-            if (result.IsSuccess == false)
-                throw new InvalidOperationException($"The update of '{op.Id}' failed: {result.ErrorDetails}");
+            await UpdateAsync(transport, bulkWriters[w].Next(), token);
+            return true;
+        }, _ => { }, stop.Token), CancellationToken.None);
+        var probe = Task.Run(() => PacedWriter.RunAsync(queryRate, 1, async (_, token) =>
+        {
+            if (probeSources.MoveNext() == false)
+                throw new InvalidOperationException($"No document outside the tracked group '{tracker.TrackedGroup}' is left for the probe; raise documentCount or shorten the step.");
+            var op = new AggregateUpdateOperation { Id = probeSources.Current.Id, Category = tracker.TrackedGroup, Amount = probeAmounts.NextInt64(1, AggregateDataSet.MaxAmount + 1) };
+            await UpdateAsync(transport, op, token);
             return true;
         }, tracker.Acknowledged, stop.Token), CancellationToken.None);
 
@@ -294,7 +305,16 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         {
             stop.Cancel();
         }
-        return (ramp, await writer);
+        return (ramp, await writer, await probe);
+    }
+
+    private static async Task UpdateAsync(IYcsbTransport transport, AggregateUpdateOperation op, CancellationToken token)
+    {
+        var result = await transport.ExecuteAsync(op, token);
+        if (result.Cancelled)
+            throw new OperationCanceledException(token);
+        if (result.IsSuccess == false)
+            throw new InvalidOperationException($"The update of '{op.Id}' failed: {result.ErrorDetails}");
     }
 
     private static IReadOnlyList<AggregateStepAnswers> Answers(IReadOnlyList<StepResult> steps) => steps.Select((s, i) => AggregateStepAnswers.From(i, s)).ToList();
