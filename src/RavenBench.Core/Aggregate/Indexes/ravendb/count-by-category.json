@@ -1,0 +1,7 @@
+{
+  "Name": "Aggregate/Count/By/category",
+  "Maps": [
+    "from d in docs.Aggregates select new { category = d.category, value = 1L }"
+  ],
+  "Reduce": "from r in results group r by r.category into g select new { category = g.Key, value = g.Sum(x => (long)x.value) }"
+}

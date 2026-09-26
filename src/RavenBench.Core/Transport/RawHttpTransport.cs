@@ -9,6 +9,7 @@ using RavenBench.Core.Workload;
 using RavenBench.Core.Metrics;
 using RavenBench.Core;
 using RavenBench.Core.Diagnostics;
+using RavenBench.Core.Aggregate;
 using ZstdSharp;
 
 namespace RavenBench.Core.Transport;
@@ -165,7 +166,8 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     }
 
     public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) =>
-        _socketPool != null ? ExecuteOnSocketAsync(op, ct) : ExecuteOnHttpClientAsync(op, ct);
+        op is GroupedAggregateOperation aggregateOp ? QueryAggregateAsync(aggregateOp, ct)
+        : _socketPool != null ? ExecuteOnSocketAsync(op, ct) : ExecuteOnHttpClientAsync(op, ct);
 
     /// <summary>
     /// Describes <paramref name="op"/> as the request both paths send. The body lives in this thread's
@@ -239,6 +241,26 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                     json.WriteString("Type", "PUT");
                     json.WritePropertyName("Document");
                     json.WriteRawValue(doc.Document);
+                    json.WriteEndObject();
+                }
+                json.WriteEndArray();
+                json.WriteEndObject();
+                json.Flush();
+                return new RawRequest(HttpMethod.Post, _bulkDocsTarget, body.WrittenMemory, JsonContentType, ReadsEnvelope: false, TimeoutCoversBody: false, IndexName: null);
+            }
+            case BulkInsertOperation<AggregateDocument> aggregateBulkOp:
+            {
+                var json = StartJson(out var body);
+                json.WriteStartObject();
+                json.WritePropertyName("Commands");
+                json.WriteStartArray();
+                foreach (var doc in aggregateBulkOp.Documents)
+                {
+                    json.WriteStartObject();
+                    json.WriteString("Id", doc.Id);
+                    json.WriteString("Type", "PUT");
+                    json.WritePropertyName("Document");
+                    json.WriteRawValue(ToRavenJson(doc.Document));
                     json.WriteEndObject();
                 }
                 json.WriteEndArray();
@@ -742,6 +764,164 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
 
         return await TransportAdminClient.GetStorageSizeBytesAsync(adminStore).ConfigureAwait(false);
     }
+
+    /// <summary>The stored form of an aggregate document: the emitted fields unchanged, in the aggregate collection.</summary>
+    internal static string ToRavenJson(AggregateDocument d) => JsonSerializer.Serialize(new Dictionary<string, object>
+    {
+        [AggregateDocument.CategoryField] = d.Category,
+        [AggregateDocument.RegionField] = d.Region,
+        [AggregateDocument.AmountField] = d.Amount,
+        [AggregateDocument.TimestampField] = d.Timestamp,
+        [AggregateDocument.PayloadField] = d.Payload,
+        ["@metadata"] = new Dictionary<string, string> { ["@collection"] = AggregateDocument.RavenDbCollection }
+    });
+
+    /// <summary>
+    /// Serves a grouped aggregate from its map-reduce index. The server orders the reduced value as
+    /// a number and returns N + 1 groups. When the groups at N and N + 1 tie, one second query reads
+    /// every group at or above the tied value and replaces the first answer, so every returned group
+    /// comes from one server answer and the shared ordering, not the server collation, decides the cut.
+    /// It takes the HttpClient path in every transport mode, since a tie needs a second query.
+    /// </summary>
+    private async Task<TransportResult> QueryAggregateAsync(GroupedAggregateOperation op, CancellationToken ct)
+    {
+        try
+        {
+            return await QueryAggregateCoreAsync(op, ct).ConfigureAwait(false);
+        }
+        catch (TaskCanceledException)
+        {
+            if (ct.IsCancellationRequested)
+                return TransportResult.CancelledResult;
+            return new TransportResult(0, 0, "Operation timed out after 30 seconds");
+        }
+        catch (Exception ex)
+        {
+            return new TransportResult(0, 0, $"Exception: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private async Task<TransportResult> QueryAggregateCoreAsync(GroupedAggregateOperation op, CancellationToken ct)
+    {
+        op.Validate();
+        var parameters = new Dictionary<string, object?>();
+        var where = new List<string>(2);
+        switch (op.Filter)
+        {
+            case null:
+                break;
+            case EqualityFilter eq:
+                parameters["f"] = eq.Value;
+                where.Add($"{eq.Field} = $f");
+                break;
+            case RangeFilter range:
+                parameters["lo"] = range.Lower;
+                parameters["hi"] = range.Upper;
+                where.Add($"{range.Field} >= $lo and {range.Field} < $hi");
+                break;
+            default:
+                throw new NotSupportedException($"{nameof(RawHttpTransport)} cannot filter by {op.Filter.GetType().Name}.");
+        }
+        var from = $"from index '{op.IndexName}'";
+        string Rql(string tail) => $"{from}{(where.Count == 0 ? "" : " where " + string.Join(" and ", where))} order by value as long desc{tail}";
+
+        parameters["n"] = (long)op.TopN + 1;
+        var answer = await PostAggregateQueryAsync(Rql(" limit $n"), parameters, op.GroupBy, ct).ConfigureAwait(false);
+        bool stale = answer.IsStale;
+        long bytesOut = answer.BytesOut, bytesIn = answer.BytesIn;
+        var groups = answer.Groups;
+        if (groups.Count > op.TopN && groups[op.TopN - 1].Value == groups[op.TopN].Value)
+        {
+            parameters.Remove("n");
+            parameters["v"] = groups[op.TopN - 1].Value;
+            where.Add("value >= $v");
+            answer = await PostAggregateQueryAsync(Rql(""), parameters, op.GroupBy, ct).ConfigureAwait(false);
+            stale |= answer.IsStale;
+            bytesOut += answer.BytesOut;
+            bytesIn += answer.BytesIn;
+        }
+
+        var ordered = AggregateOrdering.Top(answer.Groups, op.TopN);
+        return new TransportResult(bytesOut, bytesIn, indexName: answer.IndexName, resultCount: ordered.Count, isStale: stale) { Groups = ordered };
+    }
+
+    private readonly record struct AggregateQueryResponse(IReadOnlyList<AggregateGroup> Groups, bool IsStale, string? IndexName, long BytesOut, long BytesIn);
+
+    private async Task<AggregateQueryResponse> PostAggregateQueryAsync(string rql, Dictionary<string, object?> parameters, string groupField, CancellationToken ct)
+    {
+        using var req = NewRequest(HttpMethod.Post, $"{_baseUrl}/databases/{_db}/queries");
+        var body = JsonSerializer.Serialize(new { Query = rql, QueryParameters = parameters });
+        var bodyBytes = Encoding.UTF8.GetBytes(body);
+        req.Content = CreateJsonContent(bodyBytes);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+        if (resp.IsSuccessStatusCode == false)
+            throw new HttpRequestException($"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false)}", null, resp.StatusCode);
+
+        using var wireMs = await BufferResponseAsync(resp, cts.Token).ConfigureAwait(false);
+        long bytesIn = wireMs.Length;
+        ReadOnlyMemory<byte> json = wireMs.GetBuffer().AsMemory(0, (int)wireMs.Length);
+        // HttpClient does not decode zstd, so the body is decoded here before it is read.
+        if (NeedsZstdDecode(resp))
+        {
+            using var decompressor = new Decompressor();
+            json = decompressor.Unwrap(json.Span).ToArray();
+        }
+        var envelope = QueryEnvelope.Read(json.Span);
+        using var doc = JsonDocument.Parse(json);
+        if (envelope.IsStale is not { } isStale)
+            throw new InvalidDataException("The aggregate query response carries no IsStale flag.");
+
+        var groups = new List<AggregateGroup>();
+        foreach (var row in doc.RootElement.GetProperty("Results").EnumerateArray())
+        {
+            var key = row.GetProperty(groupField).GetString() ?? throw new InvalidDataException($"An aggregate row carries a null '{groupField}'.");
+            groups.Add(new AggregateGroup(key, row.GetProperty("value").GetInt64()));
+        }
+        return new AggregateQueryResponse(groups, isStale, envelope.IndexName, CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? bodyBytes.Length), bytesIn);
+    }
+
+    /// <summary>Creates the map-reduce index of every aggregate shape from the repository definitions; an existing identical index is kept.</summary>
+    public async Task EnsureAggregateIndexesAsync(CancellationToken ct)
+    {
+        var body = JsonSerializer.Serialize(new { Indexes = AggregateShapes.RavenDbIndexes() });
+        using var req = NewRequest(HttpMethod.Put, $"{_baseUrl}/databases/{_db}/admin/indexes");
+        req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+        if (resp.IsSuccessStatusCode == false)
+            throw new HttpRequestException($"Creating the aggregate indexes on '{_db}' failed, HTTP {(int)resp.StatusCode}: {await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false)}", null, resp.StatusCode);
+    }
+
+    /// <summary>
+    /// Polls the server index statistics until every aggregate index reports non-stale. Throws a
+    /// <see cref="TimeoutException"/> that names the indexes still stale when the timeout passes.
+    /// </summary>
+    public async Task WaitForNonStaleAggregateIndexesAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        var names = AggregateShapes.RavenDbIndexes().Select(i => i.GetProperty("Name").GetString()!).ToList();
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var stale = new List<string>();
+            foreach (var name in names)
+            {
+                using var req = NewRequest(HttpMethod.Get, $"{_baseUrl}/databases/{_db}/indexes/stats?name={Uri.EscapeDataString(name)}");
+                using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode == false)
+                    throw new HttpRequestException($"Reading the statistics of index '{name}' on '{_db}' failed, HTTP {(int)resp.StatusCode}.", null, resp.StatusCode);
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+                if (doc.RootElement.GetProperty("Results")[0].GetProperty("IsStale").GetBoolean())
+                    stale.Add(name);
+            }
+            if (stale.Count == 0)
+                return;
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException($"The aggregate indexes {string.Join(", ", stale.Select(n => $"'{n}'"))} on '{_db}' were still stale after {timeout.TotalSeconds:0} s.");
+            await Task.Delay(TimeSpan.FromMilliseconds(100), ct).ConfigureAwait(false);
+        }
+    }
+
     public void Dispose()
     {
         _socketPool?.Dispose();

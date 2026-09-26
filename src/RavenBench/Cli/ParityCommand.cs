@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Net;
+using RavenBench.Aggregate;
 using RavenBench.Core;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Ycsb;
@@ -48,6 +49,10 @@ public sealed class ParitySettings : CommandSettings
     [Description("Runs the vector check instead of the document check: over a seeded sample, the exact search of RavenDB and pgvector must return the brute-force truth.")]
     public bool Vector { get; init; }
 
+    [CommandOption("--aggregate")]
+    [Description("Runs the aggregate check instead of the document check: over a seeded sample, every aggregate shape must return the same ordered groups and values on RavenDB, mongodb and mongodb-indexed. Needs --ravendb-url and --mongodb-url.")]
+    public bool Aggregate { get; init; }
+
     [CommandOption("--vector-base")]
     [Description("How many base vectors the vector check loads.")]
     public int VectorBase { get; init; } = VectorParityCheck.DefaultBaseCount;
@@ -77,6 +82,8 @@ public sealed class ParityCommand : AsyncCommand<ParitySettings>
         var database = Required(settings.Database, "--database");
         if (settings.Vector)
             return await RunVectorAsync(settings, database);
+        if (settings.Aggregate)
+            return await RunAggregateAsync(settings, database);
 
         var documentSize = CliParsing.ParseSize(settings.DocumentSize);
 
@@ -127,6 +134,53 @@ public sealed class ParityCommand : AsyncCommand<ParitySettings>
         var report = await check.RunAsync(products, CancellationToken.None);
         Print(report);
         return report.ExitCode;
+    }
+
+    /// <summary>
+    /// The aggregate check. Every product writes into <c>--database</c> and deletes its sample
+    /// again; the two MongoDB targets share one collection and run one after the other.
+    /// </summary>
+    private static async Task<int> RunAggregateAsync(ParitySettings settings, string database)
+    {
+        var ravendbUrl = Required(settings.RavenDbUrl, "--ravendb-url");
+        var mongoUrl = Required(settings.MongoDbUrl, "--mongodb-url");
+        using var mongodb = new MongoYcsbTransport(mongoUrl, database, MongoYcsbTransport.MongoDbTarget);
+        using var mongodbIndexed = new MongoYcsbTransport(mongoUrl, database, MongoYcsbTransport.MongoDbIndexedTarget);
+        var products = new[]
+        {
+            AggregateParityCheck.RavenDb(ravendbUrl, database),
+            AggregateParityCheck.Mongo(mongodb),
+            AggregateParityCheck.Mongo(mongodbIndexed)
+        };
+
+        var report = await new AggregateParityCheck(settings.Seed, settings.Sample).RunAsync(products, CancellationToken.None);
+        Print(report);
+        return report.ExitCode;
+    }
+
+    /// <summary>Prints every pair, one row per shape and product, agreements included.</summary>
+    internal static void Print(AggregateParityReport report)
+    {
+        AnsiConsole.MarkupLine($"Aggregate parity over a {report.SampleSize}-document sample, seed {report.Seed}, reference [cyan]{report.ReferenceProduct}[/] (non-stale wait up to {report.NonStaleTimeout.TotalSeconds:0} s): {string.Join(", ", report.Products)}");
+
+        var table = new Table();
+        table.AddColumn("Shape");
+        table.AddColumn("Product");
+        table.AddColumn("Compared");
+        table.AddColumn("Result");
+        foreach (var pair in report.Pairs)
+        {
+            var result = pair.Failure is not null
+                ? $"[red]failed[/] {Markup.Escape(pair.Failure)}"
+                : pair.Agreed
+                    ? "[green]agreed[/]"
+                    : pair.FirstDifference is not null
+                        ? $"[red]differs[/] {Markup.Escape(pair.FirstDifference)}"
+                        : "[red]no group compared[/]";
+            table.AddRow(pair.Shape, Markup.Escape(pair.Product), pair.Compared.ToString(), result);
+        }
+
+        AnsiConsole.Write(table);
     }
 
     /// <summary>Prints one row per product, and every query that failed by index.</summary>
