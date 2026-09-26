@@ -180,8 +180,8 @@ public class YcsbRunScriptTests
     public async Task A_No_Docker_Client_Completes_Against_An_Answering_Endpoint()
     {
         var folder = Folder();
-        var resultsDirectory = Path.Combine(folder, "results");
-        var before = SnapshotFiles(resultsDirectory);
+        // A private output directory, so a run elsewhere that writes into the folder's results cannot change the count.
+        var resultsDirectory = Directory.CreateTempSubdirectory("ycsb-nodocker-results-").FullName;
         var database = "ycsb_nodocker_" + Guid.NewGuid().ToString("N");
         var path = CreateSymlinkPathWithoutDocker();
 
@@ -202,13 +202,14 @@ public class YcsbRunScriptTests
                     // one distribution, no fixed rate.
                     "--rates", "",
                     "--distributions", "uniform",
-                    "--repetitions", "1"
+                    "--repetitions", "1",
+                    "--output-prefix", Path.Combine(resultsDirectory, "run")
                 },
                 new Dictionary<string, string> { ["PATH"] = path });
 
             exitCode.Should().Be(0, $"a client without Docker completes against an endpoint that answers: {output}");
 
-            var written = SnapshotFiles(resultsDirectory).Except(before).Where(file => file.EndsWith(".json", StringComparison.Ordinal)).ToList();
+            var written = SnapshotFiles(resultsDirectory).Where(file => file.EndsWith(".json", StringComparison.Ordinal)).ToList();
             written.Should().HaveCount(5, "the run writes one result per run");
 
             var runs = new List<string>();
@@ -225,8 +226,7 @@ public class YcsbRunScriptTests
         }
         finally
         {
-            foreach (var file in SnapshotFiles(resultsDirectory).Except(before))
-                File.Delete(file);
+            Directory.Delete(resultsDirectory, recursive: true);
             Directory.Delete(path, recursive: true);
 
             using var cleanup = new MongoYcsbTransport(MongoTestEndpoints.MongoConnectionString, database, MongoYcsbTransport.MongoDbTarget);
@@ -327,10 +327,18 @@ public class YcsbRunScriptTests
 
         foreach (var pathDirectory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(':', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (Directory.Exists(pathDirectory) == false)
+            string[] files;
+            try
+            {
+                files = Directory.GetFiles(pathDirectory);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // Other processes on the host create and remove PATH directories; a missing one holds nothing this run needs.
                 continue;
+            }
 
-            foreach (var file in Directory.EnumerateFiles(pathDirectory))
+            foreach (var file in files)
             {
                 var name = Path.GetFileName(file);
                 if (name == "docker" || seen.Add(name) == false)
