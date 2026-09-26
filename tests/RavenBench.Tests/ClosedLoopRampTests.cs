@@ -66,4 +66,47 @@ public class ClosedLoopRampTests
         metrics.OperationsCompleted.Should().Be(documents / batchSize);
         (metrics.Throughput * metrics.Duration.TotalSeconds).Should().BeApproximately(documents, 1);
     }
+    [Fact]
+    public async Task Ramp_Reports_Tail_Percentiles_In_Order()
+    {
+        var opts = new RunOptions
+        {
+            Url = "http://localhost:10101",
+            Database = "ycsb",
+            Seed = 1,
+            Warmup = TimeSpan.FromMilliseconds(100),
+            Duration = TimeSpan.FromMilliseconds(500),
+            Shape = LoadShape.Closed,
+            Step = new StepPlan(2, 2, 2)
+        };
+        using var transport = new RareOutlierTransport(every: 20_000);
+        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(100, 0, 0), new UniformDistribution(), 64, seed: 42);
+        var executor = new BenchmarkExecutor(opts, transport, workload, new ProcessCpuTracker(), serverTracker: null);
+
+        var step = (await BenchmarkRunner.RunRampAsync(opts, transport, executor, workload, startupCalibration: null, new Random(1))).Steps[^1];
+
+        step.Raw.P99.Should().BeLessOrEqualTo(step.Raw.P999);
+        step.Raw.P999.Should().BeLessOrEqualTo(step.P9999);
+    }
+
+    // Answers at once except for one slow call in every `every`, rarer than one in 10,000.
+    private sealed class RareOutlierTransport(int every) : IYcsbTransport
+    {
+        private long _calls;
+        public string ProductName => "fake";
+        public bool ReportsWireBytes => false;
+
+        public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref _calls) % every == 0)
+                await Task.Delay(50, CancellationToken.None);
+            return new TransportResult(0, 0);
+        }
+
+        public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
+        public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;
+        public Task<long> GetDocumentCountAsync(string idPrefix) => Task.FromResult(0L);
+        public Task<string> GetServerVersionAsync() => Task.FromResult("0");
+        public void Dispose() { }
+    }
 }

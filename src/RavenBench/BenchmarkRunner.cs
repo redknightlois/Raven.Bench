@@ -395,7 +395,7 @@ public class BenchmarkRunner(RunOptions opts)
                 previousAutoRateWorkers = stepResult.Concurrency;
             }
 
-            int[] percentiles = { 50, 75, 90, 95, 99, 999 };
+            double[] percentiles = { 50, 75, 90, 95, 99, 99.9 };
             var rawValues = new double[6];
             for (int i = 0; i < percentiles.Length; i++)
             {
