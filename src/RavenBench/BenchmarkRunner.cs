@@ -425,6 +425,12 @@ public class BenchmarkRunner(RunOptions opts)
             }
 
             stepResult.Raw = rawPercentiles;
+            var latenessReason = SendLateness.MarkingFor(stepResult.SendLateness, rawPercentiles.P50);
+            if (stepResult.InvalidReason == null && latenessReason != null)
+            {
+                stepResult.InvalidReason = latenessReason;
+                Console.WriteLine(ClientSaturation.ConsoleLine(steps.Count + 1, stepResult.Concurrency, runName: null, latenessReason));
+            }
             stepResult.Normalized = normalizedPercentiles;
             stepResult.P9999 = p9999;
             stepResult.PMax = pMax;
@@ -541,6 +547,8 @@ public class BenchmarkRunner(RunOptions opts)
                 ? $" | rolling median {rate.Median:F0} (min {rate.Min:F0}, max {rate.Max:F0}, samples={rate.SampleCount})"
                 : string.Empty;
             Console.WriteLine($"[Raven.Bench] Step {stepNumber} result: {actual:F0} ops/s (target {target:F0}, delta {deltaFormatted}){rollingInfo}");
+            if (step.SendLateness is { } late)
+                Console.WriteLine($"[Raven.Bench]   send lateness ms: p50 {late.P50:F3}, p90 {late.P90:F3}, p99 {late.P99:F3}, p99.9 {late.P999:F3} (latency p50 {step.Raw.P50:F3})");
 
             if (Math.Abs(deltaPct) > 10.0)
             {

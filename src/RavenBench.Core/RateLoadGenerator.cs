@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using RavenBench.Core.Metrics;
+using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
 
@@ -59,6 +60,7 @@ namespace RavenBench.Core
             TimeSpan duration, double targetRps, bool isWarmup, CancellationToken cancellationToken)
         {
             var latencyRecorder = new LatencyRecorder(isWarmup == false);
+            var latenessRecorder = new LatencyRecorder(isWarmup == false);
             var counters = new LoadGeneratorCounters();
             var measurementStopwatch = Stopwatch.StartNew();
             RollingRateStats? rollingStats = null;
@@ -73,6 +75,7 @@ namespace RavenBench.Core
             var workers = StartWorkers(
                 scheduler,
                 latencyRecorder,
+                latenessRecorder,
                 counters,
                 cancellationToken);
 
@@ -115,7 +118,8 @@ namespace RavenBench.Core
                 measurementStopwatch.Elapsed,
                 scheduler.ScheduledOperations,
                 isWarmup,
-                rollingStats);
+                rollingStats,
+                isWarmup ? null : ToMilliseconds(latenessRecorder.Snapshot()));
 
             return (latencyRecorder, metrics);
         }
@@ -123,6 +127,7 @@ namespace RavenBench.Core
         private Task[] StartWorkers(
             TokenBucketScheduler scheduler,
             LatencyRecorder latencyRecorder,
+            LatencyRecorder latenessRecorder,
             LoadGeneratorCounters counters,
             CancellationToken cancellationToken)
         {
@@ -140,6 +145,8 @@ namespace RavenBench.Core
                         await foreach (var dueTimestamp in scheduler.ConsumeAsync(cancellationToken))
                         {
                             var operation = _workload.NextOperation(workerRng);
+                            var lateTicks = Math.Max(0, Stopwatch.GetTimestamp() - dueTimestamp);
+                            latenessRecorder.Record(lateTicks * 1_000_000 / Stopwatch.Frequency);
 
                             // Measure from the token's scheduled time, not pickup: any wait while all
                             // workers were busy is real client-observed latency, not to be omitted.
@@ -167,48 +174,53 @@ namespace RavenBench.Core
             return workers;
         }
 
+        private static Percentiles ToMilliseconds(HistogramSnapshot snapshot) => new(
+            snapshot.GetPercentile(50) / 1000.0,
+            snapshot.GetPercentile(75) / 1000.0,
+            snapshot.GetPercentile(90) / 1000.0,
+            snapshot.GetPercentile(95) / 1000.0,
+            snapshot.GetPercentile(99) / 1000.0,
+            snapshot.GetPercentile(99.9) / 1000.0);
+
         /// <summary>
         /// Token-bucket scheduler that releases work permits at the requested rate. Each permit carries
-        /// its scheduled (due) time as a <see cref="Stopwatch.GetTimestamp"/> value, computed against the
-        /// ideal arrival schedule (start + n / rate). Workers consume permits independently, so when they
-        /// fall behind the due times sit in the past and the lag surfaces as latency instead of being lost.
+        /// its scheduled (due) time as a <see cref="Stopwatch.GetTimestamp"/> value on the same clock the
+        /// producer paces with. The producer runs on a dedicated thread and sleeps until the next due time,
+        /// so a permit leaves at its due time rather than at the producer's next wake-up. Workers consume
+        /// permits independently, so when they fall behind the due times sit in the past and the lag
+        /// surfaces as latency instead of being lost.
         /// </summary>
         private sealed class TokenBucketScheduler : IAsyncDisposable
         {
+            // Bounds one sleep so a stop request is seen promptly at low rates.
+            private static readonly long MaxSleepTicks = Stopwatch.Frequency / 20;
+
             private readonly Channel<long> _tokens;
-            private readonly double _ratePerSecond;
-            private readonly int _burstCapacity;
+            private readonly TokenPacer _pacer;
             private readonly CancellationToken _cancellationToken;
             private readonly CancellationTokenSource _producerCts = new();
             private readonly Task _producerTask;
-            private readonly long _startStamp;
-            private readonly double _ticksPerToken;
-            private long _sequence;
-            private double _droppedTokens;
             private int _stopped;
 
-            /// <summary>Tokens minted; counts arrivals scheduled, which may exceed completed operations.</summary>
-            public long ScheduledOperations => Volatile.Read(ref _sequence);
+            /// <summary>Tokens released; counts arrivals scheduled, which may exceed completed operations.</summary>
+            public long ScheduledOperations => _pacer.ReleasedTokens;
 
             /// <summary>Scheduled arrivals discarded when the bucket hit burst capacity; non-zero means bounded coordinated omission.</summary>
-            public long DroppedTokens => (long)Volatile.Read(ref _droppedTokens);
+            public long DroppedTokens => _pacer.DroppedTokens;
 
             public TokenBucketScheduler(double ratePerSecond, int burstCapacity, CancellationToken cancellationToken)
             {
-                _ratePerSecond = Math.Max(ratePerSecond, 0);
-                _burstCapacity = Math.Max(1, burstCapacity);
+                _pacer = new TokenPacer(ratePerSecond, burstCapacity, Stopwatch.Frequency);
                 _cancellationToken = cancellationToken;
-                _startStamp = Stopwatch.GetTimestamp();
-                _ticksPerToken = _ratePerSecond > 0 ? Stopwatch.Frequency / _ratePerSecond : 0;
 
-                _tokens = Channel.CreateBounded<long>(new BoundedChannelOptions(_burstCapacity)
+                _tokens = Channel.CreateBounded<long>(new BoundedChannelOptions(burstCapacity)
                 {
                     SingleReader = false,
                     SingleWriter = true,
                     FullMode = BoundedChannelFullMode.Wait
                 });
 
-                _producerTask = Task.Run(ReplenishAsync);
+                _producerTask = Task.Factory.StartNew(Replenish, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             }
 
             public IAsyncEnumerable<long> ConsumeAsync(CancellationToken cancellationToken)
@@ -216,6 +228,7 @@ namespace RavenBench.Core
                 return _tokens.Reader.ReadAllAsync(cancellationToken);
             }
 
+            /// <summary>Stops the producer. Counters are final once this completes.</summary>
             public async Task StopAsync()
             {
                 if (Interlocked.Exchange(ref _stopped, 1) == 1)
@@ -240,34 +253,28 @@ namespace RavenBench.Core
                 _producerCts.Dispose();
             }
 
-            private async Task ReplenishAsync()
+            private bool Running => _producerCts.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false;
+
+            private void Replenish()
             {
-                if (_ratePerSecond <= 0)
-                {
-                    _tokens.Writer.TryComplete();
-                    return;
-                }
-
-                // Use a bounded interval so replenishment frequency scales with both rate and burst capacity.
-                var targetIntervalMs = CalculateReplenishmentDelay(_ratePerSecond, _burstCapacity);
-                var targetIntervalTicks = (long)(targetIntervalMs * TimeSpan.TicksPerMillisecond);
-                var stopwatch = Stopwatch.StartNew();
-                // All pacing math uses Elapsed.Ticks (TimeSpan ticks); never ElapsedTicks (raw frequency), which mismatches targetTick off Windows.
-                var pacer = new TokenPacer(_ratePerSecond, _burstCapacity);
-
+                var writer = _tokens.Writer;
                 try
                 {
-                    while (_producerCts.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false)
+                    while (Running)
                     {
-                        var nowTicks = stopwatch.Elapsed.Ticks;
-                        var wholeTokens = pacer.Release(nowTicks);
-                        Volatile.Write(ref _droppedTokens, pacer.DroppedTokens);
-                        if (wholeTokens > 0)
-                            await WriteTokensAsync(wholeTokens, _producerCts.Token).ConfigureAwait(false);
+                        var (first, count) = _pacer.Release(Stopwatch.GetTimestamp());
+                        for (long sequence = first; sequence < first + count; sequence++)
+                        {
+                            var due = _pacer.DueTicks(sequence);
+                            while (writer.TryWrite(due) == false)
+                            {
+                                // All workers are busy and the burst is queued: block this thread until a slot frees.
+                                if (writer.WaitToWriteAsync(_producerCts.Token).AsTask().GetAwaiter().GetResult() == false)
+                                    return;
+                            }
+                        }
 
-                        // Schedule the next wake-up relative to this cycle and wait just long enough to stay on pace.
-                        var nextTick = nowTicks + targetIntervalTicks;
-                        await WaitForNextTickAsync(nextTick, stopwatch, _producerCts.Token).ConfigureAwait(false);
+                        SleepUntil(Math.Min(_pacer.NextDueTicks, Stopwatch.GetTimestamp() + MaxSleepTicks));
                     }
                 }
                 catch (OperationCanceledException)
@@ -276,104 +283,124 @@ namespace RavenBench.Core
                 }
                 finally
                 {
-                    _tokens.Writer.TryComplete();
+                    writer.TryComplete();
                 }
             }
 
-            private static double CalculateReplenishmentDelay(double ratePerSecond, int burstCapacity)
+            private static void SleepUntil(long timestamp)
             {
-                if (ratePerSecond <= 0)
-                    return 1.0;
-
-                var tokensPerMs = ratePerSecond / 1000.0;
-                if (tokensPerMs <= 0)
-                    return 1.0;
-
-                var effectiveBurst = Math.Max(1, Math.Min(burstCapacity, 500));
-                var intervalMs = effectiveBurst / tokensPerMs;
-                return Math.Clamp(intervalMs, 0.1, 1.0);
-            }
-
-            private async Task WriteTokensAsync(int count, CancellationToken cancellationToken)
-            {
-                var writer = _tokens.Writer;
-                for (int i = 0; i < count; i++)
+                if (UseClockNanosleep)
                 {
-                    var due = _startStamp + (long)(_sequence * _ticksPerToken);
-                    _sequence++;
-
-                    // Fast-path: try to write synchronously; only await when the channel is momentarily full.
-                    if (writer.TryWrite(due))
-                        continue;
-
-                    await writer.WriteAsync(due, cancellationToken).ConfigureAwait(false);
+                    var target = new Timespec { Seconds = timestamp / NanosPerSecond, Nanoseconds = timestamp % NanosPerSecond };
+                    // An interrupted sleep returns early; the caller re-reads the clock, so the loop tolerates it.
+                    clock_nanosleep(ClockMonotonic, TimerAbstime, ref target, IntPtr.Zero);
+                    return;
                 }
+
+                // Coarse timers: sleep to within one timer tick of the target, then yield-spin the bounded tail.
+                var sleep = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), timestamp) - CoarseTimerTick;
+                if (sleep > TimeSpan.Zero)
+                    Thread.Sleep(sleep);
+
+                var spinner = new SpinWait();
+                while (Stopwatch.GetTimestamp() < timestamp)
+                    spinner.SpinOnce(sleep1Threshold: -1);
             }
 
-            private async Task WaitForNextTickAsync(long targetTick, Stopwatch stopwatch, CancellationToken producerToken)
+            private const long NanosPerSecond = 1_000_000_000;
+            private const int ClockMonotonic = 1;
+            private const int TimerAbstime = 1;
+
+            // Bounds the yield-spin to the last millisecond before a due time. A host timer coarser than this still
+            // oversleeps, and the send lateness reports it; a high-resolution waitable timer would remove that ceiling.
+            private static readonly TimeSpan CoarseTimerTick = TimeSpan.FromMilliseconds(1);
+
+            private static readonly bool UseClockNanosleep = StopwatchIsClockMonotonic();
+
+            // clock_nanosleep takes Stopwatch timestamps as absolute targets only when both read CLOCK_MONOTONIC in
+            // nanoseconds; the Timespec layout assumes a 64-bit time_t and long.
+            private static bool StopwatchIsClockMonotonic()
             {
-                while (producerToken.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false)
-                {
-                    var remainingTicks = targetTick - stopwatch.Elapsed.Ticks;
-                    if (remainingTicks <= 0)
-                        return;
+                if (OperatingSystem.IsLinux() == false || Environment.Is64BitProcess == false || Stopwatch.Frequency != NanosPerSecond)
+                    return false;
 
-                    var remainingMs = remainingTicks / (double)TimeSpan.TicksPerMillisecond;
-                    if (remainingMs >= 1.0)
-                    {
-                        // Millisecond waits use Task.Delay to keep the producer CPU-friendly.
-                        await Task.Delay(TimeSpan.FromMilliseconds(remainingMs), producerToken).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        // Sub-millisecond waits spin to avoid overshooting; SpinUntil handles progressive back-off for us.
-                        SpinWait.SpinUntil(
-                            () => stopwatch.Elapsed.Ticks >= targetTick ||
-                                  producerToken.IsCancellationRequested ||
-                                  _cancellationToken.IsCancellationRequested);
-
-                        if (producerToken.IsCancellationRequested || _cancellationToken.IsCancellationRequested)
-                            return;
-                    }
-                }
+                var before = Stopwatch.GetTimestamp();
+                if (clock_gettime(ClockMonotonic, out var now) != 0)
+                    return false;
+                var after = Stopwatch.GetTimestamp();
+                var monotonic = now.Seconds * NanosPerSecond + now.Nanoseconds;
+                return monotonic >= before && monotonic <= after;
             }
+
+            private struct Timespec
+            {
+                public long Seconds;
+                public long Nanoseconds;
+            }
+
+            [System.Runtime.InteropServices.DllImport("libc", SetLastError = false)]
+            private static extern int clock_gettime(int clockId, out Timespec time);
+
+            [System.Runtime.InteropServices.DllImport("libc", SetLastError = false)]
+            private static extern int clock_nanosleep(int clockId, int flags, ref Timespec request, IntPtr remain);
         }
 
         /// <summary>
-        /// Pure pacing arithmetic: given the elapsed time on the scheduler's clock, returns the whole tokens owed since
-        /// the previous call. Unreleased credit is capped at the burst capacity and the excess is counted as dropped.
-        /// Elapsed values are <see cref="TimeSpan"/> ticks and must not decrease.
+        /// Pure pacing arithmetic on one clock. The first <see cref="Release"/> call fixes the schedule origin, so
+        /// token n is due at origin + n / rate on the same clock the caller passes to <see cref="Release"/>.
+        /// A call releases every token due at or before now. Overdue tokens beyond the burst capacity are skipped
+        /// and counted as dropped. Timestamps must not decrease.
         /// </summary>
         internal sealed class TokenPacer
         {
-            private readonly double _ratePerSecond;
+            private readonly double _ticksPerToken;
             private readonly int _burstCapacity;
-            private long _lastTicks;
-            private double _carry;
+            private long _originTicks;
+            private bool _started;
+            private long _next;
 
-            public double DroppedTokens { get; private set; }
+            public long DroppedTokens { get; private set; }
+            public long ReleasedTokens { get; private set; }
 
-            public TokenPacer(double ratePerSecond, int burstCapacity)
+            public TokenPacer(double ratePerSecond, int burstCapacity, long ticksPerSecond)
             {
-                _ratePerSecond = ratePerSecond;
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ratePerSecond);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(burstCapacity);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ticksPerSecond);
+                _ticksPerToken = ticksPerSecond / ratePerSecond;
                 _burstCapacity = burstCapacity;
             }
 
-            public int Release(long elapsedTicks)
+            /// <summary>Due time of token <paramref name="sequence"/>; never before its ideal instant.</summary>
+            public long DueTicks(long sequence) => _originTicks + (long)Math.Ceiling(sequence * _ticksPerToken);
+
+            /// <summary>Due time of the next unreleased token.</summary>
+            public long NextDueTicks => DueTicks(_next);
+
+            /// <summary>Returns the sequence range of the tokens released at <paramref name="nowTicks"/>.</summary>
+            public (long First, int Count) Release(long nowTicks)
             {
-                var deltaTicks = elapsedTicks - _lastTicks;
-                if (deltaTicks <= 0)
-                    return 0;
-                _lastTicks = elapsedTicks;
+                if (_started == false)
+                {
+                    _originTicks = nowTicks;
+                    _started = true;
+                }
 
-                var uncapped = _carry + deltaTicks / (double)TimeSpan.TicksPerSecond * _ratePerSecond;
-                if (uncapped > _burstCapacity)
-                    DroppedTokens += uncapped - _burstCapacity;
-                _carry = Math.Min(uncapped, _burstCapacity);
+                var owed = (long)Math.Floor((nowTicks - _originTicks) / _ticksPerToken) + 1 - _next;
+                if (owed <= 0)
+                    return (_next, 0);
 
-                var whole = (int)Math.Floor(_carry);
-                _carry -= whole;
-                return whole;
+                if (owed > _burstCapacity)
+                {
+                    DroppedTokens += owed - _burstCapacity;
+                    _next += owed - _burstCapacity;
+                    owed = _burstCapacity;
+                }
+
+                var first = _next;
+                _next += owed;
+                ReleasedTokens += owed;
+                return (first, (int)owed);
             }
         }
 

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using RavenBench.Core.Metrics;
+using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
 
@@ -116,7 +117,8 @@ public static class LoadGeneratorExecution
         TimeSpan duration,
         long scheduledCount,
         bool isWarmup,
-        RollingRateStats? rollingRate = null)
+        RollingRateStats? rollingRate = null,
+        Percentiles? sendLateness = null)
     {
         var completed = counters.OperationsCompleted;
         var errorCount = counters.ErrorCount;
@@ -140,6 +142,7 @@ public static class LoadGeneratorExecution
             ScheduledOperations = scheduledCount,
             OperationsCompleted = completed,
             RollingRate = rollingRate,
+            SendLateness = sendLateness,
             Query = counters.QuerySnapshot()
         };
     }
