@@ -63,12 +63,18 @@ public sealed class StepResult
     /// Why this step must not be published, when it must not be. Absent for a valid step. It is
     /// separate from <see cref="Reason"/>, which carries warmup and ramp-stop reasons.
     /// </summary>
-    public string? InvalidReason { get; init; }
+    public string? InvalidReason { get; set; }
 
     public double NetworkUtilization { get; init; }
     /// <summary>True when NetworkUtilization is derived from measured wire bytes; false when estimated.</summary>
     public bool NetworkBytesMeasured { get; init; }
     public RollingRateStats? RollingRate { get; init; }
+
+    /// <summary>
+    /// Rate mode only: send time minus scheduled time, in milliseconds. Latency counts from the
+    /// scheduled time, so this is the part of it the client added by not keeping its schedule.
+    /// </summary>
+    public Percentiles? SendLateness { get; init; }
 
     // Server-side metrics from RavenDB
     public double? ServerCpu { get; init; }
