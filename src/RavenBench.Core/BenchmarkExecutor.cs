@@ -207,6 +207,7 @@ namespace RavenBench.Core
                 NetworkBytesMeasured = _transport.ReportsWireBytes,
                 Reason = metrics.Reason,
                 RollingRate = metrics.RollingRate,
+                SendLateness = metrics.SendLateness,
                 QueryOperations = hasQueries ? query!.QueryOperations : null,
                 IndexUsage = hasQueries ? query!.IndexUsage : null,
                 TopIndexes = topIndexes,
@@ -266,6 +267,8 @@ namespace RavenBench.Core
         public TimeSpan Duration { get; init; }
         public string? Reason { get; init; }
         public RollingRateStats? RollingRate { get; init; }
+        /// <summary>Rate mode only: how late requests left relative to their scheduled time, in milliseconds.</summary>
+        public Percentiles? SendLateness { get; init; }
         public QueryStatsSnapshot? Query { get; init; }
         /// <summary>
         /// Number of operations scheduled (may exceed completed if queueing occurs).
