@@ -125,11 +125,13 @@ public sealed class RateLoadGeneratorTests
         stats.Max.Should().BeApproximately(500, 1e-9);
     }
 
-    [Fact]
-    public async Task ScheduledOperationsNeverExceedRateTimesElapsed()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    public async Task ScheduledOperationsNeverExceedRateTimesElapsed(int pipelineDepth)
     {
         var transport = new TestTransport(baseLatencyMs: 0);
-        var generator = new RateLoadGenerator(transport, new ConstantWorkload(), targetRps: 500, maxConcurrency: 64, new Random(42));
+        var generator = new RateLoadGenerator(transport, new ConstantWorkload(), targetRps: 500, maxConcurrency: 64, new Random(42), pipelineDepth);
 
         var (_, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(600), CancellationToken.None);
 

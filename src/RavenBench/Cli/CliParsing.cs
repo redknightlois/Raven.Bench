@@ -12,21 +12,23 @@ internal static class CliParsing
     public static RunOptions ToRunOptions(this ClosedSettings s)
     {
         var stepPlan = ParseStepPlan(s.Step ?? s.Concurrency);
-        return BuildRunOptions(s, LoadShape.Closed, stepPlan);
+        return BuildRunOptions(s, LoadShape.Closed, stepPlan, s.PipelineDepth);
     }
 
     public static RunOptions ToRunOptions(this RateSettings s)
     {
         var stepPlan = ParseStepPlan(s.Step ?? "200..20000x1.5");
-        return BuildRunOptions(s, LoadShape.Rate, stepPlan, rateWorkers: s.RateWorkers);
+        return BuildRunOptions(s, LoadShape.Rate, stepPlan, s.PipelineDepth, rateWorkers: s.RateWorkers);
     }
 
     private static RunOptions BuildRunOptions(
         BaseRunSettings settings,
         LoadShape shape,
         StepPlan stepPlan,
+        int pipelineDepth,
         int? rateWorkers = null)
     {
+        var transport = ParseTransport(settings.Transport);
         var database = string.IsNullOrEmpty(settings.DatasetProfile) == false || string.IsNullOrEmpty(settings.Dataset) == false
             ? (settings.Database ?? "temp-placeholder")
             : RequiredString(settings.Database!, "--database");
@@ -58,7 +60,8 @@ internal static class CliParsing
             ThreadPoolWorkers = settings.TpWorkers,
             ThreadPoolIOCP = settings.TpIOCP,
             Distribution = ParseDistribution(settings.Distribution),
-            Transport = ParseTransport(settings.Transport),
+            Transport = transport,
+            PipelineDepth = ParsePipelineDepth(pipelineDepth, transport),
             Compression = ParseCompression(settings.Compression),
             OutJson = settings.OutJson,
             OutCsv = settings.OutCsv,
@@ -168,6 +171,15 @@ internal static class CliParsing
             "delete" => AttachmentOperationKind.Delete,
             _ => throw new ArgumentException($"Invalid attachment op: {attachmentOp}. Valid options: create, get, delete")
         };
+    }
+
+    internal static int ParsePipelineDepth(int depth, TransportKind transport)
+    {
+        if (depth < 1)
+            throw new ArgumentException($"--pipeline-depth must be at least 1, got {depth}.");
+        if (depth > 1 && transport != TransportKind.Raw)
+            throw new ArgumentException($"--pipeline-depth {depth} needs --transport raw; the {FormatTransport(transport)} transport cannot pipeline.");
+        return depth;
     }
 
     internal static TransportKind ParseTransport(string transport)

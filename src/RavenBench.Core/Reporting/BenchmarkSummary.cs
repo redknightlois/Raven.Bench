@@ -13,6 +13,9 @@ public sealed class BenchmarkSummary
     public required string Verdict { get; init; }
     public required string ClientCompression { get; init; }
     public required string EffectiveHttpVersion { get; init; }
+
+    /// <summary>The code path that sent the benchmark requests, for example raw-socket or http-client; null when the transport does not name one.</summary>
+    public string? TransportPath { get; init; }
     public StartupCalibration? StartupCalibration { get; init; }
     public string? Notes { get; init; }
 
