@@ -455,7 +455,7 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
     }
 
     /// <summary>
-    /// Estimates the size of HTTP headers for a request, similar to RawHttpTransport.CalculateHeaderSize.
+    /// Estimates the size of HTTP headers for a request.
     /// Includes request line, standard headers, and blank line.
     /// </summary>
     private long EstimateHeaderSize(string method, string path, long contentLength = 0)

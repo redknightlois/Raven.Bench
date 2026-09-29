@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -312,6 +313,90 @@ public class RawSocketScriptedServerTests
         await server;
 
         result.IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Close_With_Pipelined_Requests_In_Flight_Fails_Only_The_Unanswered_Ones()
+    {
+        using var listener = Listen();
+        using var transport = Transport(listener, depth: 4);
+
+        var server = Task.Run(async () =>
+        {
+            using (var first = await listener.AcceptTcpClientAsync())
+            {
+                var stream = first.GetStream();
+                await ReadRequests(stream, 4);
+                await stream.WriteAsync(Ok("{}"));
+            }
+            using var second = await listener.AcceptTcpClientAsync();
+            var s2 = second.GetStream();
+            await ReadRequests(s2, 1);
+            await s2.WriteAsync(Ok("{}"));
+            await Task.Delay(200);
+        });
+
+        var batch = await Task.WhenAll(Enumerable.Range(0, 4).Select(i => transport.ExecuteAsync(Read(i), CancellationToken.None)));
+        var next = await transport.ExecuteAsync(Read(5), CancellationToken.None);
+        await server;
+
+        // The four requests wait on one connect, so their order on the wire is not their call order.
+        batch.Count(r => r.IsSuccess).Should().Be(1);
+        batch.Where(r => r.IsSuccess == false).Should().HaveCount(3).And.OnlyContain(r => r.Cancelled == false);
+        next.IsSuccess.Should().BeTrue(next.ErrorDetails);
+        transport.OpenedSocketConnections.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_Server_That_Never_Answers_Times_The_Request_Out()
+    {
+        using var listener = Listen();
+        using var transport = Transport(listener);
+
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            await ReadRequests(client.GetStream(), 1);
+            await Task.Delay(TimeSpan.FromSeconds(40));
+        });
+
+        var started = Stopwatch.StartNew();
+        var result = await transport.ExecuteAsync(Read(1), CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Cancelled.Should().BeFalse();
+        result.ErrorDetails.Should().Contain("timed out");
+        started.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(33));
+    }
+
+    [Fact]
+    public async Task Cancelled_Request_Retires_Its_Connection()
+    {
+        using var listener = Listen();
+        using var transport = Transport(listener);
+        using var cts = new CancellationTokenSource();
+
+        var server = Task.Run(async () =>
+        {
+            using (var first = await listener.AcceptTcpClientAsync())
+            {
+                await ReadRequests(first.GetStream(), 1);
+                cts.Cancel();
+                using var second = await listener.AcceptTcpClientAsync();
+                var stream = second.GetStream();
+                await ReadRequests(stream, 1);
+                await stream.WriteAsync(Ok("{}"));
+                await Task.Delay(200);
+            }
+        });
+
+        var cancelled = await transport.ExecuteAsync(Read(1), cts.Token);
+        var next = await transport.ExecuteAsync(Read(2), CancellationToken.None);
+        await server;
+
+        cancelled.Cancelled.Should().BeTrue();
+        next.IsSuccess.Should().BeTrue(next.ErrorDetails);
+        transport.OpenedSocketConnections.Should().Be(2);
     }
 
     [Fact]
