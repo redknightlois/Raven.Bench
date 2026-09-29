@@ -112,11 +112,11 @@ namespace RavenBench.Core
                 }
             }
 
-            if (isWarmup == false && scheduler.DroppedTokens > 0)
-            {
-                Console.Error.WriteLine(
-                    $"[Raven.Bench] WARNING: token bucket dropped {scheduler.DroppedTokens} scheduled arrivals at burst capacity; the run is saturated and latency correction is bounded.");
-            }
+            // Arrivals due by the stop but never issued are charged as late from their own due time, so a backlog cannot hide from the lateness figures.
+            var stopTicks = Stopwatch.GetTimestamp();
+            var (firstUnissued, unissued) = scheduler.ReleaseOverdue(stopTicks);
+            for (var sequence = firstUnissued; sequence < firstUnissued + unissued; sequence++)
+                latenessRecorder.Record((stopTicks - scheduler.DueTicks(sequence)) * 1_000_000 / Stopwatch.Frequency);
 
             var metrics = LoadGeneratorExecution.BuildMetrics(
                 counters,
@@ -203,19 +203,17 @@ namespace RavenBench.Core
             private readonly Channel<long> _tokens;
             private readonly TokenPacer _pacer;
             private readonly CancellationToken _cancellationToken;
-            private readonly CancellationTokenSource _producerCts = new();
             private readonly Task _producerTask;
             private int _stopped;
+            // The first arrival no worker has received; read only after the producer exits.
+            private long _nextUnissued;
 
             /// <summary>Tokens released; counts arrivals scheduled, which may exceed completed operations.</summary>
             public long ScheduledOperations => _pacer.ReleasedTokens;
 
-            /// <summary>Scheduled arrivals discarded when the bucket hit burst capacity; non-zero means bounded coordinated omission.</summary>
-            public long DroppedTokens => _pacer.DroppedTokens;
-
             public TokenBucketScheduler(double ratePerSecond, int burstCapacity, CancellationToken cancellationToken)
             {
-                _pacer = new TokenPacer(ratePerSecond, burstCapacity, Stopwatch.Frequency);
+                _pacer = new TokenPacer(ratePerSecond, Stopwatch.Frequency);
                 _cancellationToken = cancellationToken;
 
                 _tokens = Channel.CreateBounded<long>(new BoundedChannelOptions(burstCapacity)
@@ -239,26 +237,22 @@ namespace RavenBench.Core
                 if (Interlocked.Exchange(ref _stopped, 1) == 1)
                     return;
 
-                _producerCts.Cancel();
                 _tokens.Writer.TryComplete();
-
-                try
-                {
-                    await _producerTask.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected when stopping.
-                }
+                await _producerTask.ConfigureAwait(false);
             }
 
-            public async ValueTask DisposeAsync()
+            public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+
+            /// <summary>Returns every arrival due by <paramref name="nowTicks"/> that no worker received, and counts each one as scheduled. Call only after <see cref="StopAsync"/>.</summary>
+            public (long First, long Count) ReleaseOverdue(long nowTicks)
             {
-                await StopAsync().ConfigureAwait(false);
-                _producerCts.Dispose();
+                var (first, count) = _pacer.Release(nowTicks);
+                return (_nextUnissued, first + count - _nextUnissued);
             }
 
-            private bool Running => _producerCts.IsCancellationRequested == false && _cancellationToken.IsCancellationRequested == false;
+            public long DueTicks(long sequence) => _pacer.DueTicks(sequence);
+
+            private bool Running => Volatile.Read(ref _stopped) == 0 && _cancellationToken.IsCancellationRequested == false;
 
             private void Replenish()
             {
@@ -273,18 +267,15 @@ namespace RavenBench.Core
                             var due = _pacer.DueTicks(sequence);
                             while (writer.TryWrite(due) == false)
                             {
-                                // All workers are busy and the burst is queued: block this thread until a slot frees.
-                                if (writer.WaitToWriteAsync(_producerCts.Token).AsTask().GetAwaiter().GetResult() == false)
+                                // All workers are busy and the burst is queued: block this thread until a slot frees. Stopping completes the writer, which ends the wait without an exception.
+                                if (writer.WaitToWriteAsync().AsTask().GetAwaiter().GetResult() == false)
                                     return;
                             }
+                            _nextUnissued = sequence + 1;
                         }
 
                         SleepUntil(Math.Min(_pacer.NextDueTicks, Stopwatch.GetTimestamp() + MaxSleepTicks));
                     }
-                }
-                catch (OperationCanceledException)
-                {
-                    // Graceful shutdown.
                 }
                 finally
                 {
@@ -353,27 +344,22 @@ namespace RavenBench.Core
         /// <summary>
         /// Pure pacing arithmetic on one clock. The first <see cref="Release"/> call fixes the schedule origin, so
         /// token n is due at origin + n / rate on the same clock the caller passes to <see cref="Release"/>.
-        /// A call releases every token due at or before now. Overdue tokens beyond the burst capacity are skipped
-        /// and counted as dropped. Timestamps must not decrease.
+        /// A call releases every token due at or before now, however many are overdue. Timestamps must not decrease.
         /// </summary>
         internal sealed class TokenPacer
         {
             private readonly double _ticksPerToken;
-            private readonly int _burstCapacity;
             private long _originTicks;
             private bool _started;
             private long _next;
 
-            public long DroppedTokens { get; private set; }
             public long ReleasedTokens { get; private set; }
 
-            public TokenPacer(double ratePerSecond, int burstCapacity, long ticksPerSecond)
+            public TokenPacer(double ratePerSecond, long ticksPerSecond)
             {
                 ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ratePerSecond);
-                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(burstCapacity);
                 ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ticksPerSecond);
                 _ticksPerToken = ticksPerSecond / ratePerSecond;
-                _burstCapacity = burstCapacity;
             }
 
             /// <summary>Due time of token <paramref name="sequence"/>; never before its ideal instant.</summary>
@@ -383,7 +369,7 @@ namespace RavenBench.Core
             public long NextDueTicks => DueTicks(_next);
 
             /// <summary>Returns the sequence range of the tokens released at <paramref name="nowTicks"/>.</summary>
-            public (long First, int Count) Release(long nowTicks)
+            public (long First, long Count) Release(long nowTicks)
             {
                 if (_started == false)
                 {
@@ -395,17 +381,10 @@ namespace RavenBench.Core
                 if (owed <= 0)
                     return (_next, 0);
 
-                if (owed > _burstCapacity)
-                {
-                    DroppedTokens += owed - _burstCapacity;
-                    _next += owed - _burstCapacity;
-                    owed = _burstCapacity;
-                }
-
                 var first = _next;
                 _next += owed;
                 ReleasedTokens += owed;
-                return (first, (int)owed);
+                return (first, owed);
             }
         }
 
@@ -419,8 +398,8 @@ namespace RavenBench.Core
             private readonly Queue<(double timeSeconds, long completed)> _history = new();
             private readonly List<double> _samples = new();
             private readonly object _lock = new();
-            private readonly CancellationTokenSource _cts = new();
-            private CancellationTokenSource? _linkedCts;
+            private PeriodicTimer? _timer;
+            private CancellationTokenRegistration _stopOnCancel;
             private Task? _samplerTask;
             private double _lastSample;
             private bool _hasLastSample;
@@ -433,21 +412,13 @@ namespace RavenBench.Core
 
             public void Start(LoadGeneratorCounters counters, Stopwatch stopwatch, CancellationToken cancellationToken)
             {
-                _linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cancellationToken);
-                var token = _linkedCts.Token;
+                // Disposing the timer ends the wait with false, so stopping throws no exception.
+                var timer = _timer = new PeriodicTimer(_interval);
+                _stopOnCancel = cancellationToken.UnsafeRegister(static t => ((PeriodicTimer)t!).Dispose(), timer);
                 _samplerTask = Task.Run(async () =>
                 {
-                    while (token.IsCancellationRequested == false)
+                    while (await timer.WaitForNextTickAsync().ConfigureAwait(false))
                     {
-                        try
-                        {
-                            await Task.Delay(_interval, token).ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            break;
-                        }
-
                         var elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
                         var completed = counters.OperationsCompleted;
                         RecordSample(elapsedSeconds, completed);
@@ -488,22 +459,10 @@ namespace RavenBench.Core
 
             public async Task StopAsync()
             {
-                _cts.Cancel();
-                _linkedCts?.Cancel();
-
+                _timer?.Dispose();
+                _stopOnCancel.Dispose();
                 if (_samplerTask != null)
-                {
-                    try
-                    {
-                        await _samplerTask.ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // Expected when stopping the sampler.
-                    }
-                }
-
-                _linkedCts?.Dispose();
+                    await _samplerTask.ConfigureAwait(false);
             }
 
             public RollingRateStats Snapshot()
@@ -546,11 +505,7 @@ namespace RavenBench.Core
                 }
             }
 
-            public async ValueTask DisposeAsync()
-            {
-                await StopAsync().ConfigureAwait(false);
-                _cts.Dispose();
-            }
+            public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
         }
     }
 }
