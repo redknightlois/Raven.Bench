@@ -99,6 +99,9 @@ internal sealed class Http1Connection
     private int _start;
     private int _end;
     private readonly ArrayBufferWriter<byte> _body = new(4096);
+    // Start of a Content-Length body read in place from _in, -1 when the body is in _body; valid until the loop next compacts or receives.
+    private int _inPlaceStart = -1;
+    private int _inPlaceLength;
     private Phase _phase = Phase.Headers;
     private long _remaining;
     private long _bytesIn;
@@ -336,7 +339,7 @@ internal sealed class Http1Connection
 
     private Http1Response BuildResponse(Http1Exchange exchange)
     {
-        var body = _body.WrittenSpan;
+        var body = _inPlaceStart < 0 ? _body.WrittenSpan : _in.AsSpan(_inPlaceStart, _inPlaceLength);
         if (_status is < 200 or > 299)
             return new Http1Response(_status, _bytesIn, default, Encoding.UTF8.GetString(body), null, false);
 
@@ -406,6 +409,7 @@ internal sealed class Http1Connection
                     var framing = ParseHeaders(available[..end]);
                     Consume(end + 4);
                     _body.ResetWrittenCount();
+                    _inPlaceStart = -1;
                     _collectBody = head.ReadsEnvelope || _status is < 200 or > 299;
 
                     if (_status is 204 or 304)
@@ -428,8 +432,15 @@ internal sealed class Http1Connection
                     if (available.Length == 0)
                         return false;
                     var take = (int)Math.Min(_remaining, available.Length);
-                    if (_collectBody)
+                    if (_collectBody && _phase == Phase.Body && take == _remaining && _body.WrittenCount == 0)
+                    {
+                        _inPlaceStart = _start;
+                        _inPlaceLength = take;
+                    }
+                    else if (_collectBody)
+                    {
                         _body.Write(available[..take]);
+                    }
                     Consume(take);
                     _remaining -= take;
                     if (_remaining > 0)
