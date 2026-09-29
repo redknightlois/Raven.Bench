@@ -201,6 +201,55 @@ public class RawSocketScriptedServerTests
     }
 
     [Fact]
+    public async Task Pipelined_Responses_Read_In_Place_Keep_Their_Own_Fields()
+    {
+        using var listener = Listen();
+        using var transport = Transport(listener, depth: 4);
+        static string Query(int i) => $"{{\"Results\":[{string.Join(",", Enumerable.Repeat("{}", i))}],\"IndexName\":\"I{i}\",\"IsStale\":{(i % 2 == 0 ? "true" : "false")}}}";
+        var responses = new[]
+        {
+            Ok(Query(0)),
+            Ok(Query(1)),
+            Encoding.ASCII.GetBytes("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nboom2"),
+            Ok(Query(3)),
+        };
+        var wire = responses.SelectMany(b => b).ToArray();
+
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            client.NoDelay = true;
+            var stream = client.GetStream();
+            await ReadRequests(stream, 1);
+            await stream.WriteAsync(Ok("{}"));
+            await ReadRequests(stream, 4);
+            // Three responses arrive whole in one receive; the last body is split across two.
+            await stream.WriteAsync(wire.AsMemory(0, wire.Length - 3));
+            await Task.Delay(100);
+            await stream.WriteAsync(wire.AsMemory(wire.Length - 3));
+            await Task.Delay(200);
+        });
+
+        var query = new QueryOperation { QueryText = "from @all_docs", Parameters = new Dictionary<string, object?>() };
+        // Connected first, so the batch is queued in call order.
+        (await transport.ExecuteAsync(Read(0), CancellationToken.None)).IsSuccess.Should().BeTrue();
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => transport.ExecuteAsync(query, CancellationToken.None)));
+        await server;
+
+        foreach (var i in new[] { 0, 1, 3 })
+        {
+            results[i].IsSuccess.Should().BeTrue(results[i].ErrorDetails);
+            results[i].ResultCount.Should().Be(i);
+            results[i].IndexName.Should().Be($"I{i}");
+            results[i].IsStale.Should().Be(i % 2 == 0);
+            results[i].BytesIn.Should().Be(responses[i].Length);
+        }
+        results[2].IsSuccess.Should().BeFalse();
+        results[2].ErrorDetails.Should().Contain("boom2");
+        transport.OpenedSocketConnections.Should().Be(1);
+    }
+
+    [Fact]
     public async Task Chunked_Response_Split_Into_Single_Bytes_Is_Read_To_Its_End()
     {
         using var listener = Listen();
