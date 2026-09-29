@@ -351,7 +351,11 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
             }
 
             if (response.Cancelled)
+            {
+                // The response is still due on this connection, so it cannot carry another request within its depth.
+                connection.Fail("A request on this connection was cancelled.");
                 return TransportResult.CancelledResult;
+            }
             if (response.Failure != null)
                 return new TransportResult(0, 0, response.Failure);
             if (response.Status is < 200 or > 299)
