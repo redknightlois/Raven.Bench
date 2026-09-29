@@ -10,6 +10,9 @@ public sealed class BenchmarkRun
     public required double MaxNetworkUtilization { get; init; }
     public required string ClientCompression { get; init; }
     public required string EffectiveHttpVersion { get; init; }
+
+    /// <summary>The code path that sent the benchmark requests, as the transport names it.</summary>
+    public string? TransportPath { get; init; }
     public StartupCalibration? StartupCalibration { get; init; }
     public List<ServerMetrics>? ServerMetricsHistory { get; init; }
     public List<HistogramArtifact>? HistogramArtifacts { get; init; }

@@ -211,6 +211,7 @@ public sealed class YcsbRunner
             Verdict = ResultAnalyzer.BuildVerdict(knee, outcome.Options),
             ClientCompression = context.ClientCompression,
             EffectiveHttpVersion = context.EffectiveHttpVersion,
+            TransportPath = (transport as ITransport)?.TransportPath,
             HistogramArtifacts = outcome.Ramp.HistogramArtifacts.Count > 0 ? outcome.Ramp.HistogramArtifacts : null,
             MachineFingerprint = machineFingerprint,
             Ycsb = new YcsbRunInfo

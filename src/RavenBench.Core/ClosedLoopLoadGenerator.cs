@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using HdrHistogram;
 using RavenBench.Core.Metrics;
@@ -19,6 +18,7 @@ namespace RavenBench.Core
         private readonly IYcsbTransport _transport;
         private readonly IWorkload _workload;
         private readonly int _concurrency;
+        private readonly int _workers;
         private readonly Random _rng;
         private long _baselineLatencyMicros;
 
@@ -29,11 +29,15 @@ namespace RavenBench.Core
             IYcsbTransport transport,
             IWorkload workload,
             int concurrency,
-            Random rng)
+            Random rng,
+            int pipelineDepth = 1)
         {
+            ArgumentOutOfRangeException.ThrowIfLessThan(pipelineDepth, 1);
             _transport = transport ?? throw new ArgumentNullException(nameof(transport));
             _workload = workload ?? throw new ArgumentNullException(nameof(workload));
             _concurrency = concurrency;
+            // Concurrency counts connections; each carries up to pipelineDepth requests, one per worker.
+            _workers = checked(concurrency * pipelineDepth);
             _rng = rng ?? throw new ArgumentNullException(nameof(rng));
         }
 
@@ -58,8 +62,6 @@ namespace RavenBench.Core
             TimeSpan duration, bool isWarmup, CancellationToken cancellationToken)
         {
             var latencyRecorder = new LatencyRecorder(isWarmup == false);
-            var bufferSize = Math.Max(_concurrency, 1);
-            var channel = Channel.CreateBounded<OperationBase>(bufferSize);
             var counters = new LoadGeneratorCounters();
             // The warmup recorder is written by every worker thread, so its histogram must be thread-safe.
             Recorder? warmupRecorder = isWarmup
@@ -68,14 +70,29 @@ namespace RavenBench.Core
 
             var stopwatch = Stopwatch.StartNew();
             var endTime = stopwatch.Elapsed + duration;
+            var source = new object();
+            long scheduledCount = 0;
 
-            var workerTasks = new Task[_concurrency];
-            for (int i = 0; i < _concurrency; i++)
+            var workerTasks = new Task[_workers];
+            for (int i = 0; i < _workers; i++)
             {
                 workerTasks[i] = Task.Run(async () =>
                 {
-                    await foreach (var operation in channel.Reader.ReadAllAsync(cancellationToken))
+                    while (true)
                     {
+                        OperationBase operation;
+                        // Every operation is drawn in turn from the one run-seeded source; the
+                        // concurrency decides how many are drawn before the step ends and which worker
+                        // runs each one, never the sequence itself. System.Random is not thread-safe,
+                        // so the source is only touched under this lock.
+                        lock (source)
+                        {
+                            if (stopwatch.Elapsed >= endTime || cancellationToken.IsCancellationRequested || _workload.IsExhausted)
+                                return;
+                            operation = _workload.NextOperation(_rng);
+                            scheduledCount++;
+                        }
+
                         var result = await LoadGeneratorExecution.ExecuteOperationAsync(
                             _transport,
                             operation,
@@ -91,19 +108,6 @@ namespace RavenBench.Core
                 }, cancellationToken);
             }
 
-            long scheduledCount = 0;
-            while (stopwatch.Elapsed < endTime && cancellationToken.IsCancellationRequested == false && _workload.IsExhausted == false)
-            {
-                // One producer thread draws every operation from the one run-seeded source; the
-                // concurrency decides how many are drawn before the step ends and which worker runs
-                // each one, never the sequence itself. System.Random is not thread-safe, so only
-                // this thread touches the source.
-                var operation = _workload.NextOperation(_rng);
-                scheduledCount++;
-                await channel.Writer.WriteAsync(operation, cancellationToken);
-            }
-
-            channel.Writer.Complete();
             await Task.WhenAll(workerTasks);
 
             var actualDuration = stopwatch.Elapsed;
