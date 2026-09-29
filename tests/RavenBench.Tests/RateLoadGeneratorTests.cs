@@ -13,38 +13,39 @@ public sealed class RateLoadGeneratorTests
 {
     private static readonly long Ms = TimeSpan.TicksPerMillisecond;
 
-    private static RateLoadGenerator.TokenPacer Pacer(double rate, int burst) => new(rate, burst, TimeSpan.TicksPerSecond);
+    private static RateLoadGenerator.TokenPacer Pacer(double rate) => new(rate, TimeSpan.TicksPerSecond);
 
     [Fact]
     public void PacerReleasesRateTimesElapsedOnAnInjectedClock()
     {
-        var pacer = Pacer(rate: 500, burst: 256);
+        var pacer = Pacer(rate: 500);
         long released = 0;
         for (var ms = 0; ms < 600; ms++)
             released += pacer.Release(ms * Ms).Count;
 
         released.Should().Be(300);
-        pacer.DroppedTokens.Should().Be(0);
     }
 
     [Fact]
-    public void PacerUnderSaturationReleasesTheBurstAndCountsTheRestAsDropped()
+    public void PacerUnderSaturationReleasesEveryOverdueTokenWithItsOwnDueTime()
     {
-        var pacer = Pacer(rate: 1000, burst: 32);
+        var pacer = Pacer(rate: 1000);
         pacer.Release(0).Count.Should().Be(1);
 
-        pacer.Release(100 * Ms).Count.Should().Be(32);
-        pacer.DroppedTokens.Should().Be(68);
+        var (first, count) = pacer.Release(100 * Ms);
+        count.Should().Be(100);
+        pacer.DueTicks(first).Should().Be(1 * Ms);
+        pacer.DueTicks(first + count - 1).Should().Be(100 * Ms);
         pacer.Release(100 * Ms).Count.Should().Be(0, "a clock that does not advance owes nothing");
         pacer.Release(105 * Ms).Count.Should().Be(5);
-        pacer.ReleasedTokens.Should().Be(38);
+        pacer.ReleasedTokens.Should().Be(106);
     }
 
     [Fact]
     public void ProducerWakingAtTheNextDueTimeReleasesEveryTokenOnTime()
     {
         // The producer's wake-up is the pacer's next due time, never a fixed interval, so no token waits for a later wake-up.
-        var pacer = Pacer(rate: 20_000, burst: 256);
+        var pacer = Pacer(rate: 20_000);
         var now = 3 * Ms;
         for (var wake = 0; wake < 10_000; wake++)
         {
@@ -64,7 +65,7 @@ public sealed class RateLoadGeneratorTests
     public void StartupDelayBetweenConstructionAndFirstReleaseDoesNotShiftTheSchedule()
     {
         long clock = 0;
-        var pacer = Pacer(rate: 500, burst: 256);
+        var pacer = Pacer(rate: 500);
         clock += 20 * Ms;
 
         var lateness = new System.Collections.Generic.List<long>();
@@ -82,8 +83,8 @@ public sealed class RateLoadGeneratorTests
     [Fact]
     public void PacerRejectsANonPositiveRate()
     {
-        var zero = () => Pacer(rate: 0, burst: 32);
-        var negative = () => Pacer(rate: -1, burst: 32);
+        var zero = () => Pacer(rate: 0);
+        var negative = () => Pacer(rate: -1);
         zero.Should().Throw<ArgumentOutOfRangeException>();
         negative.Should().Throw<ArgumentOutOfRangeException>();
     }
@@ -109,6 +110,23 @@ public sealed class RateLoadGeneratorTests
 
         metrics.SendLateness.Should().NotBeNull();
         metrics.SendLateness!.Value.P999.Should().BeGreaterOrEqualTo(metrics.SendLateness.Value.P50);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    public async Task SaturatedRunKeepsEveryScheduledArrivalAndIsMarkedClientBound(int pipelineDepth)
+    {
+        var transport = new TestTransport(baseLatencyMs: 50);
+        var generator = new RateLoadGenerator(transport, new ConstantWorkload(), targetRps: 2000, maxConcurrency: 2, new Random(42), pipelineDepth);
+
+        var (latency, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(600), CancellationToken.None);
+
+        // No arrival is dropped: every one due by the stop is scheduled, whether it ran or not.
+        metrics.ScheduledOperations.Should().BeGreaterOrEqualTo((long)(2000 * 0.6));
+        metrics.ScheduledOperations.Should().BeGreaterThan(metrics.OperationsCompleted * 5);
+        var p50Ms = latency.Snapshot().GetPercentile(50) / 1000.0;
+        RavenBench.Core.Metrics.SendLateness.MarkingFor(metrics.SendLateness, p50Ms).Should().StartWith("client-bound");
     }
 
     [Fact]
