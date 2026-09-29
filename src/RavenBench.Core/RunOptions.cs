@@ -163,6 +163,9 @@ public sealed record RunOptions
     public TransportKind Transport { get; init; } = TransportKind.Raw;
     public CompressionMode Compression { get; init; } = CompressionMode.Identity;
     public int? RateWorkers { get; init; } // Max concurrent operations for rate mode (null = auto)
+
+    /// <summary>HTTP/1.1 requests each raw connection carries before it reads their responses; 1 sends one request per connection at a time.</summary>
+    public int PipelineDepth { get; init; } = 1;
     public TimeSpan Warmup { get; init; } = TimeSpan.FromSeconds(20);
     public TimeSpan Duration { get; init; } = TimeSpan.FromSeconds(60);
     public double MaxErrorRate { get; init; } = 0.005; // 0.5%

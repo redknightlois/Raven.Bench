@@ -115,6 +115,11 @@ public interface ITransport : IYcsbTransport
     Task<CalibrationResult> ExecuteCalibrationRequestAsync(string endpoint, CancellationToken ct = default);
 
     /// <summary>
+    /// Names the code path that sends the benchmark requests, so a result says which client cost it measured.
+    /// </summary>
+    string TransportPath { get; }
+
+    /// <summary>
     /// Returns the endpoints this transport wants to calibrate during startup.
     /// </summary>
     IReadOnlyList<(string name, string path)> GetCalibrationEndpoints();

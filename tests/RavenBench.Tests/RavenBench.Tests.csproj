@@ -19,4 +19,7 @@
      <PackageReference Include="FluentAssertions" Version="6.12.0" />
       <PackageReference Include="RavenDB.TestDriver" Version="7.1.*" />
    </ItemGroup>
+  <ItemGroup>
+    <None Include="Transport\Recorded\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

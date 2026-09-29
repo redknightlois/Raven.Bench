@@ -21,6 +21,7 @@ namespace RavenBench.Core
         private readonly IWorkload _workload;
         private readonly double _targetRps;
         private readonly int _maxConcurrency;
+        private readonly int _workers;
         private readonly Random _rng;
 
         public int Concurrency => _maxConcurrency;
@@ -31,12 +32,16 @@ namespace RavenBench.Core
             IWorkload workload,
             double targetRps,
             int maxConcurrency,
-            Random rng)
+            Random rng,
+            int pipelineDepth = 1)
         {
+            ArgumentOutOfRangeException.ThrowIfLessThan(pipelineDepth, 1);
             _transport = transport ?? throw new ArgumentNullException(nameof(transport));
             _workload = workload ?? throw new ArgumentNullException(nameof(workload));
             _targetRps = targetRps;
             _maxConcurrency = maxConcurrency;
+            // Each worker takes one token and is charged from that token's due time; pipelining packs up to pipelineDepth workers onto one connection.
+            _workers = checked(maxConcurrency * pipelineDepth);
             _rng = rng ?? throw new ArgumentNullException(nameof(rng));
         }
 
@@ -69,7 +74,7 @@ namespace RavenBench.Core
             await using var scheduler = new TokenBucketScheduler(
                 targetRps,
                 // Give each worker a few in-flight permits; this keeps pacing predictable while still allowing short spikes.
-                burstCapacity: Math.Max(_maxConcurrency * 4, 32),
+                burstCapacity: Math.Max(_workers * 4, 32),
                 cancellationToken);
 
             var workers = StartWorkers(
@@ -131,8 +136,8 @@ namespace RavenBench.Core
             LoadGeneratorCounters counters,
             CancellationToken cancellationToken)
         {
-            var workers = new Task[_maxConcurrency];
-            for (int i = 0; i < _maxConcurrency; i++)
+            var workers = new Task[_workers];
+            for (int i = 0; i < _workers; i++)
             {
                 // Each worker's source is a successive draw from the run-seeded source, in worker
                 // order; never seed + workerIndex, which lets two runs share a worker stream.

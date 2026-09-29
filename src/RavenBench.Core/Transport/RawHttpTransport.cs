@@ -17,13 +17,31 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
 {
     private const int BufferSize = 32 * 1024;
     private const int PoolCount = 1024;
+    private const string JsonContentType = "application/json; charset=utf-8";
+    private const string OctetStreamContentType = "application/octet-stream";
+
+    /// <summary>The <see cref="TransportPath"/> of a run served by raw HTTP/1.1 socket connections.</summary>
+    public const string SocketPath = "raw-socket";
+
+    /// <summary>The <see cref="TransportPath"/> of a run served by HttpClient.</summary>
+    public const string HttpClientPath = "http-client";
 
     // ZstdSharp's Compressor is not thread-safe; one per worker thread, reused across requests.
     // Default zstd level — add a level knob here if a run ever needs to vary it.
     private static readonly ThreadLocal<Compressor> ZstdCompressor = new(() => new Compressor());
 
+    // Request bodies are built here, then copied out before the building thread awaits.
+    [ThreadStatic] private static ArrayBufferWriter<byte>? t_body;
+    [ThreadStatic] private static Utf8JsonWriter? t_json;
+
     private readonly HttpClient _http;
     private readonly string _baseUrl;
+    private readonly string _origin;
+    private readonly string _pathBase;
+    private readonly string _dbPath;
+    private readonly string _queriesTarget;
+    private readonly string _streamsTarget;
+    private readonly string _bulkDocsTarget;
     private readonly string _db;
     private readonly CompressionMode _compression;
     private readonly string _acceptEncoding;
@@ -31,6 +49,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     private readonly LockFreeRingBuffer<byte[]> _bufferPool;
     private readonly Version _httpVersion;
     private readonly TransportAdminClient _admin;
+    private readonly Http1ConnectionPool? _socketPool;
     public string EffectiveCompressionMode => _acceptEncoding;
     public string EffectiveHttpVersion => HttpHelper.FormatHttpVersion(_httpVersion);
 
@@ -39,12 +58,27 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     /// <summary>The URL with any password replaced by a token, safe to record or print.</summary>
     public string RecordedEndpoint { get; }
 
+    /// <inheritdoc />
+    public string TransportPath => _socketPool != null ? SocketPath : HttpClientPath;
+
+    /// <summary>Socket connections opened so far; zero on the HttpClient path.</summary>
+    internal int OpenedSocketConnections => _socketPool?.OpenedConnections ?? 0;
+
+    /// <summary>Requests one connection carries before it reads their responses; 1 sends the next request only after the previous response.</summary>
+    public int PipelineDepth { get; }
+
     // Wire-accurate only without transparent decompression; gzip/brotli/deflate are measured post-inflate.
     public bool ReportsWireBytes => _compression is CompressionMode.Identity or CompressionMode.Zstd;
 
 
-    public RawHttpTransport(string url, string database, CompressionMode compression, Version httpVersion, string? endpoint = null)
+    /// <param name="pipelineDepth">
+    /// Requests per connection in flight at once. Above 1 it needs the socket path, which serves plain
+    /// http with identity compression over HTTP/1.1; any other mode throws <see cref="ArgumentException"/>.
+    /// </param>
+    public RawHttpTransport(string url, string database, CompressionMode compression, Version httpVersion, string? endpoint = null, int pipelineDepth = 1)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(pipelineDepth, 1);
+
         _db = database;
         _baseUrl = url.TrimEnd('/');
         _compression = compression;
@@ -52,6 +86,29 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         _customEndpoint = string.IsNullOrWhiteSpace(endpoint) ? null : endpoint;
         _httpVersion = httpVersion;
         RecordedEndpoint = ConnectionStringRedaction.Redact(_baseUrl);
+        PipelineDepth = pipelineDepth;
+
+        var uri = new Uri(_baseUrl, UriKind.Absolute);
+        _origin = uri.GetLeftPart(UriPartial.Authority);
+        _pathBase = uri.AbsolutePath.TrimEnd('/');
+        _dbPath = $"{_pathBase}/databases/{Uri.EscapeDataString(database)}";
+        _queriesTarget = $"{_dbPath}/queries";
+        _streamsTarget = $"{_dbPath}/streams/queries";
+        _bulkDocsTarget = $"{_dbPath}/bulk_docs";
+
+        // The socket path speaks only plain-text HTTP/1.1 with identity bodies; every other mode stays on HttpClient.
+        if (uri.Scheme == Uri.UriSchemeHttp && compression == CompressionMode.Identity && httpVersion == HttpVersion.Version11)
+        {
+            var authority = uri.IsDefaultPort ? uri.IdnHost : $"{uri.IdnHost}:{uri.Port}";
+            var fixedHeaders = Encoding.ASCII.GetBytes($"Host: {authority}\r\nAccept-Encoding: {_acceptEncoding}\r\n");
+            _socketPool = new Http1ConnectionPool(uri.DnsSafeHost, uri.Port, fixedHeaders, pipelineDepth);
+        }
+        else if (pipelineDepth > 1)
+        {
+            throw new ArgumentException(
+                $"Pipeline depth {pipelineDepth} needs HTTP/1.1 over plain http with identity compression; this run uses {uri.Scheme}, HTTP/{EffectiveHttpVersion} and {_acceptEncoding}.",
+                nameof(pipelineDepth));
+        }
 
         // Zstd is decoded manually; DecompressionMethods has no zstd support.
         var decompression = _compression switch
@@ -86,11 +143,6 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
 
     // UTF-8 JSON request body, zstd-encoded when the run uses zstd (Content-Encoding: zstd).
     // Content-Length is the compressed size, so wire-byte accounting reports it as-is.
-    private HttpContent CreateJsonContent(string json)
-        => _compression == CompressionMode.Zstd
-            ? ZstdJsonContent(Encoding.UTF8.GetBytes(json))
-            : new StringContent(json, Encoding.UTF8, "application/json");
-
     private HttpContent CreateJsonContent(ReadOnlyMemory<byte> utf8Json)
     {
         if (_compression == CompressionMode.Zstd)
@@ -108,69 +160,215 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         return content;
     }
 
-    // Parses a JSON response, decoding zstd first. HttpClient does not auto-decode zstd, so any
-    // response path that parses the body must route through here. wireMs holds the raw wire bytes
-    // (already counted for bytesIn); identity passes straight through.
-    private static async Task<JsonDocument> ParseJsonResponseAsync(MemoryStream wireMs, HttpResponseMessage resp, CancellationToken ct)
-    {
-        if (NeedsZstdDecode(resp) == false)
-            return await JsonDocument.ParseAsync(wireMs, cancellationToken: ct).ConfigureAwait(false);
+    public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) =>
+        _socketPool != null ? ExecuteOnSocketAsync(op, ct) : ExecuteOnHttpClientAsync(op, ct);
 
-        await using var zstdStream = new DecompressionStream(wireMs);
-        return await JsonDocument.ParseAsync(zstdStream, cancellationToken: ct).ConfigureAwait(false);
+    /// <summary>
+    /// Describes <paramref name="op"/> as the request both paths send. The body lives in this thread's
+    /// scratch buffer, so the caller must copy it before its next await.
+    /// </summary>
+    internal RawRequest Describe(OperationBase op)
+    {
+        switch (op)
+        {
+            case ReadOperation readOp:
+                return new RawRequest(HttpMethod.Get, DocumentTarget(readOp.Id), default, null, ReadsEnvelope: false, TimeoutCoversBody: false, IndexName: null);
+            case InsertOperation<string> insertOp:
+                return new RawRequest(HttpMethod.Put, DocumentTarget(insertOp.Id), Utf8(insertOp.Payload), JsonContentType, ReadsEnvelope: false, TimeoutCoversBody: false, IndexName: null);
+            case UpdateFieldOperation updateOp:
+            {
+                // The script is fixed: the field name and the value travel as patch arguments, so the server sees one script for every update.
+                var json = StartJson(out var body);
+                StartPatch(json, "this[args.field] = args.value;");
+                json.WriteString("field", updateOp.FieldName);
+                json.WriteString("value", updateOp.Value);
+                return PatchRequest(updateOp.Id, json, body);
+            }
+            case DocumentPatchOperation patchOp:
+            {
+                var json = StartJson(out var body);
+                StartPatch(json, patchOp.Script);
+                return PatchRequest(patchOp.Id, json, body);
+            }
+            case StreamQueryOperation streamOp:
+            {
+                // Result counts and query stats are not parsed from the streamed body.
+                var json = StartJson(out var body);
+                WriteQuery(json, streamOp);
+                json.WriteEndObject();
+                json.Flush();
+                return new RawRequest(HttpMethod.Post, _streamsTarget, body.WrittenMemory, JsonContentType, ReadsEnvelope: false, TimeoutCoversBody: true, streamOp.ExpectedIndex);
+            }
+            case QueryOperation queryOp:
+            {
+                var json = StartJson(out var body);
+                WriteQuery(json, queryOp);
+                json.WriteBoolean("MetadataOnly", false);
+                json.WriteEndObject();
+                json.Flush();
+                return new RawRequest(HttpMethod.Post, _queriesTarget, body.WrittenMemory, JsonContentType, ReadsEnvelope: true, TimeoutCoversBody: false, IndexName: null);
+            }
+            case AttachmentOperation attachmentOp:
+            {
+                var method = attachmentOp.Kind switch
+                {
+                    AttachmentOperationKind.Put => HttpMethod.Put,
+                    AttachmentOperationKind.Get => HttpMethod.Get,
+                    AttachmentOperationKind.Delete => HttpMethod.Delete,
+                    _ => throw new ArgumentOutOfRangeException(nameof(op), attachmentOp.Kind, null)
+                };
+                var target = $"{_dbPath}/attachments?id={Uri.EscapeDataString(attachmentOp.DocumentId)}&name={Uri.EscapeDataString(attachmentOp.Name)}";
+                return attachmentOp.Kind == AttachmentOperationKind.Put
+                    ? new RawRequest(method, target, attachmentOp.Payload!, OctetStreamContentType, ReadsEnvelope: false, TimeoutCoversBody: true, IndexName: null)
+                    : new RawRequest(method, target, default, null, ReadsEnvelope: false, TimeoutCoversBody: true, IndexName: null);
+            }
+            case BulkInsertOperation<string> bulkOp:
+            {
+                var json = StartJson(out var body);
+                json.WriteStartObject();
+                json.WritePropertyName("Commands");
+                json.WriteStartArray();
+                foreach (var doc in bulkOp.Documents)
+                {
+                    json.WriteStartObject();
+                    json.WriteString("Id", doc.Id);
+                    json.WriteString("Type", "PUT");
+                    json.WritePropertyName("Document");
+                    json.WriteRawValue(doc.Document);
+                    json.WriteEndObject();
+                }
+                json.WriteEndArray();
+                json.WriteEndObject();
+                json.Flush();
+                return new RawRequest(HttpMethod.Post, _bulkDocsTarget, body.WrittenMemory, JsonContentType, ReadsEnvelope: false, TimeoutCoversBody: false, IndexName: null);
+            }
+            case VectorSearchOperation vectorOp:
+            {
+                var json = StartJson(out var body);
+                json.WriteStartObject();
+                json.WriteString("Query", vectorOp.ToRqlQuery());
+                json.WritePropertyName("QueryParameters");
+                json.WriteStartObject();
+                json.WritePropertyName("vector");
+                json.WriteStartArray();
+                foreach (var value in vectorOp.QueryVector)
+                    json.WriteNumberValue(value);
+                json.WriteEndArray();
+                if (vectorOp.EfSearch.HasValue)
+                    json.WriteNumber("efSearch", vectorOp.EfSearch.Value);
+                if (vectorOp.MinimumSimilarity > 0)
+                    json.WriteNumber("minSimilarity", vectorOp.MinimumSimilarity);
+                json.WriteEndObject();
+                json.WriteBoolean("MetadataOnly", false);
+                json.WriteNumber("PageSize", vectorOp.TopK);
+                json.WriteEndObject();
+                json.Flush();
+                return new RawRequest(HttpMethod.Post, _queriesTarget, body.WrittenMemory, JsonContentType, ReadsEnvelope: true, TimeoutCoversBody: false, IndexName: null);
+            }
+            default:
+                throw new NotSupportedException($"{nameof(RawHttpTransport)} cannot execute operation type {op.GetType().Name}.");
+        }
     }
 
-    private readonly record struct QueryEnvelope(string? IndexName, int? ResultCount, bool? IsStale);
-
-    // Metadata fields of a /queries response; each is absent for a query that does not report it.
-    private static QueryEnvelope ParseQueryEnvelope(JsonDocument doc)
+    private static Utf8JsonWriter StartJson(out ArrayBufferWriter<byte> body)
     {
-        var indexName = doc.RootElement.TryGetProperty("IndexName", out var indexProp)
-            ? indexProp.GetString()
-            : null;
-
-        var resultCount = doc.RootElement.TryGetProperty("Results", out var resultsProp) && resultsProp.ValueKind == JsonValueKind.Array
-            ? resultsProp.GetArrayLength()
-            : (int?)null;
-
-        var isStale = doc.RootElement.TryGetProperty("IsStale", out var staleProp)
-            ? staleProp.GetBoolean()
-            : (bool?)null;
-
-        return new QueryEnvelope(indexName, resultCount, isStale);
+        body = t_body ??= new ArrayBufferWriter<byte>(BufferSize);
+        body.ResetWrittenCount();
+        var json = t_json ??= new Utf8JsonWriter(body);
+        json.Reset(body);
+        return json;
     }
 
-    public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
+    private static ReadOnlyMemory<byte> Utf8(string text)
     {
+        var body = t_body ??= new ArrayBufferWriter<byte>(BufferSize);
+        body.ResetWrittenCount();
+        body.Advance(Encoding.UTF8.GetBytes(text, body.GetSpan(Encoding.UTF8.GetMaxByteCount(text.Length))));
+        return body.WrittenMemory;
+    }
+
+    private static void WriteQuery(Utf8JsonWriter json, QueryOperation queryOp)
+    {
+        json.WriteStartObject();
+        json.WriteString("Query", queryOp.QueryText);
+        json.WritePropertyName("QueryParameters");
+        json.WriteStartObject();
+        foreach (var (name, value) in queryOp.Parameters)
+        {
+            json.WritePropertyName(name);
+            // Strings are the common case; every other value takes the serializer's own converter, so the bytes match a serializer-written body.
+            if (value is string text)
+                json.WriteStringValue(text);
+            else
+                JsonSerializer.Serialize(json, value);
+        }
+        json.WriteEndObject();
+    }
+
+    // Opens {"Patch":{"Script":...,"Values":{ and leaves the Values object open for the arguments.
+    private static void StartPatch(Utf8JsonWriter json, string script)
+    {
+        json.WriteStartObject();
+        json.WritePropertyName("Patch");
+        json.WriteStartObject();
+        json.WriteString("Script", script);
+        json.WritePropertyName("Values");
+        json.WriteStartObject();
+    }
+
+    private RawRequest PatchRequest(string id, Utf8JsonWriter json, ArrayBufferWriter<byte> body)
+    {
+        json.WriteEndObject();
+        json.WriteEndObject();
+        json.WriteEndObject();
+        json.Flush();
+        return new RawRequest(HttpMethod.Patch, $"{_dbPath}/docs?id={Uri.EscapeDataString(id)}", body.WrittenMemory, JsonContentType, ReadsEnvelope: false, TimeoutCoversBody: true, IndexName: null);
+    }
+
+    private async Task<TransportResult> ExecuteOnSocketAsync(OperationBase op, CancellationToken ct)
+    {
+        var connection = _socketPool!.Rent();
         try
         {
-            switch (op)
+            if (connection.Ready.IsCompletedSuccessfully == false)
             {
-                case ReadOperation readOp:
-                    return await GetAsync(readOp.Id, ct).ConfigureAwait(false);
-                case InsertOperation<string> insertOp:
-                    return await PutAsyncInternal(insertOp.Id, insertOp.Payload, ct).ConfigureAwait(false);
-                case UpdateFieldOperation updateFieldOp:
-                    return await UpdateFieldAsync(updateFieldOp, ct).ConfigureAwait(false);
-                case StreamQueryOperation streamOp:
-                    return await PostStreamQueryAsync(streamOp, ct).ConfigureAwait(false);
-                case QueryOperation queryOp:
-                    return await PostQueryAsync(queryOp, ct).ConfigureAwait(false);
-                case DocumentPatchOperation patchOp:
-                    return await PatchDocumentAsync(patchOp, ct).ConfigureAwait(false);
-                case AttachmentOperation attachmentOp:
-                    return await ExecuteAttachmentAsync(attachmentOp, ct).ConfigureAwait(false);
-                case BulkInsertOperation<string> bulkOp:
-                    return await PostBulkDocsAsync(bulkOp.Documents, ct).ConfigureAwait(false);
-                case VectorSearchOperation vectorOp:
-                    return await PostVectorSearchAsync(vectorOp, ct).ConfigureAwait(false);
-                default:
-                    throw new NotSupportedException($"{nameof(RawHttpTransport)} cannot execute operation type {op.GetType().Name}.");
+                // A request that cannot be built fails as itself, not as whatever the connect reports; the body is rebuilt after the await.
+                Describe(op);
+                await connection.Ready.ConfigureAwait(false);
             }
+            var request = Describe(op);
+            var exchange = connection.Send(request);
+
+            Http1Response response;
+            if (ct.CanBeCanceled)
+            {
+                using var registration = ct.UnsafeRegister(static state => ((Http1Exchange)state!).Complete(Http1Response.CancelledResponse), exchange);
+                response = await exchange.Response.ConfigureAwait(false);
+            }
+            else
+            {
+                response = await exchange.Response.ConfigureAwait(false);
+            }
+
+            if (response.Cancelled)
+                return TransportResult.CancelledResult;
+            if (response.Failure != null)
+                return new TransportResult(0, 0, response.Failure);
+            if (response.Status is < 200 or > 299)
+                return new TransportResult(0, 0, $"HTTP {response.Status} {(HttpStatusCode)response.Status}: {response.ErrorBody}");
+
+            var envelope = response.Envelope;
+            return new TransportResult(exchange.BytesOut, response.BytesIn,
+                indexName: envelope.IndexName ?? request.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
         }
         catch (Exception ex)
         {
+            // A connect failure or a request that cannot be built is a failed result, never an escape onto the hot path.
             return TransportResult.FromException(ex, ct);
+        }
+        finally
+        {
+            _socketPool.Return(connection);
         }
     }
 
@@ -259,7 +457,10 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     public async Task PutAsync<T>(string id, T document)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await PutAsyncInternal(id, document, cts.Token).ConfigureAwait(false);
+        var json = document is string s ? s : JsonSerializer.Serialize(document);
+        var result = await ExecuteAsync(new InsertOperation<string> { Id = id, Payload = json }, cts.Token).ConfigureAwait(false);
+        if (result.IsSuccess == false)
+            throw new InvalidOperationException($"Writing document '{id}' failed: {result.ErrorDetails ?? "cancelled"}");
     }
 
     private HttpRequestMessage NewRequest(HttpMethod method, string url)
@@ -273,11 +474,49 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
 
     // Guards a whole operation, request construction included, so a serialization throw is reported
     // as a failed result instead of escaping onto the hot path.
-    private async Task<TransportResult> SendAsync(CancellationToken ct, Func<Task<TransportResult>> body)
+    private async Task<TransportResult> ExecuteOnHttpClientAsync(OperationBase op, CancellationToken ct)
     {
         try
         {
-            return await body().ConfigureAwait(false);
+            var request = Describe(op);
+            var body = request.Body.ToArray();
+            using var req = NewRequest(request.Method, _origin + request.Target);
+            if (request.ContentType == JsonContentType)
+                req.Content = CreateJsonContent(body);
+            else if (request.ContentType != null)
+            {
+                req.Content = new ReadOnlyMemoryContent(body);
+                req.Content.Headers.ContentType = new MediaTypeHeaderValue(request.ContentType);
+            }
+
+            var readDeadline = request.TimeoutCoversBody ? ResponseReadDeadline.Capped : ResponseReadDeadline.Uncapped;
+            return await SendCoreAsync(req, ct, readDeadline, async (resp, readCt) =>
+            {
+                long bytesOut = CalculateHeaderSize(req) + (req.Content?.Headers.ContentLength ?? body.Length);
+                if (request.ReadsEnvelope == false)
+                {
+                    long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
+                    // If gzip auto-decompressed, Content-Length is the wire size; drained is post-inflate.
+                    long bytesIn = resp.Content.Headers.ContentLength ?? drained;
+                    return new TransportResult(bytesOut, bytesIn, indexName: request.IndexName);
+                }
+
+                // Buffered bytes are post-AutomaticDecompression for gzip/deflate/brotli; raw for zstd/identity.
+                using var wireMs = await BufferResponseAsync(resp, readCt).ConfigureAwait(false);
+                var wire = wireMs.GetBuffer().AsSpan(0, (int)wireMs.Length);
+                // HttpClient does not decode zstd, so the body is decoded here before it is read.
+                QueryEnvelope envelope;
+                if (NeedsZstdDecode(resp))
+                {
+                    using var decompressor = new Decompressor();
+                    envelope = QueryEnvelope.Read(decompressor.Unwrap(wire));
+                }
+                else
+                {
+                    envelope = QueryEnvelope.Read(wire);
+                }
+                return new TransportResult(bytesOut, wireMs.Length, indexName: envelope.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
+            }).ConfigureAwait(false);
         }
         catch (TaskCanceledException)
         {
@@ -316,194 +555,6 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         var readToken = readDeadline == ResponseReadDeadline.Capped ? cts.Token : ct;
         return await handleResponse(resp, readToken).ConfigureAwait(false);
     }
-
-    private Task<TransportResult> PostQueryAsync(QueryOperation queryOp, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = $"{_baseUrl}/databases/{_db}/queries";
-        using var req = NewRequest(HttpMethod.Post, url);
-
-        var payload = new
-        {
-            Query = queryOp.QueryText,
-            QueryParameters = queryOp.Parameters,
-            MetadataOnly = false
-        };
-
-        var queryPayload = JsonSerializer.Serialize(payload);
-        req.Content = CreateJsonContent(queryPayload);
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
-        {
-            using var wireMs = await BufferResponseAsync(resp, readCt).ConfigureAwait(false);
-            long bytesIn = wireMs.Length;
-
-            using var doc = await ParseJsonResponseAsync(wireMs, resp, readCt).ConfigureAwait(false);
-            var envelope = ParseQueryEnvelope(doc);
-
-            long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
-            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
-
-            return new TransportResult(bytesOut, bytesIn, indexName: envelope.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
-        }).ConfigureAwait(false);
-    });
-
-    /// <summary>
-    /// Executes a query through the streams endpoint and drains the full result stream.
-    /// Result counts and query stats are not parsed from the streamed body.
-    /// </summary>
-    private Task<TransportResult> PostStreamQueryAsync(StreamQueryOperation streamOp, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = $"{_baseUrl}/databases/{_db}/streams/queries";
-        using var req = NewRequest(HttpMethod.Post, url);
-
-        var payload = new
-        {
-            Query = streamOp.QueryText,
-            QueryParameters = streamOp.Parameters
-        };
-
-        var queryPayload = JsonSerializer.Serialize(payload);
-        req.Content = CreateJsonContent(queryPayload);
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Capped, async (resp, readCt) =>
-        {
-            long bytesIn = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
-
-            long bodyBytes = req.Content?.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(queryPayload);
-            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
-
-            return new TransportResult(bytesOut, bytesIn, indexName: streamOp.ExpectedIndex);
-        }).ConfigureAwait(false);
-    });
-
-    private Task<TransportResult> PatchDocumentAsync(DocumentPatchOperation patchOp, CancellationToken ct) =>
-        SendPatchAsync(patchOp.Id, new { Script = patchOp.Script, Values = new { } }, ct);
-
-    /// <summary>
-    /// Maps the field update to a patch whose script is fixed: the field name and the value travel
-    /// as patch arguments, so the server sees one script for every update and the operation itself
-    /// carries no RavenDB syntax.
-    /// </summary>
-    private Task<TransportResult> UpdateFieldAsync(UpdateFieldOperation updateOp, CancellationToken ct) =>
-        SendPatchAsync(
-            updateOp.Id,
-            new { Script = "this[args.field] = args.value;", Values = new { field = updateOp.FieldName, value = updateOp.Value } },
-            ct);
-
-    private Task<TransportResult> SendPatchAsync(string id, object patch, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(id)}";
-        using var req = NewRequest(HttpMethod.Patch, url);
-
-        var jsonPayload = JsonSerializer.Serialize(new { Patch = patch });
-        req.Content = CreateJsonContent(jsonPayload);
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Capped, async (resp, readCt) =>
-        {
-            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
-            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-            long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload));
-            return new TransportResult(bytesOut, bytesIn);
-        }).ConfigureAwait(false);
-    });
-
-    private Task<TransportResult> ExecuteAttachmentAsync(AttachmentOperation op, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = $"{_baseUrl}/databases/{_db}/attachments?id={Uri.EscapeDataString(op.DocumentId)}&name={Uri.EscapeDataString(op.Name)}";
-
-        var method = op.Kind switch
-        {
-            AttachmentOperationKind.Put => HttpMethod.Put,
-            AttachmentOperationKind.Get => HttpMethod.Get,
-            AttachmentOperationKind.Delete => HttpMethod.Delete,
-            _ => throw new ArgumentOutOfRangeException(nameof(op.Kind), op.Kind, null)
-        };
-
-        using var req = NewRequest(method, url);
-
-        long bodyBytes = 0;
-        if (op.Kind == AttachmentOperationKind.Put)
-        {
-            req.Content = new ReadOnlyMemoryContent(op.Payload!);
-            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-            bodyBytes = op.Payload!.Length;
-        }
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Capped, async (resp, readCt) =>
-        {
-            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
-            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
-            return new TransportResult(bytesOut, bytesIn);
-        }).ConfigureAwait(false);
-    });
-
-    private Task<TransportResult> PostBulkDocsAsync(List<DocumentToWrite<string>> documents, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = $"{_baseUrl}/databases/{_db}/bulk_docs";
-        using var req = NewRequest(HttpMethod.Post, url);
-
-        var bufferWriter = new ArrayBufferWriter<byte>(BufferSize);
-        using (var writer = new Utf8JsonWriter(bufferWriter))
-        {
-            writer.WriteStartObject();
-            writer.WritePropertyName("Commands");
-            writer.WriteStartArray();
-            foreach (var doc in documents)
-            {
-                writer.WriteStartObject();
-                writer.WriteString("Id", doc.Id);
-                writer.WriteString("Type", "PUT");
-                writer.WritePropertyName("Document");
-                writer.WriteRawValue(doc.Document);
-                writer.WriteEndObject();
-            }
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        }
-        int jsonByteCount = bufferWriter.WrittenCount;
-        req.Content = CreateJsonContent(bufferWriter.WrittenMemory);
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
-        {
-            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
-            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-            long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? jsonByteCount);
-            return new TransportResult(bytesOut, bytesIn);
-        }).ConfigureAwait(false);
-    });
-
-    private Task<TransportResult> GetAsync(string id, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = BuildUrl(id);
-        using var req = NewRequest(HttpMethod.Get, url);
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
-        {
-            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
-            // If gzip auto-decompressed, Content-Length is the wire size; drained is post-inflate.
-            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-            long bytesOut = CalculateHeaderSize(req);
-            return new TransportResult(bytesOut, bytesIn);
-        }).ConfigureAwait(false);
-    });
-
-    private Task<TransportResult> PutAsyncInternal<T>(string id, T document, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = BuildUrl(id);
-        using var req = NewRequest(HttpMethod.Put, url);
-
-        string jsonPayload = document is string s ? s : JsonSerializer.Serialize(document);
-        req.Content = CreateJsonContent(jsonPayload);
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
-        {
-            long drained = await DrainResponseAsync(resp, readCt).ConfigureAwait(false);
-            long bytesIn = resp.Content.Headers.ContentLength ?? drained;
-            long bytesOut = CalculateHeaderSize(req) + (req.Content.Headers.ContentLength ?? Encoding.UTF8.GetByteCount(jsonPayload));
-            return new TransportResult(bytesOut, bytesIn);
-        }).ConfigureAwait(false);
-    });
 
     public async Task<int?> GetServerMaxCoresAsync()
     {
@@ -607,7 +658,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     /// <inheritdoc />
     public async Task<IReadOnlyDictionary<string, string>?> ReadStoredFieldsAsync(string id, CancellationToken ct)
     {
-        using var response = await _http.GetAsync(BuildUrl(id), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        using var response = await _http.GetAsync(_origin + DocumentTarget(id), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
@@ -631,20 +682,17 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     /// <inheritdoc />
     public async Task DeleteStoredDocumentAsync(string id, CancellationToken ct)
     {
-        using var response = await _http.DeleteAsync(BuildUrl(id), ct).ConfigureAwait(false);
+        using var response = await _http.DeleteAsync(_origin + DocumentTarget(id), ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
     }
-
-    private string BuildUrl(string id)
+    private string DocumentTarget(string id)
     {
         if (_customEndpoint is { } e)
         {
             var path = e.Replace("{id}", Uri.EscapeDataString(id));
-            if (path.StartsWith("/"))
-                return _baseUrl + path;
-            return _baseUrl + "/" + path;
+            return path.StartsWith('/') ? _pathBase + path : _pathBase + "/" + path;
         }
-        return $"{_baseUrl}/databases/{_db}/docs?id={Uri.EscapeDataString(id)}";
+        return $"{_dbPath}/docs?id={Uri.EscapeDataString(id)}";
     }
 
     /// <summary>
@@ -653,56 +701,6 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     /// </summary>
     private Raven.Client.Documents.DocumentStore CreateAdminStore(string databaseName) =>
         HttpHelper.Create(_baseUrl, databaseName, _httpVersion);
-
-    private Task<TransportResult> PostVectorSearchAsync(VectorSearchOperation vectorOp, CancellationToken ct) => SendAsync(ct, async () =>
-    {
-        var url = $"{_baseUrl}/databases/{_db}/queries";
-        using var req = NewRequest(HttpMethod.Post, url);
-
-        string queryText = vectorOp.ToRqlQuery();
-
-        // Pre-sized for the cohere-768 worst case (~10KB); 16KB avoids a Grow.
-        var bufferWriter = new ArrayBufferWriter<byte>(16384);
-        using (var writer = new Utf8JsonWriter(bufferWriter))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("Query", queryText);
-            writer.WritePropertyName("QueryParameters");
-            writer.WriteStartObject();
-            writer.WritePropertyName("vector");
-            writer.WriteStartArray();
-            var vec = vectorOp.QueryVector;
-            for (int i = 0; i < vec.Length; i++)
-                writer.WriteNumberValue(vec[i]);
-            writer.WriteEndArray();
-            if (vectorOp.EfSearch.HasValue)
-                writer.WriteNumber("efSearch", vectorOp.EfSearch.Value);
-            if (vectorOp.MinimumSimilarity > 0)
-                writer.WriteNumber("minSimilarity", vectorOp.MinimumSimilarity);
-            writer.WriteEndObject();
-            writer.WriteBoolean("MetadataOnly", false);
-            writer.WriteNumber("PageSize", vectorOp.TopK);
-            writer.WriteEndObject();
-        }
-        var jsonBytes = bufferWriter.WrittenMemory;
-        var jsonByteCount = jsonBytes.Length;
-        req.Content = CreateJsonContent(jsonBytes);
-
-        return await SendCoreAsync(req, ct, ResponseReadDeadline.Uncapped, async (resp, readCt) =>
-        {
-            // Buffered bytes are post-AutomaticDecompression for gzip/deflate/brotli; raw for zstd/identity.
-            using var wireMs = await BufferResponseAsync(resp, readCt).ConfigureAwait(false);
-            long bytesIn = wireMs.Length;
-
-            using var doc = await ParseJsonResponseAsync(wireMs, resp, readCt).ConfigureAwait(false);
-            var envelope = ParseQueryEnvelope(doc);
-
-            long bodyBytes = req.Content?.Headers.ContentLength ?? jsonByteCount;
-            long bytesOut = CalculateHeaderSize(req) + bodyBytes;
-
-            return new TransportResult(bytesOut, bytesIn, indexName: envelope.IndexName, resultCount: envelope.ResultCount, isStale: envelope.IsStale);
-        }).ConfigureAwait(false);
-    });
 
     public async Task EnsureDatabaseExistsAsync(string databaseName)
     {
@@ -728,9 +726,9 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
 
         return await TransportAdminClient.GetStorageSizeBytesAsync(adminStore).ConfigureAwait(false);
     }
-
     public void Dispose()
     {
+        _socketPool?.Dispose();
         _http.Dispose();
     }
 }

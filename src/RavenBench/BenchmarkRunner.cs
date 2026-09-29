@@ -316,6 +316,7 @@ public class BenchmarkRunner(RunOptions opts)
             MaxNetworkUtilization = maxNetUtil,
             ClientCompression = clientCompression,
             EffectiveHttpVersion = httpVersion,
+            TransportPath = transport.TransportPath,
             StartupCalibration = startupCalibration,
             ServerMetricsHistory = serverMetricsHistory.Count > 0 ? serverMetricsHistory : null,
             HistogramArtifacts = histogramArtifacts.Count > 0 ? histogramArtifacts : null,
@@ -368,9 +369,9 @@ public class BenchmarkRunner(RunOptions opts)
 
             ILoadGenerator loadGenerator = opts.Shape switch
             {
-                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, rng),
-                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, rng),
-                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, rng)
+                LoadShape.Rate => new RateLoadGenerator(transport, workload, (int)currentValue, rateWorkerCount, rng, opts.PipelineDepth),
+                LoadShape.Closed => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, rng, opts.PipelineDepth),
+                _ => new ClosedLoopLoadGenerator(transport, workload, (int)currentValue, rng, opts.PipelineDepth)
             };
 
             LogStepStart(opts.Shape, steps.Count + 1, (int)currentValue, rateWorkerCount, opts);
@@ -568,8 +569,9 @@ public class BenchmarkRunner(RunOptions opts)
         switch (opts.Transport)
         {
             case TransportKind.Raw:
-                Console.WriteLine($"[Raven.Bench] Transport: Raw HTTP with {opts.Compression} compression");
-                return new RawHttpTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint);
+                var raw = new RawHttpTransport(opts.Url, database, opts.Compression, negotiatedHttpVersion, opts.RawEndpoint, opts.PipelineDepth);
+                Console.WriteLine($"[Raven.Bench] Transport: Raw HTTP with {opts.Compression} compression, path {raw.TransportPath}, pipeline depth {raw.PipelineDepth}");
+                return raw;
             case TransportKind.Client:
             case TransportKind.ClientEntity:
                 var mapEntities = opts.Transport == TransportKind.ClientEntity;
