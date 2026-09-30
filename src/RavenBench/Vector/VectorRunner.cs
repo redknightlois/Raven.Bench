@@ -97,13 +97,15 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
     /// <summary>Builds the target for the set's metric. A metric the product cannot serve is refused here, before any load.</summary>
     /// <param name="concurrency">The most requests the run holds in flight; a pgvector pool opens one connection per request.</param>
-    public static IVectorTarget BuildTarget(string target, string url, string database, VectorMetric metric, int dimensions, int concurrency)
+    public static IVectorTarget BuildTarget(string target, string url, string database, VectorMetric metric, int dimensions, int concurrency, VectorScenario scenario)
     {
         if (string.Equals(target, RavendbTarget, StringComparison.OrdinalIgnoreCase) || string.Equals(target, Ravendb7Target, StringComparison.OrdinalIgnoreCase))
             return new RavenDbVectorTarget(url, database, metric);
         if (string.Equals(target, PgVectorTransport.Target, StringComparison.OrdinalIgnoreCase))
             return new PgVectorTarget(new PgVectorTransport(url, database, concurrency, metric, dimensions));
-        throw new VectorScenarioException($"Target '{target}' is not a vector target; valid targets are '{RavendbTarget}', '{Ravendb7Target}' and '{PgVectorTransport.Target}'.");
+        if (string.Equals(target, ElasticsearchVectorTransport.Target, StringComparison.OrdinalIgnoreCase))
+            return new ElasticsearchVectorTarget(new ElasticsearchVectorTransport(url, database, metric, dimensions, scenario.ElasticsearchIndexKind));
+        throw new VectorScenarioException($"Target '{target}' is not a vector target; valid targets are '{RavendbTarget}', '{Ravendb7Target}', '{PgVectorTransport.Target}' and '{ElasticsearchVectorTransport.Target}'.");
     }
 
     public async Task<List<VectorRunResult>> RunAsync(CancellationToken ct = default)
@@ -121,7 +123,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             scenario.RequireInsertSliceBelow(cap, warmup, duration);
             set = new CappedVectorDataset(set, cap);
         }
-        using var target = BuildTarget(targetName, url, database, set.Metric, set.Dimensions, scenario.Readers);
+        using var target = BuildTarget(targetName, url, database, set.Metric, set.Dimensions, scenario.Readers, scenario);
         var efforts = scenario.EffortsFor(target.EffortFamily);
         if (efforts.Knob != target.Effort(efforts.Default).Knob)
             throw new VectorScenarioException($"Scenario key 'Efforts.{target.EffortFamily}.Knob' is '{efforts.Knob}'; the product's knob is '{target.Effort(efforts.Default).Knob}'.");
@@ -240,7 +242,8 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
                 ImageDigest = common.Container?.ImageDigest,
                 Durability = common.Durability,
                 ProductSettings = common.Settings,
-                VectorStorage = "float32, unquantized",
+                VectorStorage = target.VectorStorage,
+                RowLabel = $"{common.Target} {target.VectorStorage}",
                 Dataset = common.Dataset,
                 ServerColumns = ServerColumnAvailability.FromSteps(common.Product, steps),
                 EffortInForce = run is "readers" or "filtered" or "under-insert" ? inForce : null,
@@ -487,7 +490,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
     }
 
     private static bool IsContainerized(string target) =>
-        string.Equals(target, Ravendb7Target, StringComparison.OrdinalIgnoreCase) || string.Equals(target, PgVectorTransport.Target, StringComparison.OrdinalIgnoreCase);
+        new[] { Ravendb7Target, PgVectorTransport.Target, ElasticsearchVectorTransport.Target }.Contains(target, StringComparer.OrdinalIgnoreCase);
 
     private static string StripPrefix(string id, string prefix) =>
         id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)

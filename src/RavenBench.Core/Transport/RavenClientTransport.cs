@@ -309,7 +309,7 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
                         }
 
                         if (vectorOp.Effort != null)
-                            query = query.AddParameter(vectorOp.RavenDbEffortParameter(), vectorOp.Effort.Value);
+                            query = query.AddParameter(vectorOp.RavenDbEffortParameter(), vectorOp.Effort.WholeValue);
 
                         if (vectorOp.Filter != null)
                             query = query.AddParameter("filterValue", vectorOp.Filter.Value);

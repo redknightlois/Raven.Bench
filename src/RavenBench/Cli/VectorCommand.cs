@@ -20,15 +20,15 @@ public sealed class VectorSettings : CommandSettings
     public string? Scenario { get; init; }
 
     [CommandOption("--target")]
-    [Description("ravendb, ravendb-7 or pgvector.")]
+    [Description("ravendb, ravendb-7, pgvector or elasticsearch.")]
     public string? Target { get; init; }
 
     [CommandOption("--url")]
-    [Description("The target endpoint: a RavenDB URL or a PostgreSQL connection string.")]
+    [Description("The target endpoint: a RavenDB or Elasticsearch URL, or a PostgreSQL connection string.")]
     public string? Url { get; init; }
 
     [CommandOption("--database")]
-    [Description("A fresh database the run loads into.")]
+    [Description("A fresh database the run loads into; for Elasticsearch, the index name.")]
     public string? Database { get; init; }
 
     [CommandOption("--output-prefix")]
@@ -85,6 +85,9 @@ public sealed class VectorSettings : CommandSettings
     [CommandOption("--duration")]
     [Description("Overrides the scenario key Duration.")]
     public string? Duration { get; init; }
+    [CommandOption("--elasticsearch-index-kind")]
+    [Description("Overrides the scenario key ElasticsearchIndexKind.")]
+    public string? ElasticsearchIndexKind { get; init; }
 }
 
 internal static class VectorScenarioResolver
@@ -123,7 +126,8 @@ internal static class VectorScenarioResolver
             InsertRate = Pick("--insert-rate", s.InsertRate, file.InsertRate),
             UnderInsertQueryRate = Pick("--under-insert-query-rate", s.UnderInsertQueryRate, file.UnderInsertQueryRate),
             Warmup = PickText("--warmup", s.Warmup, file.Warmup),
-            Duration = PickText("--duration", s.Duration, file.Duration)
+            Duration = PickText("--duration", s.Duration, file.Duration),
+            ElasticsearchIndexKind = PickText("--elasticsearch-index-kind", s.ElasticsearchIndexKind, file.ElasticsearchIndexKind)
         };
         resolved.Validate();
         return (resolved, overrides);

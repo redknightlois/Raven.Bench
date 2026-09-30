@@ -259,7 +259,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                     json.WriteNumberValue(value);
                 json.WriteEndArray();
                 if (vectorOp.Effort != null)
-                    json.WriteNumber(vectorOp.RavenDbEffortParameter(), vectorOp.Effort.Value);
+                    json.WriteNumber(vectorOp.RavenDbEffortParameter(), vectorOp.Effort.WholeValue);
                 if (vectorOp.Filter != null)
                     json.WriteString("filterValue", vectorOp.Filter.Value);
                 if (vectorOp.MinimumSimilarity > 0)

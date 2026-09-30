@@ -201,7 +201,7 @@ public class VectorSearchOperation : OperationBase
 /// <summary>
 /// The search effort of one product, named by the product's own knob.
 /// </summary>
-public sealed record SearchEffort(string Knob, int Value)
+public sealed record SearchEffort(string Knob, double Value)
 {
     /// <summary>
     /// The numberOfCandidates argument of RavenDB's vector.search.
@@ -213,9 +213,14 @@ public sealed record SearchEffort(string Knob, int Value)
     /// </summary>
     public const string PgVectorKnob = "hnsw.ef_search";
 
-    public static SearchEffort RavenDb(int value) => new(RavenDbKnob, value);
+    public static SearchEffort RavenDb(double value) => new(RavenDbKnob, value);
 
-    public static SearchEffort PgVector(int value) => new(PgVectorKnob, value);
+    public static SearchEffort PgVector(double value) => new(PgVectorKnob, value);
+
+    /// <summary>The value for a knob that takes only integers. Throws when the value has a fraction.</summary>
+    public int WholeValue => Value == Math.Floor(Value) && Value is >= int.MinValue and <= int.MaxValue
+        ? (int)Value
+        : throw new NotSupportedException($"The knob '{Knob}' takes an integer; the value is {Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
 }
 
 /// <summary>

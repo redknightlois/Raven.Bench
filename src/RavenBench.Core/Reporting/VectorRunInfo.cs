@@ -9,7 +9,7 @@ public sealed record VectorDatasetInfo(string Name, string Metric, int Dimension
 /// One point of the recall curve: the product knob, its value, and what it measured. Recall divides
 /// by k, so a query that returned fewer than k rows scores its missing rows as misses.
 /// </summary>
-public sealed record VectorEffortPoint(string Label, string Knob, int Value, double Recall, double QueriesPerSecond, int StepIndex, long ReturnedRows, int QueriesShortOfK);
+public sealed record VectorEffortPoint(string Label, string Knob, double Value, double Recall, double QueriesPerSecond, int StepIndex, long ReturnedRows, int QueriesShortOfK);
 
 /// <summary>The load row: wall time to a queryable index, peak server memory and the stored size.</summary>
 public sealed record VectorLoadInfo(
@@ -94,6 +94,9 @@ public sealed record VectorRunInfo
 
     /// <summary>The storage the round runs: full float32 vectors, or a labelled quantized mode.</summary>
     public required string VectorStorage { get; init; }
+
+    /// <summary>The row label: the target and its vector storage, so a quantized row never reads as a float32 row.</summary>
+    public required string RowLabel { get; init; }
 
     public required VectorDatasetInfo Dataset { get; init; }
     public required ServerColumnAvailability ServerColumns { get; init; }

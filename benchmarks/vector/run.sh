@@ -8,9 +8,11 @@
 # endpoint does not answer. Every other path completes without Docker on the client, and a caller
 # endpoint is used as given.
 #
-# The external RavenDB development server is never started by this script. The two containerized
+# The external RavenDB development server is never started by this script. The containerized
 # targets (ravendb-7, pgvector) are started from the compose file when they are needed and are
-# stopped again only when this script started them.
+# stopped again only when this script started them. Elasticsearch is the exception to reuse: without
+# --url the script always starts a fresh cluster in its own compose project, because the trial licence
+# is per cluster, and removes it with its data on exit.
 #
 # Every option other than --target is forwarded to the vector command unchanged. A caller-supplied
 # --scenario, --url, --database or --output-prefix replaces the script default rather than being
@@ -31,7 +33,7 @@ READY_POLL_SECONDS=2
 
 usage() {
   cat <<'EOF'
-Usage: run.sh --target <ravendb|ravendb-7|pgvector> [options]
+Usage: run.sh --target <ravendb|ravendb-7|pgvector|elasticsearch> [options]
 
 Runs load, recall, readers, filtered and under-insert, and writes one result JSON per run under
 benchmarks/vector/results/. Every other option is forwarded to the vector command unchanged.
@@ -43,6 +45,7 @@ given and starts nothing.
 Examples:
   ./benchmarks/vector/run.sh --target ravendb
   ./benchmarks/vector/run.sh --target pgvector --seed 7 --dataset sphere-100k
+  ./benchmarks/vector/run.sh --target elasticsearch --elasticsearch-index-kind bbq_disk
   ./benchmarks/vector/run.sh --target pgvector --url postgresql://bench:bench@db-host:5432/bench --node-exporter-url http://db-host:9100/metrics
 EOF
 }
@@ -72,14 +75,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$TARGET" ]]; then
-  echo "error: --target is required. Valid targets: ravendb, ravendb-7, pgvector." >&2
+  echo "error: --target is required. Valid targets: ravendb, ravendb-7, pgvector, elasticsearch." >&2
   exit 2
 fi
 
 case "$TARGET" in
-  ravendb|ravendb-7|pgvector) ;;
+  ravendb|ravendb-7|pgvector|elasticsearch) ;;
   *)
-    echo "error: unknown target '$TARGET'. Valid targets: ravendb, ravendb-7, pgvector." >&2
+    echo "error: unknown target '$TARGET'. Valid targets: ravendb, ravendb-7, pgvector, elasticsearch." >&2
     exit 2
     ;;
 esac
@@ -88,6 +91,9 @@ esac
 # and a caller can point the script's default endpoint away from a port already in use.
 RAVENDB7_PORT="${RAVENDB7_PORT:-8087}"
 PGVECTOR_PORT="${PGVECTOR_PORT:-5432}"
+ELASTICSEARCH_PORT="${ELASTICSEARCH_PORT:-9200}"
+export ELASTICSEARCH_PORT
+COMPOSE_PROJECT=(-f "$COMPOSE_FILE")
 
 case "$TARGET" in
   ravendb)
@@ -104,6 +110,13 @@ case "$TARGET" in
     DEFAULT_URL="postgresql://bench:bench@localhost:$PGVECTOR_PORT/bench"
     DEFAULT_PORT="$PGVECTOR_PORT"
     COMPOSE_SERVICE="pgvector"
+    ;;
+  elasticsearch)
+    DEFAULT_URL="http://localhost:$ELASTICSEARCH_PORT"
+    DEFAULT_PORT="$ELASTICSEARCH_PORT"
+    PORT_VARIABLE=ELASTICSEARCH_PORT
+    COMPOSE_SERVICE="elasticsearch"
+    COMPOSE_PROJECT=(-f "$COMPOSE_FILE" -p "ravenbench-vector-es-$$")
     ;;
 esac
 
@@ -168,12 +181,13 @@ probe_endpoint() {
 }
 
 # A Docker-published port accepts a TCP connection before the server inside is ready to answer
-# HTTP, so a RavenDB target is ready only when /build/version returns an HTTP status line.
+# HTTP, so an HTTP target is ready only when its ready path returns 200: /build/version for RavenDB,
+# /_license for Elasticsearch, which answers 404 until the cluster has installed its licence.
 probe_http_ready() {
-  local host="$1" port="$2"
+  local host="$1" port="$2" path="$3"
   (
     exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || exit 1
-    printf 'GET /build/version HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$host" >&3 2>/dev/null || exit 1
+    printf 'GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$path" "$host" >&3 2>/dev/null || exit 1
     local line
     IFS= read -t 3 -r line <&3 2>/dev/null || exit 1
     [[ "$line" == *" 200 "* ]]
@@ -187,7 +201,9 @@ is_ravendb_target() {
 probe_ready() {
   local host="$1" port="$2"
   if is_ravendb_target; then
-    probe_http_ready "$host" "$port"
+    probe_http_ready "$host" "$port" /build/version
+  elif [[ "$TARGET" == "elasticsearch" ]]; then
+    probe_http_ready "$host" "$port" /_license
   else
     probe_endpoint "$host" "$port"
   fi
@@ -232,11 +248,20 @@ require_docker_to_start() {
 }
 
 STARTED_COMPOSE=0
+ES_DATA_RUN_DIR=""
 stop_started_container() {
   local status=$?
   if [[ "$STARTED_COMPOSE" -eq 1 ]]; then
     echo "Stopping the $TARGET container the script started."
-    docker compose -f "$COMPOSE_FILE" rm -s -f "$COMPOSE_SERVICE" >/dev/null 2>&1 || true
+    if [[ "$TARGET" == "elasticsearch" ]]; then
+      # The project is this run's own, so its volume is this run's cluster and goes with it.
+      docker compose "${COMPOSE_PROJECT[@]}" down -v >/dev/null 2>&1 || true
+    else
+      docker compose "${COMPOSE_PROJECT[@]}" rm -s -f "$COMPOSE_SERVICE" >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ -n "$ES_DATA_RUN_DIR" ]]; then
+    rm -rf "$ES_DATA_RUN_DIR"
   fi
   exit "$status"
 }
@@ -251,7 +276,16 @@ fi
 HOST="$(host_of_url "$URL")"
 PORT="$(port_of_url "$URL" "$DEFAULT_PORT")"
 
-if probe_endpoint "$HOST" "$PORT"; then
+# Elasticsearch without --url always gets a fresh cluster, so a port that already answers is not reused.
+FRESH_CLUSTER=0
+if [[ "$TARGET" == "elasticsearch" && "$URL_WAS_GIVEN" -eq 0 ]]; then
+  FRESH_CLUSTER=1
+fi
+
+if probe_endpoint "$HOST" "$PORT" && [[ "$FRESH_CLUSTER" -eq 1 ]]; then
+  echo "error: port $HOST:$PORT already answers, and this run needs a fresh $TARGET container of its own. Set $PORT_VARIABLE to a free port, or pass --url to use the running server." >&2
+  exit 1
+elif probe_endpoint "$HOST" "$PORT"; then
   echo "Using the $TARGET endpoint that already answers at $HOST:$PORT."
 else
   if [[ -z "$COMPOSE_SERVICE" ]]; then
@@ -265,10 +299,16 @@ else
     exit 1
   fi
   require_docker_to_start
+  if [[ "$TARGET" == "elasticsearch" && -n "${ELASTICSEARCH_DATA_DIR:-}" ]]; then
+    # A fresh data directory per run under the caller's host path; the exit trap removes it.
+    ES_DATA_RUN_DIR="$(mktemp -d "$ELASTICSEARCH_DATA_DIR/vector-es-XXXXXX")"
+    chmod 777 "$ES_DATA_RUN_DIR"
+    export ELASTICSEARCH_DATA_DIR="$ES_DATA_RUN_DIR"
+  fi
   echo "Starting the $TARGET container from $COMPOSE_FILE; it will answer at $HOST:$PORT."
   # STARTED_COMPOSE is set before the start, so the exit trap stops a partially started container.
   STARTED_COMPOSE=1
-  if ! docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout "$READY_TIMEOUT" "$COMPOSE_SERVICE"; then
+  if ! docker compose "${COMPOSE_PROJECT[@]}" up -d --wait --wait-timeout "$READY_TIMEOUT" "$COMPOSE_SERVICE"; then
     echo "error: the $TARGET container did not become ready within ${READY_TIMEOUT}s." >&2
     exit 1
   fi
@@ -287,7 +327,8 @@ fi
 
 if ! has_option --database "${PASSTHROUGH[@]}"; then
   # A fresh database per invocation; the harness creates it through the target's own connection.
-  RUN_ARGS+=(--database "vector_${TARGET//-/_}_$(date -u +%Y%m%dT%H%M%S)_$$")
+  # Lowercase, because Elasticsearch index names must be.
+  RUN_ARGS+=(--database "vector_${TARGET//-/_}_$(date -u +%Y%m%dt%H%M%S)_$$")
 fi
 
 if ! has_option --scenario "${PASSTHROUGH[@]}"; then

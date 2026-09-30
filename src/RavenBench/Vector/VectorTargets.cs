@@ -37,6 +37,9 @@ public interface IVectorTarget : IDisposable
     string FilterField { get; }
     string? ExpectedIndex { get; }
 
+    /// <summary>The vector storage the row runs: full float32, or a named quantized mode. It is unique per configuration of one product.</summary>
+    string VectorStorage { get; }
+
     /// <summary>The prefix the product puts before a set's base id.</summary>
     string IdPrefix { get; }
 
@@ -45,7 +48,7 @@ public interface IVectorTarget : IDisposable
 
     DurabilityParity Durability { get; }
 
-    SearchEffort Effort(int value);
+    SearchEffort Effort(double value);
 
     /// <summary>Loads the vectors into an empty store and returns when the index answers queries.</summary>
     Task LoadAsync(IAsyncEnumerable<LabelledVector> vectors, CancellationToken ct);
@@ -87,11 +90,12 @@ public sealed class RavenDbVectorTarget : IVectorTarget
     public string FieldName => "Vector";
     public string FilterField => "Label";
     public string? ExpectedIndex => IndexName;
+    public string VectorStorage => "float32, unquantized";
     public string IdPrefix => PublishedSetImport.DocumentIdPrefix;
     public string InsertVisibility => "approximate: RavenDB acknowledges a write before its vector index contains it, and the queries do not wait for indexing, so an acknowledged insert still being indexed counts in the truth and scores as a miss";
     public DurabilityParity Durability { get; } = new() { Setting = "durability", Value = "ravendb-default" };
 
-    public SearchEffort Effort(int value) => SearchEffort.RavenDb(value);
+    public SearchEffort Effort(double value) => SearchEffort.RavenDb(value);
 
     public async Task LoadAsync(IAsyncEnumerable<LabelledVector> vectors, CancellationToken ct)
     {
@@ -261,6 +265,7 @@ public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
     public string FieldName => "embedding";
     public string FilterField => "label";
     public string? ExpectedIndex => PgVectorTransport.IndexName;
+    public string VectorStorage => "float32, unquantized";
     public string IdPrefix => "";
     public string InsertVisibility => "exact: PostgreSQL updates the HNSW index inside the inserting transaction, so an insert acknowledged by commit is visible to every query issued after it";
     public DurabilityParity Durability { get; } = new() { Setting = PostgresYcsbTransport.DurabilitySetting, Value = PostgresYcsbTransport.DurabilityValue };
@@ -268,7 +273,7 @@ public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
     // The COPY batch bounds client memory; it does not change what the server stores.
     private const int CopyBatch = 10_000;
 
-    public SearchEffort Effort(int value) => SearchEffort.PgVector(value);
+    public SearchEffort Effort(double value) => SearchEffort.PgVector(value);
 
     public async Task LoadAsync(IAsyncEnumerable<LabelledVector> vectors, CancellationToken ct)
     {
@@ -339,4 +344,116 @@ public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
     public Task CleanupAsync() => transport.DropTableAsync();
 
     public void Dispose() => transport.Dispose();
+}
+
+/// <summary>
+/// Elasticsearch over its REST API on raw HTTP: a fresh index loaded through <c>_bulk</c>, refreshed,
+/// with the index kind the scenario names and every other index option at the vendor default. Round one
+/// does not force-merge.
+/// </summary>
+public sealed class ElasticsearchVectorTarget(ElasticsearchVectorTransport transport) : IVectorTarget
+{
+    // The bulk batch bounds the request size; it does not change what the server stores.
+    private const int BulkBatch = 1_000;
+
+    private const string VendorDefault = "the Elasticsearch default";
+
+    private string? _defaultKind;
+    private string? _refreshInterval;
+
+    public IYcsbTransport Transport => transport;
+    public string EffortFamily => $"{ElasticsearchVectorTransport.Target}-{transport.Kind.Name}";
+    public string FieldName => ElasticsearchVectorTransport.VectorField;
+    public string FilterField => ElasticsearchVectorTransport.LabelField;
+    public string? ExpectedIndex => null;
+    public string VectorStorage => transport.Kind.Storage;
+    public string IdPrefix => "";
+    public DurabilityParity Durability { get; } = new() { Setting = ElasticsearchVectorTransport.DurabilitySetting, Value = ElasticsearchVectorTransport.DurabilityValue };
+
+    public string InsertVisibility =>
+        $"approximate: Elasticsearch makes an acknowledged write searchable only after the next refresh, and index.refresh_interval is {RequireLoaded(_refreshInterval)} as the server reports it, " +
+        "so an acknowledged insert not yet refreshed counts in the truth and scores as a miss";
+
+    public SearchEffort Effort(double value) => new(transport.Kind.Knob, value);
+
+    public async Task LoadAsync(IAsyncEnumerable<LabelledVector> vectors, CancellationToken ct)
+    {
+        _defaultKind = await transport.CreateIndexAsync(ct);
+
+        long loaded = 0;
+        float[]? first = null;
+        var batch = new List<DocumentToWrite<VectorRow>>(BulkBatch);
+        async Task FlushAsync()
+        {
+            if (batch.Count == 0)
+                return;
+            var result = await transport.ExecuteAsync(new BulkInsertOperation<VectorRow> { Documents = batch }, ct);
+            if (result.IsSuccess == false)
+                throw new InvalidOperationException($"The Elasticsearch load failed: {result.ErrorDetails}");
+            loaded += batch.Count;
+            batch = new List<DocumentToWrite<VectorRow>>(BulkBatch);
+        }
+
+        await foreach (var v in vectors.WithCancellation(ct))
+        {
+            first ??= v.Vector;
+            batch.Add(new DocumentToWrite<VectorRow> { Id = v.Id, Document = new VectorRow(v.Vector, v.Label) });
+            if (batch.Count == BulkBatch)
+                await FlushAsync();
+        }
+        await FlushAsync();
+        await transport.RefreshAsync(ct);
+
+        var counted = await transport.GetDocumentCountAsync("");
+        if (counted != loaded)
+            throw new InvalidOperationException($"Index '{transport.Index}' counts {counted} documents after the refresh; the load sent {loaded}.");
+        var probe = await transport.ExecuteAsync(new VectorSearchOperation { QueryVector = first!, FieldName = FieldName, TopK = 1 }, ct);
+        if (probe.IsSuccess == false || probe.NeighborIds is not { Count: 1 })
+            throw new InvalidOperationException($"Index '{transport.Index}' does not answer a kNN query after the load: {probe.ErrorDetails ?? "no hit"}.");
+
+        var settings = await transport.ReadIndexSettingsAsync(ct);
+        var durability = settings.GetValueOrDefault(ElasticsearchVectorTransport.DurabilitySetting);
+        if (durability != ElasticsearchVectorTransport.DurabilityValue)
+            throw new InvalidOperationException($"Index '{transport.Index}' reports {ElasticsearchVectorTransport.DurabilitySetting}={durability ?? "absent"}; the run needs '{ElasticsearchVectorTransport.DurabilityValue}'.");
+        _refreshInterval = settings["index.refresh_interval"];
+    }
+
+    public OperationBase InsertOperation(LabelledVector vector) =>
+        new InsertOperation<VectorRow> { Id = vector.Id, Payload = new VectorRow(vector.Vector, vector.Label) };
+
+    public async Task<OnDiskSize> StoredSizeAsync() =>
+        OnDiskSize.Reported(transport.StorageSizeMetricName, await transport.GetStorageSizeBytesAsync());
+
+    public async Task<IReadOnlyDictionary<string, string>> ReportedSettingsAsync(CancellationToken ct)
+    {
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["index"] = transport.Index,
+            ["index_kind.sent"] = transport.Kind.Name,
+            ["index_kind.vendor_default"] = RequireLoaded(_defaultKind)
+        };
+        foreach (var (name, value) in await transport.ReadFieldOptionsAsync(ct))
+        {
+            settings["mapping." + name] = value;
+            if (name.StartsWith("index_options.", StringComparison.Ordinal))
+                settings["mapping." + name + ".source"] = name == "index_options.type" ? BuildSetting.SetByBenchmark : $"default: {VendorDefault}, not set by the benchmark";
+        }
+        var index = await transport.ReadIndexSettingsAsync(ct);
+        foreach (var name in new[] { ElasticsearchVectorTransport.DurabilitySetting, "index.refresh_interval", "index.number_of_shards", "index.number_of_replicas" })
+            settings[name] = index.GetValueOrDefault(name, "absent");
+        settings["segments.count"] = (await transport.ReadStatsAsync(ct)).Segments.ToString(CultureInfo.InvariantCulture);
+        settings["jvm.mem.heap_max_in_bytes"] = await transport.ReadHeapAsync(ct);
+        var licence = await transport.ReadLicenceAsync(ct);
+        settings["license.type"] = licence.Type;
+        settings["license.status"] = licence.Status;
+        settings["license.expiry_date"] = licence.Expiry;
+        return settings;
+    }
+
+    public Task CleanupAsync() => transport.DeleteIndexAsync(CancellationToken.None);
+
+    public void Dispose() => transport.Dispose();
+
+    private string RequireLoaded(string? value) =>
+        value ?? throw new InvalidOperationException($"Index '{transport.Index}' has not been loaded by this target; load before reading its settings.");
 }

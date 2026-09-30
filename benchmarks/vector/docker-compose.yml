@@ -35,6 +35,22 @@ services:
       - vector-ravendb7-data:/var/lib/ravendb/data
     restart: unless-stopped
 
+  # Security is off as for the other two services. The self-generated trial licence enables bbq_disk;
+  # a cluster gets one 30-day trial, so run.sh starts a fresh cluster per run. The heap is the image default.
+  elasticsearch:
+    image: elasticsearch:9.5.3
+    ports:
+      - "${ELASTICSEARCH_PORT:-9200}:9200"
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.license.self_generated.type: "${ELASTICSEARCH_LICENSE:-trial}"
+      ES_JAVA_OPTS: "${ELASTICSEARCH_JAVA_OPTS:-}"
+    volumes:
+      # A host path in ELASTICSEARCH_DATA_DIR bind-mounts the data directory; unset, a named volume holds it.
+      - "${ELASTICSEARCH_DATA_DIR:-vector-elasticsearch-data}:/usr/share/elasticsearch/data"
+
 volumes:
+  vector-elasticsearch-data:
   vector-pgvector-data:
   vector-ravendb7-data:

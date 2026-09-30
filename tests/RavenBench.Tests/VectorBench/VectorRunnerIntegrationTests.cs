@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench.Cli;
 using RavenBench.Core.Diagnostics;
+using RavenBench.Core.Transport;
 using RavenBench.Core.Vector;
 using RavenBench.Core.Workload;
 using RavenBench.Dataset;
@@ -25,12 +26,14 @@ internal sealed class TinyHeldOutSet : HeldOutVectorDataset
     public const int Rows = 3000;
     public const int Dims = 16;
     private readonly DatasetFile _file;
+    private readonly int _dims;
 
-    public TinyHeldOutSet(string directory)
+    public TinyHeldOutSet(string directory, int dims = Dims)
     {
+        _dims = dims;
         var random = new Random(11);
-        var bytes = new byte[Rows * Dims * 4];
-        var floats = Enumerable.Range(0, Rows * Dims).Select(_ => (float)(random.NextDouble() * 2 - 1)).ToArray();
+        var bytes = new byte[Rows * dims * 4];
+        var floats = Enumerable.Range(0, Rows * dims).Select(_ => (float)(random.NextDouble() * 2 - 1)).ToArray();
         Buffer.BlockCopy(floats, 0, bytes, 0, bytes.Length);
         Directory.CreateDirectory(Path.Combine(directory, "tiny-held-out"));
         File.WriteAllBytes(Path.Combine(directory, "tiny-held-out", "tiny.f32"), bytes);
@@ -39,7 +42,7 @@ internal sealed class TinyHeldOutSet : HeldOutVectorDataset
 
     public override string Name => "tiny-held-out";
     public override VectorMetric Metric => VectorMetric.Cosine;
-    public override int Dimensions => Dims;
+    public override int Dimensions => _dims;
     public override IReadOnlyList<DatasetFile> Files => [_file];
 
     protected override Task<long> CountRowsAsync(VerifiedFiles files, CancellationToken ct) => Task.FromResult((long)Rows);
@@ -49,8 +52,8 @@ internal sealed class TinyHeldOutSet : HeldOutVectorDataset
         var bytes = await File.ReadAllBytesAsync(files.PathOf("tiny.f32"), ct);
         for (int r = 0; r < Rows; r++)
         {
-            var v = new float[Dims];
-            Buffer.BlockCopy(bytes, r * Dims * 4, v, 0, Dims * 4);
+            var v = new float[_dims];
+            Buffer.BlockCopy(bytes, r * _dims * 4, v, 0, _dims * 4);
             yield return new BaseVector(r.ToString(), v);
         }
     }
@@ -96,6 +99,25 @@ public class VectorRunnerIntegrationTests
     [RequiresRavenDbFact(8087)]
     public Task RavenDb7_Completes_The_Five_Runs() => RunAsync("ravendb-7", "http://localhost:8087", "vector_it_" + Guid.NewGuid().ToString("N")[..8], SearchEffort.RavenDbKnob, null);
 
+    [RequiresElasticsearchFact("trial")]
+    public async Task Elasticsearch_Completes_The_Five_Runs_For_Every_Index_Kind()
+    {
+        foreach (var kind in ElasticsearchIndexKind.All)
+        {
+            // The bbq kinds need at least 64 dimensions.
+            var info = await RunAsync("elasticsearch", ElasticsearchTestEndpoints.Trial.ToString(), "vector_it_" + Guid.NewGuid().ToString("N")[..8], kind.Knob, null,
+                s => s with { ElasticsearchIndexKind = kind.Name }, dims: 64);
+            var settings = info["load"].ProductSettings;
+            settings["index_kind.sent"].Should().Be(kind.Name);
+            settings["mapping.index_options.type"].Should().Be(kind.Name);
+            settings.Should().ContainKeys("index_kind.vendor_default", "segments.count", "index.refresh_interval", "jvm.mem.heap_max_in_bytes", "license.type", "license.status", "license.expiry_date");
+            info["load"].Durability.Value.Should().Be("request");
+            info["load"].Load!.StoredSize.Bytes.Should().BePositive();
+            info["recall"].RowLabel.Should().Be($"elasticsearch {kind.Storage}");
+            info["under-insert"].UnderInsert!.TruthStatement.Should().Contain($"index.refresh_interval is {settings["index.refresh_interval"]}");
+        }
+    }
+
     [RequiresPostgreSqlFact]
     public async Task PgVector_Completes_The_Five_Runs()
     {
@@ -111,14 +133,16 @@ public class VectorRunnerIntegrationTests
         info["filtered"].Filtered!.RecallStatement.Should().Contain("hnsw.iterative_scan=");
     }
 
-    private static async Task<Dictionary<string, Core.Reporting.VectorRunInfo>> RunAsync(string target, string url, string database, string knob, int? cap)
+    private static async Task<Dictionary<string, Core.Reporting.VectorRunInfo>> RunAsync(string target, string url, string database, string knob, int? cap,
+        Func<VectorScenario, VectorScenario>? configure = null, int dims = TinyHeldOutSet.Dims)
     {
         var data = Directory.CreateTempSubdirectory("vector-it-");
         try
         {
-            var set = new TinyHeldOutSet(data.FullName);
+            var set = new TinyHeldOutSet(data.FullName, dims);
             var settings = new VectorSettings { Target = target, Url = url, Database = database };
-            var results = await new VectorRunner(SmallScenario(data.FullName, cap), new Dictionary<string, string>(), settings, set).RunAsync();
+            var scenario = (configure ?? (s => s))(SmallScenario(data.FullName, cap));
+            var results = await new VectorRunner(scenario, new Dictionary<string, string>(), settings, set).RunAsync();
 
             results.Select(r => r.Run).Should().Equal(VectorRunner.Runs);
             var info = results.ToDictionary(r => r.Run, r => r.Summary.Vector!);
