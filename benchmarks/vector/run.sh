@@ -14,6 +14,9 @@
 # --url the script always starts a fresh cluster in its own compose project, because the trial licence
 # is per cluster, and removes it with its data on exit.
 #
+# --constrained runs load and recall alone with the database container's memory limited. The harness
+# limits and restarts the container, so the script only allows it for a container it started itself.
+#
 # Every option other than --target is forwarded to the vector command unchanged. A caller-supplied
 # --scenario, --url, --database or --output-prefix replaces the script default rather than being
 # appended twice.
@@ -33,7 +36,7 @@ READY_POLL_SECONDS=2
 
 usage() {
   cat <<'EOF'
-Usage: run.sh --target <ravendb|ravendb-7|pgvector|elasticsearch> [options]
+Usage: run.sh --target <ravendb|ravendb-7|pgvector|elasticsearch> [--constrained] [options]
 
 Runs load, recall, readers, filtered and under-insert, and writes one result JSON per run under
 benchmarks/vector/results/. Every other option is forwarded to the vector command unchanged.
@@ -46,6 +49,7 @@ Examples:
   ./benchmarks/vector/run.sh --target ravendb
   ./benchmarks/vector/run.sh --target pgvector --seed 7 --dataset sphere-100k
   ./benchmarks/vector/run.sh --target elasticsearch --elasticsearch-index-kind bbq_disk
+  ./benchmarks/vector/run.sh --target elasticsearch --constrained
   ./benchmarks/vector/run.sh --target pgvector --url postgresql://bench:bench@db-host:5432/bench --node-exporter-url http://db-host:9100/metrics
 EOF
 }
@@ -104,11 +108,13 @@ case "$TARGET" in
   ravendb-7)
     DEFAULT_URL="http://localhost:$RAVENDB7_PORT"
     DEFAULT_PORT="$RAVENDB7_PORT"
+    PORT_VARIABLE=RAVENDB7_PORT
     COMPOSE_SERVICE="ravendb-7"
     ;;
   pgvector)
     DEFAULT_URL="postgresql://bench:bench@localhost:$PGVECTOR_PORT/bench"
     DEFAULT_PORT="$PGVECTOR_PORT"
+    PORT_VARIABLE=PGVECTOR_PORT
     COMPOSE_SERVICE="pgvector"
     ;;
   elasticsearch)
@@ -276,14 +282,23 @@ fi
 HOST="$(host_of_url "$URL")"
 PORT="$(port_of_url "$URL" "$DEFAULT_PORT")"
 
+CONSTRAINED=0
+if has_option --constrained "${PASSTHROUGH[@]}"; then
+  CONSTRAINED=1
+  if [[ "$URL_WAS_GIVEN" -eq 1 || -z "$COMPOSE_SERVICE" ]]; then
+    echo "error: --constrained limits and restarts the $TARGET container, so it runs only against a container this script starts; it refuses the endpoint $HOST:$PORT." >&2
+    exit 2
+  fi
+fi
+
 # Elasticsearch without --url always gets a fresh cluster, so a port that already answers is not reused.
 FRESH_CLUSTER=0
 if [[ "$TARGET" == "elasticsearch" && "$URL_WAS_GIVEN" -eq 0 ]]; then
   FRESH_CLUSTER=1
 fi
 
-if probe_endpoint "$HOST" "$PORT" && [[ "$FRESH_CLUSTER" -eq 1 ]]; then
-  echo "error: port $HOST:$PORT already answers, and this run needs a fresh $TARGET container of its own. Set $PORT_VARIABLE to a free port, or pass --url to use the running server." >&2
+if probe_endpoint "$HOST" "$PORT" && [[ "$FRESH_CLUSTER" -eq 1 || "$CONSTRAINED" -eq 1 ]]; then
+  echo "error: port $HOST:$PORT already answers, and this run needs a fresh $TARGET container of its own. Set $PORT_VARIABLE to a free port, or pass --url to use the running server (not with --constrained)." >&2
   exit 1
 elif probe_endpoint "$HOST" "$PORT"; then
   echo "Using the $TARGET endpoint that already answers at $HOST:$PORT."
@@ -355,4 +370,8 @@ if [[ "$VECTOR_STATUS" -ne 0 ]]; then
   exit "$VECTOR_STATUS"
 fi
 
-echo "Results: ${RESULT_PREFIX}-<load|recall|readers|filtered|under-insert>.json"
+if [[ "$CONSTRAINED" -eq 1 ]]; then
+  echo "Results: ${RESULT_PREFIX}-constrained.json"
+else
+  echo "Results: ${RESULT_PREFIX}-<load|recall|readers|filtered|under-insert>.json"
+fi

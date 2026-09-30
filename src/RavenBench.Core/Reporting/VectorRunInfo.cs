@@ -9,7 +9,17 @@ public sealed record VectorDatasetInfo(string Name, string Metric, int Dimension
 /// One point of the recall curve: the product knob, its value, and what it measured. Recall divides
 /// by k, so a query that returned fewer than k rows scores its missing rows as misses.
 /// </summary>
-public sealed record VectorEffortPoint(string Label, string Knob, double Value, double Recall, double QueriesPerSecond, int StepIndex, long ReturnedRows, int QueriesShortOfK);
+public sealed record VectorEffortPoint(string Label, string Knob, double Value, double Recall, double QueriesPerSecond, int StepIndex, long ReturnedRows, int QueriesShortOfK)
+{
+    /// <summary>The 99th percentile of the sequential query latencies at this setting, in milliseconds.</summary>
+    public double? QueryP99Ms { get; init; }
+}
+
+/// <summary>
+/// The constrained run: load and recall repeated with the database container's memory limited to a
+/// fraction of the raw set size. The limit is the value the container reports, not the value requested.
+/// </summary>
+public sealed record VectorConstrainedInfo(double Fraction, long RawSetBytes, long RequestedLimitBytes, long MemoryLimitBytes, long MemorySwapLimitBytes, string LimitSource);
 
 /// <summary>The load row: wall time to a queryable index, peak server memory and the stored size.</summary>
 public sealed record VectorLoadInfo(
@@ -107,6 +117,7 @@ public sealed record VectorRunInfo
     public VectorFilteredInfo? Filtered { get; init; }
     public VectorUnderInsertInfo? UnderInsert { get; init; }
     public VectorCrossCheckInfo? CrossCheck { get; init; }
+    public VectorConstrainedInfo? Constrained { get; init; }
 
     /// <summary>The effort readers, filtered and under-insert ran at, and why.</summary>
     public VectorEffortPoint? EffortInForce { get; init; }

@@ -41,6 +41,7 @@
   },
   "ElasticsearchIndexKind": "hnsw",
   "RavenDbEmbeddingType": "Single",
+  "ConstrainedMemoryFraction": 0.5,
   "Readers": 1000,
   "FilterSelectivity": 0.05,
   "InsertRate": 500,

@@ -122,7 +122,7 @@ public class VectorRunScriptTests
     }
 
     [RequiresBashFact]
-    public void An_Elasticsearch_Run_Refuses_A_Port_That_Already_Answers()
+    public void The_Constrained_Run_Refuses_A_Caller_Url_And_A_Port_It_Did_Not_Start_By_Name()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -131,10 +131,14 @@ public class VectorRunScriptTests
         try
         {
             var env = new Dictionary<string, string> { ["PATH"] = bin, ["HOME"] = bin, ["FAKE_LOG"] = Path.Combine(bin, "calls.log"), ["ELASTICSEARCH_PORT"] = port };
+            var caller = RunBash(Path.Combine(Folder("vector"), "run.sh"), ["--target", "elasticsearch", "--constrained", "--url", $"http://127.0.0.1:{port}"], env, clear: true);
+            caller.ExitCode.Should().NotBe(0);
+            caller.Output.Should().Contain("--constrained").And.Contain($"127.0.0.1:{port}");
+
             var answering = RunBash(Path.Combine(Folder("vector"), "run.sh"), ["--target", "elasticsearch"], env, clear: true);
             answering.ExitCode.Should().NotBe(0, "a fresh cluster is the default, so an answering port is not reused");
             answering.Output.Should().Contain("ELASTICSEARCH_PORT").And.Contain("fresh elasticsearch container");
-            Calls(bin).Should().NotContain("dotnet", "the refusal comes before the harness runs");
+            Calls(bin).Should().NotContain("dotnet", "both refusals come before the harness runs");
         }
         finally
         {

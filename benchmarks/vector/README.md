@@ -55,6 +55,14 @@ For Elasticsearch, `filtered` passes the label in the kNN `filter` clause, so th
 
 `VectorStorage` and `RowLabel` name the quantization on every row, so a quantized row never reads as a float32 row. The scenario key `RavenDbEmbeddingType` (`--ravendb-embedding-type`) sets the RavenDB destination embedding type: `Single` (the default, float32, the rows as before), `Int8` or `Binary`. The Elasticsearch `bbq_hnsw` and `bbq_disk` rows and the RavenDB `Int8` and `Binary` rows are the quantized comparison.
 
+## The constrained run
+
+```
+./benchmarks/vector/run.sh --target <ravendb-7|pgvector|elasticsearch> --constrained
+```
+
+It repeats load and recall with the database container's memory, swap included, limited to `ConstrainedMemoryFraction` of the raw set size (vectors x dimensions x 4 bytes). The harness sets the limit with `docker update` and restarts the container, so the server sizes itself under it, and puts the container's own limits back when the run ends, and the result `<prefix>-constrained.json` records recall, queries per second and p99 (`QueryP99Ms`) per setting, and `Constrained.MemoryLimitBytes` as `docker inspect` reports it. The script runs it only against a container it starts itself; `--url`, the external `ravendb` target and an endpoint no local container publishes are refused by name. The run uses one connection, since it only loads and queries one at a time. The set must be large enough that the limit still lets the server start; cohere-768-1m (about 3 GB raw) is the smallest shipped set where half the raw size is a realistic machine.
+
 ## The three Docker situations
 
 - Docker is not installed: the script says so and names the compose command to run on another host, then `--url`.

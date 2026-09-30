@@ -72,6 +72,9 @@ public sealed class RecordingTransport(IYcsbTransport inner, Func<long> inserted
 
 public sealed record VectorRunResult(string Run, BenchmarkSummary Summary);
 
+/// <summary>The constrained run cannot limit the memory of the target's endpoint. The message names the endpoint or the target.</summary>
+public sealed class ConstrainedRunRefusedException(string message) : InvalidOperationException(message);
+
 /// <summary>
 /// Runs the five vector runs against one target: load, recall, readers, filtered and under-insert.
 /// Recall is always scored against the set's product-neutral truth, never a product's own search.
@@ -108,6 +111,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         throw new VectorScenarioException($"Target '{target}' is not a vector target; valid targets are '{RavendbTarget}', '{Ravendb7Target}', '{PgVectorTransport.Target}' and '{ElasticsearchVectorTransport.Target}'.");
     }
 
+    /// <summary>The five runs, or, with <c>--constrained</c>, the constrained run alone.</summary>
     public async Task<List<VectorRunResult>> RunAsync(CancellationToken ct = default)
     {
         var targetName = Required(settings.Target, "--target");
@@ -123,7 +127,9 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             scenario.RequireInsertSliceBelow(cap, warmup, duration);
             set = new CappedVectorDataset(set, cap);
         }
-        using var target = BuildTarget(targetName, url, database, set.Metric, set.Dimensions, scenario.Readers, scenario);
+        // The constrained run only loads and queries one at a time, so a reader pool would spend the limited memory on connections.
+        using var target = BuildTarget(targetName, url, database, set.Metric, set.Dimensions, settings.Constrained ? 1 : scenario.Readers, scenario);
+        using var memoryLimit = settings.Constrained ? new ContainerMemoryLimit(RequireLimitableContainer(targetName, url)) : null;
         var efforts = scenario.EffortsFor(target.EffortFamily);
         if (efforts.Knob != target.Effort(efforts.Default).Knob)
             throw new VectorScenarioException($"Scenario key 'Efforts.{target.EffortFamily}.Knob' is '{efforts.Knob}'; the product's knob is '{target.Effort(efforts.Default).Knob}'.");
@@ -163,6 +169,17 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         });
         Console.WriteLine($"[Vector] {set.Name}: {split.LoadedCount:N0} loaded, {slice.Count:N0} held for inserts, {split.LabelledCount:N0} labelled, {queries.Queries.Length} queries");
 
+        VectorConstrainedInfo? constrained = null;
+        if (memoryLimit is not null)
+        {
+            var raw = split.LoadedCount * (long)set.Dimensions * sizeof(float);
+            var requested = VectorRunMath.ConstrainedLimit(split.LoadedCount, set.Dimensions, scenario.ConstrainedMemoryFraction);
+            Console.WriteLine($"[Vector] constrained: limiting container {memoryLimit.ContainerId[..12]} to {requested:N0} bytes, {scenario.ConstrainedMemoryFraction} of the {raw:N0}-byte raw set, and restarting it");
+            var (memory, swap) = memoryLimit.Apply(requested);
+            constrained = new VectorConstrainedInfo(scenario.ConstrainedMemoryFraction, raw, requested, memory, swap, "docker inspect HostConfig.Memory and HostConfig.MemorySwap");
+            await WaitForRestartAsync(() => BuildTarget(targetName, url, database, set.Metric, set.Dimensions, 1, scenario), ct);
+        }
+
         // load
         var loadStep = await BracketAsync(nodeExporter, async () =>
         {
@@ -185,9 +202,10 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         var recallSteps = new List<StepResult>();
         foreach (var (label, value) in efforts.All)
         {
-            var (step, ids) = await SequentialAsync(target, queries.Queries, k, target.Effort(value), filter: null, nodeExporter, ct);
+            var (step, ids, latencies) = await SequentialAsync(target, queries.Queries, k, target.Effort(value), filter: null, nodeExporter, ct);
             var recall = ids.Select((r, q) => VectorRunMath.Recall(r, quietTruth[q], k)).Average();
-            curve.Add(new VectorEffortPoint(label, efforts.Knob, value, recall, step.Throughput, recallSteps.Count, ids.Sum(r => (long)r.Count), ids.Count(r => r.Count < k)));
+            curve.Add(new VectorEffortPoint(label, efforts.Knob, value, recall, step.Throughput, recallSteps.Count, ids.Sum(r => (long)r.Count), ids.Count(r => r.Count < k))
+                { QueryP99Ms = VectorRunMath.P99(latencies) });
             recallSteps.Add(step);
             Console.WriteLine($"[Vector] recall@{k} at {efforts.Knob}={value} ({label}): {recall:P2}, {step.Throughput:F0} q/s");
         }
@@ -200,31 +218,6 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             ? $"no setting reached recall@{k} {scenario.RecallThreshold}; readers, filtered and under-insert run at the high setting, {efforts.Knob}={inForce.Value}"
             : $"readers, filtered and under-insert run at {efforts.Knob}={inForce.Value}, the lowest setting that reached recall@{k} {scenario.RecallThreshold}";
         var effort = target.Effort(inForce.Value);
-
-        // readers: the closed loop finds the sustained rate, then the fixed-rate runner runs at it.
-        var readersWorkload = new VectorQueryWorkload(queries.Queries, target, k, effort);
-        var closed = await RampAsync(target.Transport, readersWorkload, url, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
-        var sustained = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
-        var fixedRate = await RampAsync(target.Transport, readersWorkload, url, database, LoadShape.Rate, sustained, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
-        var readerSteps = closed.Steps.Concat(fixedRate.Steps).ToList();
-        var readersInfo = new VectorReadersInfo(scenario.Readers, closed.Steps[^1].Throughput, sustained, readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)));
-
-        // filtered
-        var filter = new VectorFilter(target.FilterField, VectorSplit.LabelIn);
-        var (filteredStep, filteredIds) = await SequentialAsync(target, queries.Queries, k, effort, filter, nodeExporter, ct);
-        var rowCounts = filteredIds.Select(r => r.Count).ToList();
-        var filteredInfo = new VectorFilteredInfo(scenario.FilterSelectivity, split.LabelledCount,
-            "drawn with the scenario seed over the loaded base; no set here ships labels",
-            rowCounts, rowCounts.Count(c => c < k),
-            filteredIds.Select((r, q) => VectorRunMath.Recall(r, filteredTruth[q], k)).Average(),
-            $"truth is the exact top {k} within the label; a query that returned fewer than {k} rows keeps its count and scores its missing rows as misses"
-            + (productSettings.TryGetValue("hnsw.iterative_scan", out var iterative) ? $"; hnsw.iterative_scan={iterative}, hnsw.max_scan_tuples={productSettings["hnsw.max_scan_tuples"]} as the server reports them" : ""));
-
-        // under-insert
-        var (underInsertRamp, underInsertInfo) = await UnderInsertAsync(target, queries.Queries, quietTopK, slice, set.Metric, effort, inForce.Recall, url, database, warmup, duration, nodeExporter, ct);
-
-        // cross-check: last, because it replaces the index the other runs measured.
-        var crossCheck = await CrossCheckAsync(target, set, queries, slice, split.LoadedCount, productSettings, datasetInfo.TruthSource, nodeExporter, ct);
 
         var common = (Target: targetName, Product: productName, Version: serverVersion, Container: container, Settings: productSettings, Dataset: datasetInfo, Fingerprint: fingerprint, Durability: target.Durability);
         VectorRunResult Result(string run, List<StepResult> steps, List<HistogramArtifact>? histograms, Func<VectorRunInfo, VectorRunInfo> fill)
@@ -261,6 +254,44 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
                 Vector = info
             });
         }
+
+        if (constrained is not null)
+        {
+            try
+            {
+                return [Result("constrained", [loadStep.Step, .. recallSteps], null, i => i with { Load = loadInfo, Recall = recallInfo, Constrained = constrained })];
+            }
+            finally
+            {
+                if (settings.KeepData == false)
+                    await target.CleanupAsync();
+            }
+        }
+
+        // readers: the closed loop finds the sustained rate, then the fixed-rate runner runs at it.
+        var readersWorkload = new VectorQueryWorkload(queries.Queries, target, k, effort);
+        var closed = await RampAsync(target.Transport, readersWorkload, url, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
+        var sustained = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
+        var fixedRate = await RampAsync(target.Transport, readersWorkload, url, database, LoadShape.Rate, sustained, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
+        var readerSteps = closed.Steps.Concat(fixedRate.Steps).ToList();
+        var readersInfo = new VectorReadersInfo(scenario.Readers, closed.Steps[^1].Throughput, sustained, readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)));
+
+        // filtered
+        var filter = new VectorFilter(target.FilterField, VectorSplit.LabelIn);
+        var (filteredStep, filteredIds, _) = await SequentialAsync(target, queries.Queries, k, effort, filter, nodeExporter, ct);
+        var rowCounts = filteredIds.Select(r => r.Count).ToList();
+        var filteredInfo = new VectorFilteredInfo(scenario.FilterSelectivity, split.LabelledCount,
+            "drawn with the scenario seed over the loaded base; no set here ships labels",
+            rowCounts, rowCounts.Count(c => c < k),
+            filteredIds.Select((r, q) => VectorRunMath.Recall(r, filteredTruth[q], k)).Average(),
+            $"truth is the exact top {k} within the label; a query that returned fewer than {k} rows keeps its count and scores its missing rows as misses"
+            + (productSettings.TryGetValue("hnsw.iterative_scan", out var iterative) ? $"; hnsw.iterative_scan={iterative}, hnsw.max_scan_tuples={productSettings["hnsw.max_scan_tuples"]} as the server reports them" : ""));
+
+        // under-insert
+        var (underInsertRamp, underInsertInfo) = await UnderInsertAsync(target, queries.Queries, quietTopK, slice, set.Metric, effort, inForce.Recall, url, database, warmup, duration, nodeExporter, ct);
+
+        // cross-check: last, because it replaces the index the other runs measured.
+        var crossCheck = await CrossCheckAsync(target, set, queries, slice, split.LoadedCount, productSettings, datasetInfo.TruthSource, nodeExporter, ct);
 
         try
         {
@@ -302,7 +333,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         var knob = PgVectorTransport.SearchKnobs[check.PublishedIndexKind];
         var defaultBuild = VectorBuildState.DefaultBuild(check.PublishedIndexKind, check.PublishedBuildOptions, defaultSettings["indexdef"]);
         var definition = await pgvector.ReplaceIndexAsync(check.PublishedIndexKind, check.PublishedBuildOptions, check.BuildSession, ct);
-        var (_, ids) = await SequentialAsync(target, queries.Queries, scenario.K, new SearchEffort(knob, check.PublishedSearchValue), filter: null, nodeExporter, ct);
+        var (_, ids, _) = await SequentialAsync(target, queries.Queries, scenario.K, new SearchEffort(knob, check.PublishedSearchValue), filter: null, nodeExporter, ct);
         var measured = ids.Select((r, q) => VectorRunMath.Recall(r, queries.Neighbors[q], scenario.K)).Average();
         var distance = Math.Abs(measured - check.PublishedRecall);
         var verdict = scenario.VectorCountCap is { } cap
@@ -426,15 +457,17 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         return (step, peakMemory);
     }
 
-    /// <summary>Runs every query once, in order, and keeps the ids each returned.</summary>
-    private static async Task<(StepResult Step, List<IReadOnlyList<string>> Ids)> SequentialAsync(IVectorTarget target, float[][] queries, int k, SearchEffort effort,
+    /// <summary>Runs every query once, in order, and keeps the ids and the latency in milliseconds of each.</summary>
+    private static async Task<(StepResult Step, List<IReadOnlyList<string>> Ids, List<double> LatenciesMs)> SequentialAsync(IVectorTarget target, float[][] queries, int k, SearchEffort effort,
         VectorFilter? filter, NodeExporterClient? nodeExporter, CancellationToken ct)
     {
         var ids = new List<IReadOnlyList<string>>(queries.Length);
+        var latencies = new List<double>(queries.Length);
         var (step, _) = await BracketAsync(nodeExporter, async () =>
         {
             foreach (var query in queries)
             {
+                var started = Stopwatch.GetTimestamp();
                 var result = await target.Transport.ExecuteAsync(new VectorSearchOperation
                 {
                     QueryVector = query,
@@ -444,6 +477,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
                     Effort = effort,
                     Filter = filter
                 }, ct);
+                latencies.Add(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 if (result.IsSuccess == false)
                     throw new InvalidOperationException($"{target.Transport.ProductName} vector search failed: {result.ErrorDetails}");
                 var returned = result.NeighborIds ?? throw new InvalidOperationException($"{target.Transport.ProductName} returned no neighbour ids.");
@@ -451,7 +485,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             }
             return queries.Length;
         }, ct);
-        return (step, ids);
+        return (step, ids, latencies);
     }
 
     private static StepResult StepFrom(double throughput, int concurrency, TimeSpan elapsed, double clientCpu, NodeExporterWindow? window) => new()
@@ -491,6 +525,42 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
     private static bool IsContainerized(string target) =>
         new[] { Ravendb7Target, PgVectorTransport.Target, ElasticsearchVectorTransport.Target }.Contains(target, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The id of the local container that serves the endpoint. Throws <see cref="ConstrainedRunRefusedException"/> for a target
+    /// that is not containerized, or an endpoint no local container publishes, because the harness cannot limit its memory.
+    /// </summary>
+    private static string RequireLimitableContainer(string target, string url)
+    {
+        if (IsContainerized(target) == false)
+            throw new ConstrainedRunRefusedException($"The constrained run limits a database container's memory; target '{target}' is not containerized. Run it against ravendb-7, pgvector or elasticsearch.");
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) == false || uri.Port <= 0 || uri.IsLoopback == false)
+            throw new ConstrainedRunRefusedException($"The constrained run cannot limit the memory of the caller-supplied endpoint '{(uri is null ? "--url" : $"{uri.Host}:{uri.Port}")}': it is not a localhost port a local container publishes.");
+        var endpoint = $"{uri.Host}:{uri.Port}";
+        return new DockerDatabaseContainerLocator().LocateId(uri.Port)
+               ?? throw new ConstrainedRunRefusedException($"The constrained run cannot limit the memory of the endpoint '{endpoint}': no local Docker container publishes port {uri.Port}.");
+    }
+
+    /// <summary>Waits until a fresh target built for the restarted container answers its version request.</summary>
+    private static async Task WaitForRestartAsync(Func<IVectorTarget> probe, CancellationToken ct)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            using var target = probe();
+            try
+            {
+                await target.Transport.GetServerVersionAsync();
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && deadline.Elapsed < RestartTimeout)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            }
+        }
+    }
+
+    private static readonly TimeSpan RestartTimeout = TimeSpan.FromMinutes(3);
 
     private static string StripPrefix(string id, string prefix) =>
         id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)

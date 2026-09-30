@@ -91,6 +91,13 @@ public static class VectorRunMath
         return result;
     }
 
+    /// <summary>The nearest-rank 99th percentile of the latencies.</summary>
+    public static double P99(IReadOnlyCollection<double> latencies) =>
+        latencies.Count == 0 ? throw new ArgumentException("No latency to rank.", nameof(latencies)) : latencies.Order().ElementAt((int)Math.Ceiling(0.99 * latencies.Count) - 1);
+
+    /// <summary>The constrained run's memory limit: the fraction of the raw float32 set size, vectors x dimensions x 4 bytes.</summary>
+    public static long ConstrainedLimit(long vectors, int dimensions, double fraction) => (long)Math.Floor(vectors * (double)dimensions * sizeof(float) * fraction);
+
     /// <summary>recall@k of one result against one truth list; a short result counts k truth ids.</summary>
     public static double Recall(IReadOnlyList<string> returned, IReadOnlyList<string> truth, int k)
     {

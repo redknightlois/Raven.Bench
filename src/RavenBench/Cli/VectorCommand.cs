@@ -39,6 +39,10 @@ public sealed class VectorSettings : CommandSettings
     [Description("node_exporter metrics endpoint on the database host (e.g. http://dbhost:9100/metrics).")]
     public string? NodeExporterUrl { get; init; }
 
+    [CommandOption("--constrained")]
+    [Description("Runs load and recall only, with the database container's memory limited to the scenario's ConstrainedMemoryFraction of the raw set size.")]
+    public bool Constrained { get; init; }
+
     [CommandOption("--keep-data")]
     [Description("Leave the loaded database behind instead of removing it.")]
     public bool KeepData { get; init; }
@@ -91,6 +95,9 @@ public sealed class VectorSettings : CommandSettings
     [CommandOption("--ravendb-embedding-type")]
     [Description("Overrides the scenario key RavenDbEmbeddingType.")]
     public string? RavenDbEmbeddingType { get; init; }
+    [CommandOption("--constrained-memory-fraction")]
+    [Description("Overrides the scenario key ConstrainedMemoryFraction.")]
+    public double? ConstrainedMemoryFraction { get; init; }
 }
 
 internal static class VectorScenarioResolver
@@ -131,14 +138,15 @@ internal static class VectorScenarioResolver
             Warmup = PickText("--warmup", s.Warmup, file.Warmup),
             Duration = PickText("--duration", s.Duration, file.Duration),
             ElasticsearchIndexKind = PickText("--elasticsearch-index-kind", s.ElasticsearchIndexKind, file.ElasticsearchIndexKind),
-            RavenDbEmbeddingType = PickText("--ravendb-embedding-type", s.RavenDbEmbeddingType, file.RavenDbEmbeddingType)
+            RavenDbEmbeddingType = PickText("--ravendb-embedding-type", s.RavenDbEmbeddingType, file.RavenDbEmbeddingType),
+            ConstrainedMemoryFraction = Pick("--constrained-memory-fraction", s.ConstrainedMemoryFraction, file.ConstrainedMemoryFraction)
         };
         resolved.Validate();
         return (resolved, overrides);
     }
 }
 
-/// <summary>Runs load, recall, readers, filtered and under-insert against one target, one result per run.</summary>
+/// <summary>Runs load, recall, readers, filtered and under-insert against one target, one result per run, or the constrained run alone.</summary>
 public sealed class VectorCommand : AsyncCommand<VectorSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, VectorSettings settings)
