@@ -121,6 +121,27 @@ public class VectorRunScriptTests
         }
     }
 
+    [RequiresBashFact]
+    public void An_Elasticsearch_Run_Refuses_A_Port_That_Already_Answers()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port.ToString(CultureInfo.InvariantCulture);
+        var bin = FakeBin(FakeDocker.ComposeFails);
+        try
+        {
+            var env = new Dictionary<string, string> { ["PATH"] = bin, ["HOME"] = bin, ["FAKE_LOG"] = Path.Combine(bin, "calls.log"), ["ELASTICSEARCH_PORT"] = port };
+            var answering = RunBash(Path.Combine(Folder("vector"), "run.sh"), ["--target", "elasticsearch"], env, clear: true);
+            answering.ExitCode.Should().NotBe(0, "a fresh cluster is the default, so an answering port is not reused");
+            answering.Output.Should().Contain("ELASTICSEARCH_PORT").And.Contain("fresh elasticsearch container");
+            Calls(bin).Should().NotContain("dotnet", "the refusal comes before the harness runs");
+        }
+        finally
+        {
+            Directory.Delete(bin, recursive: true);
+        }
+    }
+
     private enum FakeDocker
     {
         Missing,

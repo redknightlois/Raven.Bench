@@ -19,8 +19,27 @@
       "Low": 10,
       "Default": 40,
       "High": 400
+    },
+    "elasticsearch-hnsw": {
+      "Knob": "num_candidates",
+      "Low": 10,
+      "Default": 15,
+      "High": 150
+    },
+    "elasticsearch-bbq_hnsw": {
+      "Knob": "num_candidates",
+      "Low": 10,
+      "Default": 15,
+      "High": 150
+    },
+    "elasticsearch-bbq_disk": {
+      "Knob": "visit_percentage",
+      "Low": 0.5,
+      "Default": 1,
+      "High": 10
     }
   },
+  "ElasticsearchIndexKind": "hnsw",
   "Readers": 1000,
   "FilterSelectivity": 0.05,
   "InsertRate": 500,

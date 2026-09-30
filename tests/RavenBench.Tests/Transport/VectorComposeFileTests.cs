@@ -23,4 +23,18 @@ public class VectorComposeFileTests
         foreach (var setting in new[] { "shared_buffers", "maintenance_work_mem", "max_parallel_maintenance_workers", "command:", "shm_size", "-c " })
             Assert.DoesNotMatch(new Regex(@"^\s*[^#\s].*" + Regex.Escape(setting), RegexOptions.Multiline), compose);
     }
+
+    [Fact]
+    public void The_Elasticsearch_Service_Is_A_Pinned_Single_Unsecured_Trial_Node_With_Image_Defaults()
+    {
+        var compose = Compose();
+        Assert.Matches(new Regex(@"image:\s*elasticsearch:9\.5\.\d+\s"), compose);
+        Assert.Contains("discovery.type: single-node", compose);
+        Assert.Contains("xpack.security.enabled: \"false\"", compose);
+        Assert.Contains("xpack.license.self_generated.type: \"${ELASTICSEARCH_LICENSE:-trial}\"", compose);
+        Assert.Contains("${ELASTICSEARCH_DATA_DIR:-vector-elasticsearch-data}:/usr/share/elasticsearch/data", compose);
+        Assert.Contains("ES_JAVA_OPTS: \"${ELASTICSEARCH_JAVA_OPTS:-}\"", compose);
+        foreach (var setting in new[] { "-Xmx", "-Xms", "cluster.routing.allocation.disk" })
+            Assert.DoesNotContain(setting, compose);
+    }
 }

@@ -579,12 +579,12 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
         {
             if (effort is { } requested)
             {
-                if (_applied.TryGetValue(requested.Knob, out var current) == false || current != requested.Value)
+                if (_applied.TryGetValue(requested.Knob, out var current) == false || current != requested.WholeValue)
                 {
                     await Connection.QueryTypedAsync(ApplyEffortSql, PgParameters.Create(
                         PgParameter.Create(PgType.Text, requested.Knob, PgParameterFormat.Binary),
-                        PgParameter.Create(PgType.Text, requested.Value.ToString(CultureInfo.InvariantCulture), PgParameterFormat.Binary)), ct).ConfigureAwait(false);
-                    _applied[requested.Knob] = requested.Value;
+                        PgParameter.Create(PgType.Text, requested.WholeValue.ToString(CultureInfo.InvariantCulture), PgParameterFormat.Binary)), ct).ConfigureAwait(false);
+                    _applied[requested.Knob] = requested.WholeValue;
                 }
                 return requested;
             }

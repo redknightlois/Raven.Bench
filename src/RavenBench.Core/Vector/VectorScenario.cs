@@ -29,15 +29,15 @@ public sealed class InsertSliceTooLargeException(string message) : Exception(mes
 public sealed record VectorEffortSettings
 {
     public required string Knob { get; init; }
-    public required int Low { get; init; }
+    public required double Low { get; init; }
 
     /// <summary>The vendor's shipped default for the knob.</summary>
-    public required int Default { get; init; }
+    public required double Default { get; init; }
 
-    public required int High { get; init; }
+    public required double High { get; init; }
 
     [JsonIgnore]
-    public IReadOnlyList<(string Label, int Value)> All => [("low", Low), ("default", Default), ("high", High)];
+    public IReadOnlyList<(string Label, double Value)> All => [("low", Low), ("default", Default), ("high", High)];
 }
 
 /// <summary>
@@ -111,7 +111,7 @@ public sealed record VectorScenario
 
     public required double RecallThreshold { get; init; }
 
-    /// <summary>The effort settings per product family: "ravendb" and "pgvector".</summary>
+    /// <summary>The effort settings per product family: "ravendb", "pgvector", and "elasticsearch-&lt;index kind&gt;" for each Elasticsearch index kind.</summary>
     public required Dictionary<string, VectorEffortSettings> Efforts { get; init; }
 
     /// <summary>The concurrent readers; a pgvector pool holds one connection per reader.</summary>
@@ -125,6 +125,9 @@ public sealed record VectorScenario
     public required string Warmup { get; init; }
     public required string Duration { get; init; }
     public required VectorCrossCheck CrossCheck { get; init; }
+
+    /// <summary>The Elasticsearch <c>index_options.type</c> the benchmark sends: hnsw, bbq_hnsw or bbq_disk.</summary>
+    public required string ElasticsearchIndexKind { get; init; }
 
     /// <summary>The vectors the under-insert run inserts: the insert rate over the measured duration and its warmup.</summary>
     public int InsertCount(TimeSpan warmup, TimeSpan duration) => (int)Math.Ceiling(InsertRate * (warmup + duration).TotalSeconds);
@@ -171,6 +174,8 @@ public sealed record VectorScenario
         Require(CrossCheck.Tolerance > 0, "CrossCheck.Tolerance", CrossCheck.Tolerance, "a positive tolerance");
         Require(PgVectorTransport.SearchKnobs.ContainsKey(CrossCheck.PublishedIndexKind), "CrossCheck.PublishedIndexKind", CrossCheck.PublishedIndexKind,
             $"one of {string.Join(", ", PgVectorTransport.SearchKnobs.Keys)}");
+        Require(Transport.ElasticsearchIndexKind.All.Any(k => k.Name == ElasticsearchIndexKind), nameof(ElasticsearchIndexKind), ElasticsearchIndexKind,
+            $"one of {string.Join(", ", Transport.ElasticsearchIndexKind.All.Select(k => k.Name))}");
         Require(CrossCheck.PublishedSearchValue > 0, "CrossCheck.PublishedSearchValue", CrossCheck.PublishedSearchValue, "a positive knob value");
     }
 

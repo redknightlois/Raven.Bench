@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using FluentAssertions;
 using RavenBench.Cli;
 using RavenBench.Core.Diagnostics;
+using RavenBench.Core.Transport;
 using RavenBench.Core.Vector;
 using RavenBench.Core.Workload;
 using RavenBench.VectorBench;
@@ -98,6 +99,37 @@ public class VectorScenarioTests
     }
 
     [Fact]
+    public void The_Shipped_Scenario_Names_Each_Elasticsearch_Kind_By_Its_Own_Knob()
+    {
+        var scenario = VectorScenario.Load(ShippedScenario);
+        foreach (var kind in ElasticsearchIndexKind.All)
+        {
+            using var target = VectorRunner.BuildTarget("elasticsearch", "http://localhost:1", "unused", VectorMetric.Cosine, 8, 1, scenario with { ElasticsearchIndexKind = kind.Name });
+            scenario.EffortsFor(target.EffortFamily).Knob.Should().Be(kind.Knob).And.Be(target.Effort(1).Knob);
+        }
+        scenario.EffortsFor("elasticsearch-hnsw").Knob.Should().Be(ElasticsearchIndexKind.CandidatesKnob);
+        scenario.EffortsFor("elasticsearch-bbq_disk").Knob.Should().Be(ElasticsearchIndexKind.VisitKnob);
+    }
+
+    [Fact]
+    public void The_Index_Kind_Override_Is_Recorded()
+    {
+        var file = VectorScenario.Load(ShippedScenario);
+        var (scenario, overrides) = VectorScenarioResolver.Resolve(file, new VectorSettings { ElasticsearchIndexKind = "bbq_disk" },
+            ["vector", "--elasticsearch-index-kind", "bbq_disk"]);
+        scenario.ElasticsearchIndexKind.Should().Be("bbq_disk");
+        overrides.Should().Contain("--elasticsearch-index-kind", "bbq_disk");
+    }
+
+    [Fact]
+    public void An_Unknown_Index_Kind_Fails_By_Key()
+    {
+        var file = VectorScenario.Load(ShippedScenario);
+        var act = () => VectorScenarioResolver.Resolve(file, new VectorSettings { ElasticsearchIndexKind = "int8_hnsw" }, ["vector", "--elasticsearch-index-kind", "int8_hnsw"]);
+        act.Should().Throw<VectorScenarioException>().WithMessage("*ElasticsearchIndexKind*int8_hnsw*");
+    }
+
+    [Fact]
     public void An_Override_Outside_Its_Domain_Fails_By_Key()
     {
         var file = VectorScenario.Load(ShippedScenario);
@@ -108,14 +140,14 @@ public class VectorScenarioTests
     [Fact]
     public void A_Target_That_Cannot_Serve_The_Metric_Is_Refused_By_Name_Before_Load()
     {
-        var act = () => VectorRunner.BuildTarget("ravendb", "http://localhost:1", "unused", VectorMetric.L2, 8, 1);
+        var act = () => VectorRunner.BuildTarget("ravendb", "http://localhost:1", "unused", VectorMetric.L2, 8, 1, VectorScenario.Load(ShippedScenario));
         act.Should().Throw<UnsupportedVectorMetricException>().Where(e => e.Metric == VectorMetric.L2).WithMessage("*L2*");
     }
 
     [Fact]
     public void An_Unknown_Target_Or_Set_Fails_By_Name()
     {
-        FluentActions.Invoking(() => VectorRunner.BuildTarget("elastic", "x", "y", VectorMetric.Cosine, 8, 1))
+        FluentActions.Invoking(() => VectorRunner.BuildTarget("elastic", "x", "y", VectorMetric.Cosine, 8, 1, VectorScenario.Load(ShippedScenario)))
             .Should().Throw<VectorScenarioException>().WithMessage("*elastic*");
         FluentActions.Invoking(() => VectorRunner.ResolveSet("nope"))
             .Should().Throw<VectorScenarioException>().WithMessage("*nope*");
