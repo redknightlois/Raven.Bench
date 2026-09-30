@@ -152,14 +152,16 @@ public class ElasticsearchVectorTransportMappingTests
     {
         var scenario = VectorScenario.Load(System.IO.Path.Combine(RepositoryRootLocator.Find(), "benchmarks", "vector", "scenario.json"));
         var labels = new List<string>();
-        using (var t = VectorRunner.BuildTarget("ravendb", "http://localhost:1", "x", VectorMetric.Cosine, 8, 1, scenario))
-            labels.Add("ravendb " + t.VectorStorage);
+        foreach (var type in VectorScenario.RavenDbEmbeddingTypes)
+            using (var t = VectorRunner.BuildTarget("ravendb", "http://localhost:1", "x", VectorMetric.Cosine, 8, 1, scenario with { RavenDbEmbeddingType = type }))
+                labels.Add("ravendb " + t.VectorStorage);
         foreach (var kind in ElasticsearchIndexKind.All)
             using (var t = VectorRunner.BuildTarget("elasticsearch", "http://localhost:1", "x", VectorMetric.Cosine, 8, 1, scenario with { ElasticsearchIndexKind = kind.Name }))
                 labels.Add("elasticsearch " + t.VectorStorage);
         labels.Add("pgvector float32, unquantized");
 
         labels.Should().OnlyHaveUniqueItems().And.OnlyContain(l => l.Contains("unquantized") || l.Contains(", quantized"));
+        labels.Should().Contain("ravendb float32, unquantized", "the Single row keeps its storage label");
     }
 
     private static VectorSearchOperation Search(SearchEffort effort) => new() { QueryVector = [1f, 0f], FieldName = "embedding", TopK = 10, Effort = effort };

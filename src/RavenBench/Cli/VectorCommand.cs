@@ -88,6 +88,9 @@ public sealed class VectorSettings : CommandSettings
     [CommandOption("--elasticsearch-index-kind")]
     [Description("Overrides the scenario key ElasticsearchIndexKind.")]
     public string? ElasticsearchIndexKind { get; init; }
+    [CommandOption("--ravendb-embedding-type")]
+    [Description("Overrides the scenario key RavenDbEmbeddingType.")]
+    public string? RavenDbEmbeddingType { get; init; }
 }
 
 internal static class VectorScenarioResolver
@@ -127,7 +130,8 @@ internal static class VectorScenarioResolver
             UnderInsertQueryRate = Pick("--under-insert-query-rate", s.UnderInsertQueryRate, file.UnderInsertQueryRate),
             Warmup = PickText("--warmup", s.Warmup, file.Warmup),
             Duration = PickText("--duration", s.Duration, file.Duration),
-            ElasticsearchIndexKind = PickText("--elasticsearch-index-kind", s.ElasticsearchIndexKind, file.ElasticsearchIndexKind)
+            ElasticsearchIndexKind = PickText("--elasticsearch-index-kind", s.ElasticsearchIndexKind, file.ElasticsearchIndexKind),
+            RavenDbEmbeddingType = PickText("--ravendb-embedding-type", s.RavenDbEmbeddingType, file.RavenDbEmbeddingType)
         };
         resolved.Validate();
         return (resolved, overrides);

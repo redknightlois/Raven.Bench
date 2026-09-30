@@ -100,7 +100,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
     public static IVectorTarget BuildTarget(string target, string url, string database, VectorMetric metric, int dimensions, int concurrency, VectorScenario scenario)
     {
         if (string.Equals(target, RavendbTarget, StringComparison.OrdinalIgnoreCase) || string.Equals(target, Ravendb7Target, StringComparison.OrdinalIgnoreCase))
-            return new RavenDbVectorTarget(url, database, metric);
+            return new RavenDbVectorTarget(url, database, metric, scenario.RavenDbEmbeddingType);
         if (string.Equals(target, PgVectorTransport.Target, StringComparison.OrdinalIgnoreCase))
             return new PgVectorTarget(new PgVectorTransport(url, database, concurrency, metric, dimensions));
         if (string.Equals(target, ElasticsearchVectorTransport.Target, StringComparison.OrdinalIgnoreCase))

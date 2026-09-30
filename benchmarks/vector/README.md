@@ -53,7 +53,7 @@ For Elasticsearch, `filtered` passes the label in the kNN `filter` clause, so th
 
 ## Quantized rows
 
-`VectorStorage` and `RowLabel` name the quantization on every row, so a quantized row never reads as a float32 row. The Elasticsearch `bbq_hnsw` and `bbq_disk` rows are quantized; the RavenDB and pgvector rows are float32.
+`VectorStorage` and `RowLabel` name the quantization on every row, so a quantized row never reads as a float32 row. The scenario key `RavenDbEmbeddingType` (`--ravendb-embedding-type`) sets the RavenDB destination embedding type: `Single` (the default, float32, the rows as before), `Int8` or `Binary`. The Elasticsearch `bbq_hnsw` and `bbq_disk` rows and the RavenDB `Int8` and `Binary` rows are the quantized comparison.
 
 ## The three Docker situations
 
