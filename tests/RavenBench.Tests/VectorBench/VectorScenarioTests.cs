@@ -112,21 +112,25 @@ public class VectorScenarioTests
     }
 
     [Fact]
-    public void The_Index_Kind_Override_Is_Recorded()
+    public void The_Index_Kind_And_Embedding_Type_Overrides_Are_Recorded()
     {
         var file = VectorScenario.Load(ShippedScenario);
-        var (scenario, overrides) = VectorScenarioResolver.Resolve(file, new VectorSettings { ElasticsearchIndexKind = "bbq_disk" },
-            ["vector", "--elasticsearch-index-kind", "bbq_disk"]);
+        var (scenario, overrides) = VectorScenarioResolver.Resolve(file, new VectorSettings { ElasticsearchIndexKind = "bbq_disk", RavenDbEmbeddingType = "Int8" },
+            ["vector", "--elasticsearch-index-kind", "bbq_disk", "--ravendb-embedding-type=Int8"]);
         scenario.ElasticsearchIndexKind.Should().Be("bbq_disk");
-        overrides.Should().Contain("--elasticsearch-index-kind", "bbq_disk");
+        scenario.RavenDbEmbeddingType.Should().Be("Int8");
+        overrides.Should().Contain("--elasticsearch-index-kind", "bbq_disk").And.Contain("--ravendb-embedding-type", "Int8");
     }
 
-    [Fact]
-    public void An_Unknown_Index_Kind_Fails_By_Key()
+    [Theory]
+    [InlineData("--elasticsearch-index-kind", "int8_hnsw", "ElasticsearchIndexKind")]
+    [InlineData("--ravendb-embedding-type", "Int4", "RavenDbEmbeddingType")]
+    public void An_Unknown_Index_Kind_Or_Embedding_Type_Fails_By_Key(string option, string value, string key)
     {
         var file = VectorScenario.Load(ShippedScenario);
-        var act = () => VectorScenarioResolver.Resolve(file, new VectorSettings { ElasticsearchIndexKind = "int8_hnsw" }, ["vector", "--elasticsearch-index-kind", "int8_hnsw"]);
-        act.Should().Throw<VectorScenarioException>().WithMessage("*ElasticsearchIndexKind*int8_hnsw*");
+        var settings = option == "--elasticsearch-index-kind" ? new VectorSettings { ElasticsearchIndexKind = value } : new VectorSettings { RavenDbEmbeddingType = value };
+        var act = () => VectorScenarioResolver.Resolve(file, settings, ["vector", option, value]);
+        act.Should().Throw<VectorScenarioException>().WithMessage($"*{key}*{value}*");
     }
 
     [Fact]

@@ -66,31 +66,45 @@ public interface IVectorTarget : IDisposable
 
 /// <summary>
 /// RavenDB over the raw HTTP transport, the published path. A search returns ids only, the same payload pgvector returns. The vectors are stored as float32 and the
-/// index holds them unquantized, with the build parameters left at the server defaults.
+/// index holds them in the destination embedding type the scenario names, with the build parameters left at the server defaults.
 /// </summary>
 public sealed class RavenDbVectorTarget : IVectorTarget
 {
     public const string CollectionName = PublishedSetImport.CollectionName;
-    private const string IndexName = "VectorBench/Float32";
+
+    private static readonly IReadOnlyDictionary<string, (VectorEmbeddingType Type, string IndexName, string Storage)> EmbeddingTypes =
+        new Dictionary<string, (VectorEmbeddingType, string, string)>(StringComparer.Ordinal)
+        {
+            ["Single"] = (VectorEmbeddingType.Single, "VectorBench/Float32", "float32, unquantized"),
+            ["Int8"] = (VectorEmbeddingType.Int8, "VectorBench/Int8", "int8, quantized"),
+            ["Binary"] = (VectorEmbeddingType.Binary, "VectorBench/Binary", "binary 1-bit, quantized")
+        };
 
     private readonly string _url;
     private readonly string _database;
     private readonly RawHttpTransport _transport;
+    private readonly VectorEmbeddingType _destination;
+    private readonly string _indexName;
 
-    public RavenDbVectorTarget(string url, string database, VectorMetric metric)
+    /// <param name="embeddingType">The destination embedding type: Single, Int8 or Binary; any other value is refused by name.</param>
+    public RavenDbVectorTarget(string url, string database, VectorMetric metric, string embeddingType)
     {
         UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, metric);
+        if (EmbeddingTypes.TryGetValue(embeddingType, out var type) == false)
+            throw new ArgumentException($"RavenDB destination embedding type '{embeddingType}' is not one of {string.Join(", ", EmbeddingTypes.Keys)}.", nameof(embeddingType));
+        (_destination, _indexName, VectorStorage) = type;
         _url = url;
         _database = database;
         _transport = new RawHttpTransport(url, database, CompressionMode.Identity, HttpVersion.Version11) { VectorSearchIdsOnly = true };
     }
 
+    public string VectorStorage { get; }
+
     public IYcsbTransport Transport => _transport;
     public string EffortFamily => "ravendb";
     public string FieldName => "Vector";
     public string FilterField => "Label";
-    public string? ExpectedIndex => IndexName;
-    public string VectorStorage => "float32, unquantized";
+    public string? ExpectedIndex => _indexName;
     public string IdPrefix => PublishedSetImport.DocumentIdPrefix;
     public string InsertVisibility => "approximate: RavenDB acknowledges a write before its vector index contains it, and the queries do not wait for indexing, so an acknowledged insert still being indexed counts in the truth and scores as a miss";
     public DurabilityParity Durability { get; } = new() { Setting = "durability", Value = "ravendb-default" };
@@ -113,7 +127,7 @@ public sealed class RavenDbVectorTarget : IVectorTarget
 
         await VectorIndexHelper.CreateAndWaitForIndexAsync(store, new IndexDefinition
         {
-            Name = IndexName,
+            Name = _indexName,
             Maps = { $"from v in docs.{CollectionName} select new {{ Vector = CreateVector(v.Embedding), v.Label }}" },
             Fields =
             {
@@ -122,7 +136,7 @@ public sealed class RavenDbVectorTarget : IVectorTarget
                     Vector = new VectorOptions
                     {
                         SourceEmbeddingType = VectorEmbeddingType.Single,
-                        DestinationEmbeddingType = VectorEmbeddingType.Single
+                        DestinationEmbeddingType = _destination
                     }
                 }
             }
@@ -147,12 +161,12 @@ public sealed class RavenDbVectorTarget : IVectorTarget
     public async Task<IReadOnlyDictionary<string, string>> ReportedSettingsAsync(CancellationToken ct)
     {
         using var store = HttpHelper.Create(_url, _database, HttpVersion.Version11);
-        var index = await store.Maintenance.SendAsync(new GetIndexOperation(IndexName), ct)
-                    ?? throw new InvalidOperationException($"Index '{IndexName}' does not exist; load before reading the settings.");
+        var index = await store.Maintenance.SendAsync(new GetIndexOperation(_indexName), ct)
+                    ?? throw new InvalidOperationException($"Index '{_indexName}' does not exist; load before reading the settings.");
         var vector = index.Fields["Vector"].Vector;
         var settings = new Dictionary<string, string>
         {
-            ["index"] = IndexName,
+            ["index"] = _indexName,
             ["index.map"] = index.Maps.Single(),
             ["index.SearchEngineType"] = index.Configuration.TryGetValue("Indexing.Static.SearchEngineType", out var engine) ? engine : "server-default",
             ["vector.DestinationEmbeddingType"] = vector.DestinationEmbeddingType.ToString()

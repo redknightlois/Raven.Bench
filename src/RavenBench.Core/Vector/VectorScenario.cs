@@ -129,6 +129,11 @@ public sealed record VectorScenario
     /// <summary>The Elasticsearch <c>index_options.type</c> the benchmark sends: hnsw, bbq_hnsw or bbq_disk.</summary>
     public required string ElasticsearchIndexKind { get; init; }
 
+    /// <summary>The RavenDB destination embedding type of the vector field: Single, Int8 or Binary.</summary>
+    public required string RavenDbEmbeddingType { get; init; }
+
+    public static readonly IReadOnlyList<string> RavenDbEmbeddingTypes = ["Single", "Int8", "Binary"];
+
     /// <summary>The vectors the under-insert run inserts: the insert rate over the measured duration and its warmup.</summary>
     public int InsertCount(TimeSpan warmup, TimeSpan duration) => (int)Math.Ceiling(InsertRate * (warmup + duration).TotalSeconds);
 
@@ -176,6 +181,7 @@ public sealed record VectorScenario
             $"one of {string.Join(", ", PgVectorTransport.SearchKnobs.Keys)}");
         Require(Transport.ElasticsearchIndexKind.All.Any(k => k.Name == ElasticsearchIndexKind), nameof(ElasticsearchIndexKind), ElasticsearchIndexKind,
             $"one of {string.Join(", ", Transport.ElasticsearchIndexKind.All.Select(k => k.Name))}");
+        Require(RavenDbEmbeddingTypes.Contains(RavenDbEmbeddingType), nameof(RavenDbEmbeddingType), RavenDbEmbeddingType, $"one of {string.Join(", ", RavenDbEmbeddingTypes)}");
         Require(CrossCheck.PublishedSearchValue > 0, "CrossCheck.PublishedSearchValue", CrossCheck.PublishedSearchValue, "a positive knob value");
     }
 

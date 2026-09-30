@@ -40,6 +40,7 @@
     }
   },
   "ElasticsearchIndexKind": "hnsw",
+  "RavenDbEmbeddingType": "Single",
   "Readers": 1000,
   "FilterSelectivity": 0.05,
   "InsertRate": 500,
