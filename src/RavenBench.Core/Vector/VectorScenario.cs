@@ -132,6 +132,9 @@ public sealed record VectorScenario
     /// <summary>The RavenDB destination embedding type of the vector field: Single, Int8 or Binary.</summary>
     public required string RavenDbEmbeddingType { get; init; }
 
+    /// <summary>The constrained run limits the database container's memory to this fraction of the raw set size (vectors x dimensions x 4 bytes).</summary>
+    public required double ConstrainedMemoryFraction { get; init; }
+
     public static readonly IReadOnlyList<string> RavenDbEmbeddingTypes = ["Single", "Int8", "Binary"];
 
     /// <summary>The vectors the under-insert run inserts: the insert rate over the measured duration and its warmup.</summary>
@@ -182,6 +185,7 @@ public sealed record VectorScenario
         Require(Transport.ElasticsearchIndexKind.All.Any(k => k.Name == ElasticsearchIndexKind), nameof(ElasticsearchIndexKind), ElasticsearchIndexKind,
             $"one of {string.Join(", ", Transport.ElasticsearchIndexKind.All.Select(k => k.Name))}");
         Require(RavenDbEmbeddingTypes.Contains(RavenDbEmbeddingType), nameof(RavenDbEmbeddingType), RavenDbEmbeddingType, $"one of {string.Join(", ", RavenDbEmbeddingTypes)}");
+        Require(ConstrainedMemoryFraction is > 0 and < 1, nameof(ConstrainedMemoryFraction), ConstrainedMemoryFraction, "a fraction in (0, 1)");
         Require(CrossCheck.PublishedSearchValue > 0, "CrossCheck.PublishedSearchValue", CrossCheck.PublishedSearchValue, "a positive knob value");
     }
 

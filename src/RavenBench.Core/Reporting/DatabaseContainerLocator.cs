@@ -39,7 +39,55 @@ public sealed class DatabaseContainerLocatorException : Exception
 /// </summary>
 public sealed class DockerDatabaseContainerLocator
 {
-    public DatabaseContainerInfo? Locate(int hostPort)
+    public DatabaseContainerInfo? Locate(int hostPort) =>
+        Find(hostPort) is { } found ? new DatabaseContainerInfo { ImageReference = found.Image, ImageDigest = ReadRepoDigest(found.Id) } : null;
+
+    /// <summary>The id of the running container that publishes the host port, or null when Docker is not usable or no container maps it.</summary>
+    public string? LocateId(int hostPort) => Find(hostPort)?.Id;
+
+    /// <summary>
+    /// Sets the container's memory and memory-plus-swap limits and restarts it, so the server sizes itself under them.
+    /// A memory-plus-swap equal to the memory keeps swap from softening the limit; -1 lifts the swap limit.
+    /// Docker refuses a memory above the swap limit in force when the same update lifts the swap limit, so a lift first
+    /// sets both to the new memory.
+    /// </summary>
+    public void LimitMemoryAndRestart(string containerId, long memory, long memorySwap)
+    {
+        var commands = new List<string[]>();
+        if (memorySwap == -1)
+            commands.Add(["update", "--memory", Invariant(memory), "--memory-swap", Invariant(memory), containerId]);
+        commands.Add(["update", "--memory", Invariant(memory), "--memory-swap", Invariant(memorySwap), containerId]);
+        commands.Add(["restart", containerId]);
+        foreach (var command in commands)
+        {
+            var result = RunDocker(command);
+            if (result.ExitCode != 0)
+                throw new DatabaseContainerLocatorException($"docker {string.Join(' ', command)} failed: {Describe(result)}");
+        }
+    }
+
+    /// <summary>The memory and memory-plus-swap limits the container reports; 0 means no limit.</summary>
+    public (long Memory, long MemorySwap) ReadMemoryLimits(string containerId)
+    {
+        var inspect = RunDocker("inspect", "--format", "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}", containerId);
+        var fields = inspect.StandardOutput.Split(' ');
+        if (inspect.ExitCode != 0 || fields.Length != 2 || long.TryParse(fields[0], out var memory) == false || long.TryParse(fields[1], out var swap) == false)
+            throw new DatabaseContainerLocatorException($"Could not read the memory limit of container '{containerId}': {Describe(inspect)}");
+        return (memory, swap);
+    }
+
+    /// <summary>The total memory of the Docker host, as <c>docker info</c> reports it.</summary>
+    public long ReadHostMemory()
+    {
+        var info = RunDocker("info", "--format", "{{.MemTotal}}");
+        if (info.ExitCode != 0 || long.TryParse(info.StandardOutput.Trim(), out var total) == false)
+            throw new DatabaseContainerLocatorException($"Could not read the Docker host memory: {Describe(info)}");
+        return total;
+    }
+
+    private static string Invariant(long value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private (string Id, string Image)? Find(int hostPort)
     {
         var containers = TryRunDocker("ps", "--no-trunc", "--format", "{{.ID}}\t{{.Image}}\t{{.Ports}}");
         if (containers == null || containers.Value.ExitCode != 0)
@@ -48,19 +96,8 @@ public sealed class DockerDatabaseContainerLocator
         foreach (var line in containers.Value.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var fields = line.Split('\t');
-            if (fields.Length < 3)
-                continue;
-
-            if (PublishesPort(fields[2], hostPort) == false)
-                continue;
-
-            var containerId = fields[0];
-            var imageReference = fields[1];
-            return new DatabaseContainerInfo
-            {
-                ImageReference = imageReference,
-                ImageDigest = ReadRepoDigest(containerId)
-            };
+            if (fields.Length >= 3 && PublishesPort(fields[2], hostPort))
+                return (fields[0], fields[1]);
         }
 
         return null;
@@ -136,3 +173,34 @@ public sealed class DockerDatabaseContainerLocator
     private static string Describe(HostCommand.Result result) =>
         string.IsNullOrWhiteSpace(result.StandardError) ? $"exit code {result.ExitCode}" : result.StandardError;
 }
+
+/// <summary>
+/// Limits one container's memory for the length of a run. Disposing restores the limits the container had,
+/// or the Docker host's total memory when it had none, because Docker cannot lift a memory limit once set.
+/// </summary>
+public sealed class ContainerMemoryLimit(string containerId) : IDisposable
+{
+    private readonly DockerDatabaseContainerLocator _docker = new();
+    private (long Memory, long MemorySwap)? _original;
+
+    public string ContainerId => containerId;
+
+    /// <summary>Sets memory and memory-plus-swap to the same value, restarts the container, and returns the limits it reports.</summary>
+    public (long Memory, long MemorySwap) Apply(long bytes)
+    {
+        _original ??= _docker.ReadMemoryLimits(containerId);
+        _docker.LimitMemoryAndRestart(containerId, bytes, bytes);
+        return _docker.ReadMemoryLimits(containerId);
+    }
+
+    public void Dispose()
+    {
+        if (_original is not { } original)
+            return;
+        if (original.Memory > 0)
+            _docker.LimitMemoryAndRestart(containerId, original.Memory, original.MemorySwap != 0 ? original.MemorySwap : -1);
+        else
+            _docker.LimitMemoryAndRestart(containerId, _docker.ReadHostMemory(), -1);
+    }
+}
+
