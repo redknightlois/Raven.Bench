@@ -182,22 +182,16 @@ public class LatencyRecorderTests
     }
 
     [Fact]
-    public void Histogram_Range_Exceeded_Throws_Meaningful_Exception()
+    public void A_Minutes_Late_Value_Records_And_Beyond_An_Hour_Throws()
     {
-        // INVARIANT: Recording beyond histogram range should fail-fast with clear error message
         var recorder = new LatencyRecorder(recordLatencies: true);
 
-        // Histogram is configured for 1µs to 60s (60,000,000µs)
-        // Recording a value beyond 60s should throw
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-        {
-            recorder.Record(70_000_000); // 70 seconds in microseconds
-        });
+        recorder.Record(90_000_000);
+        recorder.Snapshot().MaxMicros.Should().Be(90_000_000);
 
-        // Should have helpful error message
+        var exception = Assert.Throws<InvalidOperationException>(() => recorder.Record(LatencyRecorder.MaxTrackableMicros * 2));
         exception.Message.Should().Contain("exceeds histogram range");
-        exception.Message.Should().Contain("60,000,000");
-        exception.Message.Should().Contain("60s");
+        exception.Message.Should().Contain("1h");
     }
 
     [Fact]

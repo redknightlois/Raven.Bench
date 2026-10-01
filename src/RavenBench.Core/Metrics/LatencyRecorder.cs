@@ -20,7 +20,7 @@ namespace RavenBench.Core.Metrics;
 /// </remarks>
 public sealed class LatencyRecorder : IDisposable
 {
-    public const long MaxTrackableMicros = 60_000_000;
+    public const long MaxTrackableMicros = 3_600_000_000;
 
     private readonly bool _enabled;
     private readonly Recorder _recorder;
@@ -38,14 +38,13 @@ public sealed class LatencyRecorder : IDisposable
         {
             // Configure HDRHistogram:
             // - lowestDiscernibleValue: 1 µs (minimum measurable latency)
-            // - highestTrackableValue: 60 seconds in microseconds (1 minute max latency)
+            // - highestTrackableValue: 1 hour in microseconds; a rate-mode request is charged from its due time, so a backlog on a slow engine is legitimately minutes late
             // - significantDigits: 3 (0.1% precision across the range)
             //
-            // This configuration covers latencies from 1µs to 60s with high precision.
-            // If a latency exceeds 60s, the histogram will throw an exception (fail-fast).
+            // A latency beyond 1 hour is a measurement error and throws (fail-fast).
             _recorder = new Recorder(
                 lowestDiscernibleValue: 1,
-                highestTrackableValue: MaxTrackableMicros,  // 60 seconds in microseconds
+                highestTrackableValue: MaxTrackableMicros,
                 numberOfSignificantValueDigits: 3,
                 // Every worker thread records concurrently, so the histogram must be thread-safe.
                 histogramFactory: (instanceId, low, high, digits) => new LongConcurrentHistogram(low, high, digits));
@@ -83,9 +82,7 @@ public sealed class LatencyRecorder : IDisposable
         {
             // Histogram range exceeded - this indicates a configuration issue
             throw new InvalidOperationException(
-                $"Latency value {micros}µs exceeds histogram range (max: 60,000,000µs = 60s). " +
-                "This suggests either an extreme latency event or a measurement error. " +
-                "Consider increasing highestTrackableValue if latencies > 60s are expected.",
+                RangeMessage(micros),
                 ex);
         }
     }
@@ -131,9 +128,7 @@ public sealed class LatencyRecorder : IDisposable
         catch (IndexOutOfRangeException ex)
         {
             throw new InvalidOperationException(
-                $"Latency value {observedMicros}µs exceeds histogram range (max: 60,000,000µs = 60s). " +
-                "This suggests either an extreme latency event or a measurement error. " +
-                "Consider increasing highestTrackableValue if latencies > 60s are expected.",
+                RangeMessage(observedMicros),
                 ex);
         }
     }
@@ -154,6 +149,10 @@ public sealed class LatencyRecorder : IDisposable
 
         return new HistogramSnapshot(histogram, maxMicros);
     }
+
+    private static string RangeMessage(long micros) =>
+        $"Latency value {micros}µs exceeds histogram range (max: {MaxTrackableMicros:N0}µs = 1h). " +
+        "This suggests a measurement error rather than a real latency.";
 
     public void Dispose()
     {
