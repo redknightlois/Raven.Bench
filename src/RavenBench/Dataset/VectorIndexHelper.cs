@@ -13,13 +13,21 @@ internal static class VectorIndexHelper
         Console.WriteLine($"{logPrefix} Created index '{index.Name}'");
 
         Console.WriteLine($"{logPrefix} Waiting for index to become non-stale...");
-        using (var session = store.OpenAsyncSession())
+        await WaitForNonStaleAsync(store, index.Name);
+    }
+
+    // Polls the statistics: a query that waits for non-stale results is cancelled by the server
+    // after Databases.QueryTimeoutInSec, which a large index build outlasts.
+    public static async Task WaitForNonStaleAsync(IDocumentStore store, string indexName)
+    {
+        while (true)
         {
-            session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-            await session.Query<object>(index.Name)
-                .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
-                .Take(0)
-                .ToListAsync();
+            var stats = await store.Maintenance.SendAsync(new GetIndexStatisticsOperation(indexName));
+            if (stats.State == IndexState.Error)
+                throw new InvalidOperationException($"Index '{indexName}' is in the error state.");
+            if (stats.IsStale == false)
+                return;
+            await Task.Delay(TimeSpan.FromSeconds(1));
         }
     }
 }

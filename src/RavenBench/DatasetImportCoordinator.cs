@@ -236,12 +236,7 @@ internal static class DatasetImportCoordinator
         }
 
         Console.WriteLine($"[Raven.Bench] Waiting for vector index '{indexName}' to be non-stale...");
-        using var session = store.OpenAsyncSession();
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-        await session.Query<object>(indexName)
-            .Customize(x => x.WaitForNonStaleResults(TimeSpan.MaxValue))
-            .Take(0)
-            .ToListAsync();
+        await VectorIndexHelper.WaitForNonStaleAsync(store, indexName);
         Console.WriteLine($"[Raven.Bench] Vector index '{indexName}' is ready");
     }
 }
