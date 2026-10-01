@@ -28,7 +28,7 @@ public class AggregateRunScriptTests
     public void The_Compose_File_Pins_A_Mongodb_8_0_Release_And_Ravendb_7()
     {
         var compose = File.ReadAllText(Path.Combine(Folder("aggregate"), "docker-compose.yml"));
-        compose.Should().MatchRegex(@"image: mongo:8\.0\.\d+\s", "a release tag, not the floating 8.0");
+        compose.Should().MatchRegex(@"image: \$\{MONGODB_IMAGE:-mongo:8\.0\.\d+\}\s", "a release tag by default, not the floating 8.0");
         compose.Should().MatchRegex(@"image: ravendb/ravendb:7\.\d+\.\d+\s");
         compose.Should().NotContain("latest").And.NotContain("8080").And.NotContain("8081");
     }
