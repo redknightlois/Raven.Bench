@@ -145,7 +145,7 @@ public class MongoYcsbTransportIntegrationTests
     {
         await WithTransport(connectionString, target, async transport =>
         {
-            const int count = 100;
+            const int count = 1000;
             var documents = Enumerable.Range(1, count)
                 .Select(i => new DocumentToWrite<string>
                 {
@@ -159,6 +159,8 @@ public class MongoYcsbTransportIntegrationTests
 
             (await transport.GetDocumentCountAsync("bench/")).Should().Be(count);
             (await transport.GetDocumentCountAsync("other/")).Should().Be(0);
+            // Read straight after the load, before any periodic checkpoint; a tenth of the raw payload allows for compression.
+            (await transport.GetStorageSizeBytesAsync()).Should().BeGreaterThan(count * DocumentSize / 10);
         });
     }
 

@@ -173,6 +173,15 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
     /// <inheritdoc />
     public async Task<long> GetStorageSizeBytesAsync()
     {
+        // WiredTiger extends its files only at a checkpoint, so without fsync a short load reads as empty files.
+        // A server that does not implement fsync (DocumentDB) keeps its own storage and is read as it is.
+        try
+        {
+            await _client.GetDatabase("admin").RunCommandAsync<BsonDocument>(new BsonDocument("fsync", 1)).ConfigureAwait(false);
+        }
+        catch (MongoCommandException ex) when (ex.CodeName is "CommandNotFound" or "CommandNotSupported")
+        {
+        }
         var stats = await _database.RunCommandAsync<BsonDocument>(new BsonDocument("dbStats", 1)).ConfigureAwait(false);
         if (stats.TryGetValue("totalSize", out var size) && size.IsNumeric)
             return (long)size.ToDouble();
