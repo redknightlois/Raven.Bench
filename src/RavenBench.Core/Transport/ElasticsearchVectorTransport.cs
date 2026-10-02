@@ -1,3 +1,4 @@
+using RavenBench.Core.Vector;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -13,6 +14,9 @@ namespace RavenBench.Core.Transport;
 /// <param name="RequiresEnterpriseLicence">True when the server refuses writes into the kind below an enterprise or trial licence.</param>
 public sealed record ElasticsearchIndexKind(string Name, string Knob, string Storage, bool RequiresEnterpriseLicence)
 {
+    /// <summary>The kind builds an HNSW graph, so it takes <c>m</c> and <c>ef_construction</c>.</summary>
+    public bool IsHnsw => Name.EndsWith("hnsw", StringComparison.Ordinal);
+
     public const string CandidatesKnob = "num_candidates";
     public const string VisitKnob = "visit_percentage";
 
@@ -57,7 +61,7 @@ public sealed record ElasticsearchLicence(string Type, string Status, string Exp
 /// <summary>
 /// Drives vector search against one Elasticsearch index over the REST API on raw HTTP. The index has
 /// one shard and no replicas, a <c>dense_vector</c> field whose similarity matches the set's metric,
-/// and an index kind the benchmark always sends; every other index option stays at the vendor default.
+/// and an index kind the benchmark always sends, with the HNSW build for a graph kind; every other index option stays at the vendor default.
 /// A search returns ids only.
 /// </summary>
 public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStorageSize
@@ -77,7 +81,8 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
 
     /// <param name="metric">The set's metric. A metric Elasticsearch cannot serve is refused here, before any request.</param>
     /// <param name="kind">The index kind name; an unknown kind is refused here by name.</param>
-    public ElasticsearchVectorTransport(string url, string index, VectorMetric metric, int dimensions, string kind)
+    /// <param name="build">The graph a kind that builds HNSW is built with; null leaves it at the vendor default.</param>
+    public ElasticsearchVectorTransport(string url, string index, VectorMetric metric, int dimensions, string kind, HnswBuild? build = null)
     {
         UnsupportedVectorMetricException.ThrowIfUnsupported(Target, Supported, metric);
         if (string.IsNullOrWhiteSpace(index))
@@ -90,10 +95,14 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
         Index = index;
         _metric = metric;
         _dimensions = dimensions;
+        Build = Kind.IsHnsw ? build : null;
         _http = new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = Timeout.InfiniteTimeSpan }) { BaseAddress = new Uri(url.TrimEnd('/') + "/") };
     }
 
     public ElasticsearchIndexKind Kind { get; }
+
+    /// <summary>The HNSW build sent in the mapping; null when the kind builds no graph or none was given.</summary>
+    public HnswBuild? Build { get; }
     public string Index { get; }
     public string ProductName => Product;
     public bool ReportsWireBytes => false;
@@ -108,8 +117,11 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
         _ => throw new UnsupportedVectorMetricException(Target, metric)
     };
 
-    /// <summary>The index body: one shard, no replicas, request durability, and the vector field with only <c>index_options.type</c> set when a kind is given.</summary>
-    internal static string IndexBody(VectorMetric metric, int dimensions, ElasticsearchIndexKind? kind) => Json(w =>
+    /// <summary>
+    /// The index body: one shard, no replicas, request durability, and the vector field with <c>index_options.type</c>
+    /// set when a kind is given, plus <c>m</c> and <c>ef_construction</c> when a build is given.
+    /// </summary>
+    internal static string IndexBody(VectorMetric metric, int dimensions, ElasticsearchIndexKind? kind, HnswBuild? build = null) => Json(w =>
     {
         w.WriteStartObject("settings");
         w.WriteNumber("number_of_shards", 1);
@@ -127,6 +139,11 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
         {
             w.WriteStartObject("index_options");
             w.WriteString("type", kind.Name);
+            if (build is not null)
+            {
+                w.WriteNumber("m", build.M);
+                w.WriteNumber("ef_construction", build.EfConstruction);
+            }
             w.WriteEndObject();
         }
         w.WriteEndObject();
@@ -317,7 +334,7 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
             await SendAsync(HttpMethod.Delete, probe, null, CancellationToken.None).ConfigureAwait(false);
         }
 
-        await SendAsync(HttpMethod.Put, Index, IndexBody(_metric, _dimensions, Kind), ct).ConfigureAwait(false);
+        await SendAsync(HttpMethod.Put, Index, IndexBody(_metric, _dimensions, Kind, Build), ct).ConfigureAwait(false);
         // Answers 408 when the shard is not allocated in time, for example under a disk watermark; GET _cluster/allocation/explain names the reason.
         await SendAsync(HttpMethod.Get, $"_cluster/health/{Index}?wait_for_status=green&timeout=60s", null, ct).ConfigureAwait(false);
         return defaultKind;

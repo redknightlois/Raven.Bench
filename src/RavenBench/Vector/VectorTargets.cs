@@ -12,6 +12,7 @@ using Raven.Client.ServerWide.Operations;
 using RavenBench.Core;
 using RavenBench.Core.Reporting;
 using RavenBench.Core.Transport;
+using RavenBench.Core.Vector;
 using RavenBench.Core.Workload;
 using RavenBench.Dataset;
 using RavenBench.Dataset.Vectors;
@@ -85,10 +86,12 @@ public sealed class RavenDbVectorTarget : IVectorTarget
     private readonly RawHttpTransport _transport;
     private readonly VectorEmbeddingType _destination;
     private readonly string _indexName;
+    private readonly HnswBuild? _build;
 
     /// <param name="embeddingType">The destination embedding type: Single, Int8 or Binary; any other value is refused by name.</param>
-    public RavenDbVectorTarget(string url, string database, VectorMetric metric, string embeddingType)
+    public RavenDbVectorTarget(string url, string database, VectorMetric metric, string embeddingType, HnswBuild? build = null)
     {
+        _build = build;
         UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, metric);
         if (EmbeddingTypes.TryGetValue(embeddingType, out var type) == false)
             throw new ArgumentException($"RavenDB destination embedding type '{embeddingType}' is not one of {string.Join(", ", EmbeddingTypes.Keys)}.", nameof(embeddingType));
@@ -136,7 +139,9 @@ public sealed class RavenDbVectorTarget : IVectorTarget
                     Vector = new VectorOptions
                     {
                         SourceEmbeddingType = VectorEmbeddingType.Single,
-                        DestinationEmbeddingType = _destination
+                        DestinationEmbeddingType = _destination,
+                        NumberOfEdges = _build?.M,
+                        NumberOfCandidatesForIndexing = _build?.EfConstruction
                     }
                 }
             }
@@ -271,8 +276,8 @@ public static class RavenDbConfiguration
             : null;
 }
 
-/// <summary>pgvector over the Apex.PgClient transport: binary COPY load, HNSW at the vendor defaults.</summary>
-public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
+/// <summary>pgvector over the Apex.PgClient transport: binary COPY load, HNSW with the scenario's build, or the vendor defaults without one.</summary>
+public sealed class PgVectorTarget(PgVectorTransport transport, HnswBuild? build = null) : IVectorTarget
 {
     public IYcsbTransport Transport => transport;
     public string EffortFamily => PgVectorTransport.Target;
@@ -314,7 +319,7 @@ public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
                 await FlushAsync();
         }
         await FlushAsync();
-        await transport.BuildIndexAsync(ct);
+        await transport.BuildIndexAsync(build, ct);
     }
 
     public OperationBase InsertOperation(LabelledVector vector) =>
@@ -362,7 +367,7 @@ public sealed class PgVectorTarget(PgVectorTransport transport) : IVectorTarget
 
 /// <summary>
 /// Elasticsearch over its REST API on raw HTTP: a fresh index loaded through <c>_bulk</c>, refreshed,
-/// with the index kind the scenario names and every other index option at the vendor default. Round one
+/// with the index kind and, for a graph kind, the HNSW build the scenario names; every other index option at the vendor default. Round one
 /// does not force-merge.
 /// </summary>
 public sealed class ElasticsearchVectorTarget(ElasticsearchVectorTransport transport) : IVectorTarget
@@ -450,7 +455,9 @@ public sealed class ElasticsearchVectorTarget(ElasticsearchVectorTransport trans
         {
             settings["mapping." + name] = value;
             if (name.StartsWith("index_options.", StringComparison.Ordinal))
-                settings["mapping." + name + ".source"] = name == "index_options.type" ? BuildSetting.SetByBenchmark : $"default: {VendorDefault}, not set by the benchmark";
+                settings["mapping." + name + ".source"] = name == "index_options.type" || (transport.Build is not null && name is "index_options.m" or "index_options.ef_construction")
+                    ? BuildSetting.SetByBenchmark
+                    : $"default: {VendorDefault}, not set by the benchmark";
         }
         var index = await transport.ReadIndexSettingsAsync(ct);
         foreach (var name in new[] { ElasticsearchVectorTransport.DurabilitySetting, "index.refresh_interval", "index.number_of_shards", "index.number_of_replicas" })

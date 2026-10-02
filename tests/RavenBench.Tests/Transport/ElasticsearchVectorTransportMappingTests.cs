@@ -42,6 +42,23 @@ public class ElasticsearchVectorTransportMappingTests
         settings.GetProperty("index.translog.durability").GetString().Should().Be("request");
     }
 
+    [Theory]
+    [InlineData("hnsw", true)]
+    [InlineData("bbq_hnsw", true)]
+    [InlineData("bbq_disk", false)]
+    public void The_Hnsw_Build_Reaches_Only_A_Graph_Kind(string kind, bool sent)
+    {
+        using var transport = new ElasticsearchVectorTransport("http://localhost:1", "i", VectorMetric.Cosine, 8, kind, new HnswBuild(16, 100));
+        using var body = JsonDocument.Parse(ElasticsearchVectorTransport.IndexBody(VectorMetric.Cosine, 8, transport.Kind, transport.Build));
+        var options = body.RootElement.GetProperty("mappings").GetProperty("properties").GetProperty("embedding").GetProperty("index_options");
+        options.EnumerateObject().Select(p => p.Name).Should().Equal(sent ? ["type", "m", "ef_construction"] : ["type"]);
+        if (sent)
+        {
+            options.GetProperty("m").GetInt32().Should().Be(16);
+            options.GetProperty("ef_construction").GetInt32().Should().Be(100);
+        }
+    }
+
     [Fact]
     public void The_Default_Probe_Mapping_Carries_No_Index_Options()
     {

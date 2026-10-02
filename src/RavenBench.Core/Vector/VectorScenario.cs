@@ -25,13 +25,15 @@ public sealed class VectorScenarioException : Exception
 /// </summary>
 public sealed class InsertSliceTooLargeException(string message) : Exception(message);
 
-/// <summary>The three search-effort settings of one product, as the product's own knob and values.</summary>
+/// <summary>
+/// The three search-effort settings of one product, as the product's own knob and values. Products whose knob
+/// is the same quantity, the candidate list an HNSW search keeps, take the same values so each point compares.
+/// </summary>
 public sealed record VectorEffortSettings
 {
     public required string Knob { get; init; }
     public required double Low { get; init; }
 
-    /// <summary>The vendor's shipped default for the knob.</summary>
     public required double Default { get; init; }
 
     public required double High { get; init; }
@@ -39,6 +41,13 @@ public sealed record VectorEffortSettings
     [JsonIgnore]
     public IReadOnlyList<(string Label, double Value)> All => [("low", Low), ("default", Default), ("high", High)];
 }
+
+/// <summary>
+/// The HNSW graph every product builds: <c>M</c> is the edges per node (RavenDB NumberOfEdges, pgvector and
+/// Elasticsearch <c>m</c>), <c>EfConstruction</c> the candidates kept while inserting (RavenDB
+/// NumberOfCandidatesForIndexing, pgvector and Elasticsearch <c>ef_construction</c>).
+/// </summary>
+public sealed record HnswBuild(int M, int EfConstruction);
 
 /// <summary>
 /// The published figure the pgvector recall is compared with, and the index the published run used.
@@ -126,6 +135,8 @@ public sealed record VectorScenario
     public required string Duration { get; init; }
     public required VectorCrossCheck CrossCheck { get; init; }
 
+    public required HnswBuild HnswBuild { get; init; }
+
     /// <summary>The Elasticsearch <c>index_options.type</c> the benchmark sends: hnsw, bbq_hnsw or bbq_disk.</summary>
     public required string ElasticsearchIndexKind { get; init; }
 
@@ -185,6 +196,8 @@ public sealed record VectorScenario
         Require(Transport.ElasticsearchIndexKind.All.Any(k => k.Name == ElasticsearchIndexKind), nameof(ElasticsearchIndexKind), ElasticsearchIndexKind,
             $"one of {string.Join(", ", Transport.ElasticsearchIndexKind.All.Select(k => k.Name))}");
         Require(RavenDbEmbeddingTypes.Contains(RavenDbEmbeddingType), nameof(RavenDbEmbeddingType), RavenDbEmbeddingType, $"one of {string.Join(", ", RavenDbEmbeddingTypes)}");
+        // pgvector refuses an ef_construction below twice m.
+        Require(HnswBuild.M >= 2 && HnswBuild.EfConstruction >= 2 * HnswBuild.M, nameof(HnswBuild), HnswBuild, "M >= 2 and EfConstruction >= 2 * M");
         Require(ConstrainedMemoryFraction is > 0 and < 1, nameof(ConstrainedMemoryFraction), ConstrainedMemoryFraction, "a fraction in (0, 1)");
         Require(CrossCheck.PublishedSearchValue > 0, "CrossCheck.PublishedSearchValue", CrossCheck.PublishedSearchValue, "a positive knob value");
     }

@@ -11,8 +11,8 @@
     "ravendb": {
       "Knob": "numberOfCandidates",
       "Low": 10,
-      "Default": 16,
-      "High": 256
+      "Default": 40,
+      "High": 400
     },
     "pgvector": {
       "Knob": "hnsw.ef_search",
@@ -23,14 +23,14 @@
     "elasticsearch-hnsw": {
       "Knob": "num_candidates",
       "Low": 10,
-      "Default": 15,
-      "High": 150
+      "Default": 40,
+      "High": 400
     },
     "elasticsearch-bbq_hnsw": {
       "Knob": "num_candidates",
       "Low": 10,
-      "Default": 15,
-      "High": 150
+      "Default": 40,
+      "High": 400
     },
     "elasticsearch-bbq_disk": {
       "Knob": "visit_percentage",
@@ -39,6 +39,7 @@
       "High": 10
     }
   },
+  "HnswBuild": { "M": 16, "EfConstruction": 100 },
   "ElasticsearchIndexKind": "hnsw",
   "RavenDbEmbeddingType": "Single",
   "ConstrainedMemoryFraction": 0.5,

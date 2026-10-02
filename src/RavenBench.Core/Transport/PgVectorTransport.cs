@@ -1,3 +1,4 @@
+using RavenBench.Core.Vector;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Apex.PgClient;
@@ -216,14 +217,15 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
     }
 
     /// <summary>
-    /// Builds the HNSW index with the operator class of the set's metric and no build options, so
-    /// <c>m</c> and <c>ef_construction</c> stay at the vendor defaults. Returns when the index is queryable.
+    /// Builds the HNSW index with the operator class of the set's metric and <paramref name="build"/>; no build
+    /// leaves <c>m</c> and <c>ef_construction</c> at the vendor defaults. Returns when the index is queryable.
     /// </summary>
-    public async Task BuildIndexAsync(CancellationToken ct = default)
+    public async Task BuildIndexAsync(HnswBuild? build = null, CancellationToken ct = default)
     {
         await _ready.Value.ConfigureAwait(false);
+        var with = build is null ? "" : FormattableString.Invariant($" WITH (m = {build.M}, ef_construction = {build.EfConstruction})");
         await _setup!.ExecuteAsync(
-            $"CREATE INDEX IF NOT EXISTS {IndexName} ON {TableName} USING hnsw (embedding {PgVectorMetrics.OperatorClass(_metric)})", ct).ConfigureAwait(false);
+            $"CREATE INDEX IF NOT EXISTS {IndexName} ON {TableName} USING hnsw (embedding {PgVectorMetrics.OperatorClass(_metric)}){with}", ct).ConfigureAwait(false);
         await _setup.ExecuteAsync($"ANALYZE {TableName}", ct).ConfigureAwait(false);
     }
 

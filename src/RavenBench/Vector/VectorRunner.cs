@@ -103,11 +103,11 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
     public static IVectorTarget BuildTarget(string target, string url, string database, VectorMetric metric, int dimensions, int concurrency, VectorScenario scenario)
     {
         if (string.Equals(target, RavendbTarget, StringComparison.OrdinalIgnoreCase) || string.Equals(target, Ravendb7Target, StringComparison.OrdinalIgnoreCase))
-            return new RavenDbVectorTarget(url, database, metric, scenario.RavenDbEmbeddingType);
+            return new RavenDbVectorTarget(url, database, metric, scenario.RavenDbEmbeddingType, scenario.HnswBuild);
         if (string.Equals(target, PgVectorTransport.Target, StringComparison.OrdinalIgnoreCase))
-            return new PgVectorTarget(new PgVectorTransport(url, database, concurrency, metric, dimensions));
+            return new PgVectorTarget(new PgVectorTransport(url, database, concurrency, metric, dimensions), scenario.HnswBuild);
         if (string.Equals(target, ElasticsearchVectorTransport.Target, StringComparison.OrdinalIgnoreCase))
-            return new ElasticsearchVectorTarget(new ElasticsearchVectorTransport(url, database, metric, dimensions, scenario.ElasticsearchIndexKind));
+            return new ElasticsearchVectorTarget(new ElasticsearchVectorTransport(url, database, metric, dimensions, scenario.ElasticsearchIndexKind, scenario.HnswBuild));
         throw new VectorScenarioException($"Target '{target}' is not a vector target; valid targets are '{RavendbTarget}', '{Ravendb7Target}', '{PgVectorTransport.Target}' and '{ElasticsearchVectorTransport.Target}'.");
     }
 

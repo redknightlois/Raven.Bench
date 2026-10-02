@@ -163,7 +163,7 @@ public sealed class VectorParityCheck
             }, ct);
             if (result.IsSuccess == false)
                 throw new InvalidOperationException($"The pgvector sample load failed: {result.ErrorDetails}");
-            await transport.BuildIndexAsync(ct);
+            await transport.BuildIndexAsync(ct: ct);
         },
         (query, k, ct) => transport.ExactSearchAsync(query, k, filter: null, ct),
         () => transport.DropTableAsync());
