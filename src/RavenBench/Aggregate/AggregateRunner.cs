@@ -278,7 +278,9 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         // Each writer owns about as many documents as its share of the step's updates.
         var documentsPerWriter = (long)Math.Ceiling(scenario.WriteRate * (warmup + duration).TotalSeconds / scenario.Writers);
         var bulkWriters = UnderWriteSplit.BulkWriters(dataSet.Generate(), categoryCounts, tracker.TrackedGroup, scenario.Writers, documentsPerWriter, SeedMixer.Derive(scenario.Seed, "under-write-bulk"));
-        using var probeSources = UnderWriteSplit.ProbeSources(dataSet.Generate(), tracker.TrackedGroup).GetEnumerator();
+        // A step at the query rate needs one probe document per tick; the step may run past its window, so the probe keeps every document.
+        var probeSources = UnderWriteSplit.ProbeSources(dataSet.Generate(), tracker.TrackedGroup, (long)Math.Ceiling(queryRate * (warmup + duration).TotalSeconds));
+        var probed = 0;
         var probeAmounts = new Random(SeedMixer.Derive(scenario.Seed, "under-write"));
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -289,23 +291,45 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         }, _ => { }, stop.Token), CancellationToken.None);
         var probe = Task.Run(() => PacedWriter.RunAsync(queryRate, 1, async (_, token) =>
         {
-            if (probeSources.MoveNext() == false)
+            if (probed == probeSources.Length)
                 throw new InvalidOperationException($"No document outside the tracked group '{tracker.TrackedGroup}' is left for the probe; raise documentCount or shorten the step.");
-            var op = new AggregateUpdateOperation { Id = probeSources.Current.Id, Category = tracker.TrackedGroup, Amount = probeAmounts.NextInt64(1, AggregateDataSet.MaxAmount + 1) };
+            var op = new AggregateUpdateOperation { Id = probeSources[probed++].Id, Category = tracker.TrackedGroup, Amount = probeAmounts.NextInt64(1, AggregateDataSet.MaxAmount + 1) };
             await UpdateAsync(transport, op, token);
             return true;
         }, tracker.Acknowledged, stop.Token), CancellationToken.None);
 
-        BenchmarkRunner.RampResult ramp;
+        var ramp = await AlongsideAsync(RampAsync(new FreshnessRecordingTransport(transport, tracker), workload, url, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write", nodeExporter),
+            stop, writer, probe);
+        return (ramp, await writer, await probe);
+    }
+
+    /// <summary>
+    /// Awaits <paramref name="foreground"/>, then cancels <paramref name="stop"/>. When the foreground throws, every
+    /// background task is awaited before the foreground exception propagates; a background fault is observed but never replaces it.
+    /// </summary>
+    internal static async Task<T> AlongsideAsync<T>(Task<T> foreground, CancellationTokenSource stop, params Task[] background)
+    {
         try
         {
-            ramp = await RampAsync(new FreshnessRecordingTransport(transport, tracker), workload, url, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write", nodeExporter);
+            return await foreground;
+        }
+        catch
+        {
+            stop.Cancel();
+            try
+            {
+                await Task.WhenAll(background);
+            }
+            catch (Exception)
+            {
+                // The foreground exception is the cause; a background fault after the stop is its consequence.
+            }
+            throw;
         }
         finally
         {
             stop.Cancel();
         }
-        return (ramp, await writer, await probe);
     }
 
     private static async Task UpdateAsync(IYcsbTransport transport, AggregateUpdateOperation op, CancellationToken token)
