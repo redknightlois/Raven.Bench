@@ -1,10 +1,12 @@
+using System.Text.Json;
 using RavenBench.Core;
 
 namespace RavenBench.Core.Reporting;
 
 /// <summary>
 /// Checks if multiple benchmark summaries are compatible for comparison.
-/// Compatible runs must have the same workload profile, dataset, and query profile.
+/// Compatible runs must have the same workload: profile, dataset and its size, query profile, load shape, key distribution,
+/// entry point and its resolved scenario, and the machine they ran on.
 /// Transport and HTTP version are ALLOWED to differ - that's the point of comparison!
 /// </summary>
 /// <remarks>
@@ -14,24 +16,38 @@ namespace RavenBench.Core.Reporting;
 /// - Different compression settings
 /// - Before/after performance changes
 ///
-/// Therefore, we only enforce compatibility on workload characteristics (profile, dataset, query type),
+/// Therefore, we only enforce compatibility on workload characteristics,
 /// not on transport/protocol configuration which is what we want to compare.
 /// </remarks>
 public static class RunCompatibilityChecker
 {
+    // The one list of workload fields that must match: the check and its message both read it.
+    private static readonly (string Name, Func<BenchmarkSummary, object?> Value)[] WorkloadFields =
+    {
+        ("workload profile", s => s.Options.Profile),
+        ("dataset", s => s.Options.Dataset),
+        ("dataset profile", s => s.Options.DatasetProfile),
+        ("dataset size", s => s.Options.DatasetSize),
+        ("query profile", s => s.Options.QueryProfile),
+        ("load shape", s => s.Options.Shape),
+        ("key distribution", s => s.Options.Distribution),
+        ("entry point", s => s.Ycsb != null ? "ycsb" : s.Vector != null ? "vector" : s.Aggregate != null ? "aggregate" : "raven-bench"),
+        ("run", s => s.Ycsb?.Run ?? s.Vector?.Run ?? s.Aggregate?.Run),
+        ("scenario", s => Json(s.Ycsb?.ResolvedScenario ?? s.Vector?.ResolvedScenario ?? (object?)s.Aggregate?.ResolvedScenario)),
+        // The harness commit and the database image are what a before/after comparison changes; the rest is the machine.
+        ("machine fingerprint", s => Json(s.MachineFingerprint is { } m ? m with { HarnessCommit = "", DatabaseImage = null } : null)),
+    };
+
+    // Value equality over nested collections, which record equality does not give.
+    private static string? Json(object? value) => value == null ? null : JsonSerializer.Serialize(value, value.GetType());
+
     /// <summary>
     /// Determines if the provided benchmark summaries can be compared.
     /// </summary>
     /// <param name="summaries">The benchmark summaries to check.</param>
     /// <returns>True if all summaries are compatible; otherwise, false.</returns>
-    public static bool AreComparable(params BenchmarkSummary[] summaries)
-    {
-        if (summaries.Length < 2)
-            return true;
-
-        var baseline = summaries[0];
-        return summaries.All(s => IsCompatible(baseline, s));
-    }
+    public static bool AreComparable(params BenchmarkSummary[] summaries) =>
+        Incompatibilities(summaries).Count == 0;
 
     /// <summary>
     /// Ensures that the provided benchmark summaries are compatible, throwing an exception if not.
@@ -40,41 +56,34 @@ public static class RunCompatibilityChecker
     /// <exception cref="InvalidOperationException">Thrown if the summaries are not compatible.</exception>
     public static void EnsureComparable(params BenchmarkSummary[] summaries)
     {
-        if (AreComparable(summaries))
+        var incompatibilities = Incompatibilities(summaries);
+        if (incompatibilities.Count == 0)
             return;
 
-        var baseline = summaries[0];
-        var incompatibilities = new List<string>();
-
-        for (int i = 1; i < summaries.Length; i++)
-        {
-            var other = summaries[i];
-            if (baseline.Options.Profile != other.Options.Profile)
-                incompatibilities.Add($"Run {i + 1} has different workload profile: {baseline.Options.Profile} vs {other.Options.Profile}");
-
-            if (baseline.Options.Dataset != other.Options.Dataset)
-                incompatibilities.Add($"Run {i + 1} has different dataset: {baseline.Options.Dataset} vs {other.Options.Dataset}");
-
-            if (baseline.Options.QueryProfile != other.Options.QueryProfile)
-                incompatibilities.Add($"Run {i + 1} has different query profile: {baseline.Options.QueryProfile} vs {other.Options.QueryProfile}");
-        }
-
-        var message = "Benchmark summaries are not compatible for comparison. " +
-                      "They must have the same workload profile, dataset, and query profile.\n" +
-                      string.Join("\n", incompatibilities);
-
-        throw new InvalidOperationException(message);
+        throw new InvalidOperationException(
+            "Benchmark summaries are not compatible for comparison. " +
+            $"They must have the same {string.Join(", ", WorkloadFields.Select(f => f.Name))}.\n" +
+            string.Join("\n", incompatibilities));
     }
 
     /// <summary>
-    /// Checks if two summaries have compatible workload characteristics.
+    /// Every workload field in which a run differs from the first run.
     /// Transport, HTTP version, and compression settings are allowed to differ.
     /// </summary>
-    private static bool IsCompatible(BenchmarkSummary baseline, BenchmarkSummary other)
+    private static List<string> Incompatibilities(BenchmarkSummary[] summaries)
     {
-        // Only enforce matching workload characteristics, not transport/protocol config
-        return baseline.Options.Profile == other.Options.Profile &&
-               baseline.Options.Dataset == other.Options.Dataset &&
-               baseline.Options.QueryProfile == other.Options.QueryProfile;
+        var incompatibilities = new List<string>();
+        for (int i = 1; i < summaries.Length; i++)
+        {
+            foreach (var (name, value) in WorkloadFields)
+            {
+                var expected = value(summaries[0]);
+                var actual = value(summaries[i]);
+                if (Equals(expected, actual) == false)
+                    incompatibilities.Add($"Run {i + 1} has different {name}: {expected} vs {actual}");
+            }
+        }
+
+        return incompatibilities;
     }
 }

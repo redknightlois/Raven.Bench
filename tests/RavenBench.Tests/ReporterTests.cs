@@ -120,6 +120,72 @@ public class ReporterTests
         Assert.Throws<System.InvalidOperationException>(() => RunCompatibilityChecker.EnsureComparable(summary1, summary2));
     }
 
+    public static TheoryData<string, RunOptions> WorkloadDifferences()
+    {
+        var baseline = new RunOptions { Url = "http://localhost:8080", Database = "test" };
+        return new TheoryData<string, RunOptions>
+        {
+            { "load shape", baseline with { Shape = LoadShape.Rate } },
+            { "key distribution", baseline with { Distribution = KeyDistributionKind.Zipfian } },
+            { "dataset profile", baseline with { DatasetProfile = "half" } },
+            { "dataset size", baseline with { DatasetSize = 3 } },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(WorkloadDifferences))]
+    public void RunCompatibilityChecker_A_Different_Workload_Field_Is_Not_Comparable_And_Is_Named(string field, RunOptions other)
+    {
+        BenchmarkSummary Summary(RunOptions options) => new()
+        {
+            Options = options,
+            EffectiveHttpVersion = "1.1",
+            Steps = new List<StepResult>(),
+            Verdict = "Passed",
+            ClientCompression = "identity"
+        };
+        var baseline = Summary(new RunOptions { Url = "http://localhost:8080", Database = "test" });
+
+        Assert.False(RunCompatibilityChecker.AreComparable(baseline, Summary(other)));
+        var error = Assert.Throws<InvalidOperationException>(() => RunCompatibilityChecker.EnsureComparable(baseline, Summary(other)));
+        Assert.Contains($"different {field}:", error.Message);
+    }
+
+    private static readonly RavenBench.Core.Ycsb.YcsbScenario Scenario = new() { Seed = 7, Target = "ravendb", DocumentCount = 1000, DocumentSize = "1KB", Concurrency = "8", Distribution = "uniform", Warmup = "1s", Duration = "1s" };
+    private static readonly MachineFingerprint Machine = new() { CpuModel = "cpu", PhysicalCoreCount = 4, LogicalCoreCount = 8, SmT = true, RamBytes = 1, Os = "os", Kernel = "k", StorageDevice = "d", Filesystem = "fs", DotNetVersion = "10", HarnessCommit = "a", DatabaseInDocker = false };
+
+    private static BenchmarkSummary YcsbSummary(string run, RavenBench.Core.Ycsb.YcsbScenario scenario, MachineFingerprint machine, TransportKind transport = TransportKind.Raw) => new()
+    {
+        Options = new RunOptions { Url = "http://localhost:8080", Database = "test", Transport = transport },
+        EffectiveHttpVersion = "1.1",
+        Steps = new List<StepResult>(),
+        Verdict = "ycsb",
+        ClientCompression = "identity",
+        MachineFingerprint = machine,
+        Ycsb = new YcsbRunInfo { Run = run, Shape = "closed", Distribution = "uniform", Repetition = 1, IsRowMedian = true, MedianStatistic = "p50", ResolvedScenario = scenario, ProductName = "p", ServerVersion = "v", Durability = new DurabilityParity { Setting = "s", Value = "v" }, ServerColumns = ServerColumnAvailability.FromSteps("p", Array.Empty<StepResult>()) }
+    };
+
+    [Fact]
+    public void RunCompatibilityChecker_Refuses_A_Different_Workload_Scenario_Or_Entry_Point()
+    {
+        var a = YcsbSummary("A", Scenario, Machine);
+
+        Assert.True(RunCompatibilityChecker.AreComparable(a, YcsbSummary("A", Scenario, Machine, TransportKind.Client)));
+        Assert.Contains("different run:", Assert.Throws<InvalidOperationException>(() => RunCompatibilityChecker.EnsureComparable(a, YcsbSummary("C", Scenario, Machine))).Message);
+        Assert.Contains("different scenario:", Assert.Throws<InvalidOperationException>(() => RunCompatibilityChecker.EnsureComparable(a, YcsbSummary("A", Scenario with { DocumentCount = 2000 }, Machine))).Message);
+        var plain = new BenchmarkSummary { Options = a.Options, EffectiveHttpVersion = "1.1", Steps = new List<StepResult>(), Verdict = "x", ClientCompression = "identity", MachineFingerprint = Machine };
+        Assert.Contains("different entry point:", Assert.Throws<InvalidOperationException>(() => RunCompatibilityChecker.EnsureComparable(a, plain)).Message);
+    }
+
+    [Fact]
+    public void RunCompatibilityChecker_Refuses_A_Different_Machine_But_Not_A_Different_Harness_Commit()
+    {
+        var a = YcsbSummary("A", Scenario, Machine);
+
+        Assert.True(RunCompatibilityChecker.AreComparable(a, YcsbSummary("A", Scenario, Machine with { HarnessCommit = "b" })));
+        Assert.Contains("different machine fingerprint:", Assert.Throws<InvalidOperationException>(() => RunCompatibilityChecker.EnsureComparable(a, YcsbSummary("A", Scenario, Machine with { CpuModel = "other" }))).Message);
+    }
+
     [Fact]
     public async Task SummaryLoader_RoundTripsJsonResultsWriterOutput()
     {
