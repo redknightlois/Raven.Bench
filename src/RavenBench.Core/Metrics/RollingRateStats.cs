@@ -1,7 +1,7 @@
 namespace RavenBench.Core.Metrics;
 
 /// <summary>
-/// Describes rolling request-per-second samples gathered during a rate-mode step.
+/// Describes rolling throughput samples gathered during a rate-mode step, in the step throughput unit.
 /// Values are derived from a sliding window (default: 3s) to show how tightly the
 /// generator tracked the requested throughput throughout the measurement interval.
 /// </summary>

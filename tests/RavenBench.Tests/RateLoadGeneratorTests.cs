@@ -144,6 +144,26 @@ public sealed class RateLoadGeneratorTests
     }
 
     [Theory]
+    [InlineData(2, 1)] // every second operation fails fast
+    [InlineData(0, 10)] // bulk operations of 10 documents, no errors
+    public void RollingRateAndStepThroughputShareOneDefinition(int failEvery, int recordCount)
+    {
+        var counters = new LoadGeneratorCounters();
+        var sampler = new RateLoadGenerator.RollingRateSampler(TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(250));
+        sampler.Sample(counters, 0);
+        for (var tick = 1; tick <= 20; tick++)
+        {
+            for (var op = 0; op < 50; op++)
+                counters.Record(new WorkItemResult { IsError = failEvery > 0 && op % failEvery == 0, RecordCount = recordCount });
+            sampler.Sample(counters, tick * 0.25);
+        }
+
+        var metrics = LoadGeneratorExecution.BuildMetrics(counters, TimeSpan.FromSeconds(5), scheduledCount: 1000, isWarmup: false, sampler.Snapshot());
+
+        metrics.RollingRate!.Median.Should().BeApproximately(metrics.Throughput, 1e-9);
+    }
+
+    [Theory]
     [InlineData(1)]
     [InlineData(4)]
     public async Task ScheduledOperationsNeverExceedRateTimesElapsed(int pipelineDepth)

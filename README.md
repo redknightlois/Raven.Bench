@@ -138,6 +138,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 - Console report
   - Per-step tables with throughput, error rate, client CPU, network utilization, and server metrics (if accessible).
   - Server CPU (`ServerCpu`) is the server process CPU time over the step's measurement window, as a percent of all the cores the server reports for itself (`/cluster/node-info`). When the server does not report its core count, the figure is absent. With node_exporter configured, it is the host-wide non-idle CPU share over the same window. Each step records the definition that produced its figure in `ServerCpuBasis`, in the JSON summary and the CSV.
+  - Throughput (`Throughput`) and the rate-mode rolling rate (`RollingRate`) both count documents carried by succeeded operations per second: a failed operation adds nothing, and a bulk batch adds its document count. Each step states the unit in `ThroughputUnit`, in the JSON summary and the CSV. A rate target (`TargetThroughput`) counts operations per second.
   - Latency percentiles (`Raw.*`, `Normalized.*`) hold every completed operation: failed and timed-out operations add a sample, cancelled operations do not, so a failing run cannot report a better tail. Each step states this in `LatencySamples`, in the JSON summary and the CSV.
   - SNMP metrics included when `--snmp-enabled` (gauge metrics: CPU, memory, load; rate metrics: IO ops/sec, requests/sec).
   - Knee panel and a one-line Verdict.

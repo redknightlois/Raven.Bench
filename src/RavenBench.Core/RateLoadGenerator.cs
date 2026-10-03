@@ -389,7 +389,7 @@ namespace RavenBench.Core
         }
 
         /// <summary>
-        /// Periodically samples completed operations to compute rolling throughput statistics over a fixed window.
+        /// Periodically samples the throughput count to compute rolling throughput statistics over a fixed window.
         /// </summary>
         internal sealed class RollingRateSampler : IAsyncDisposable
         {
@@ -419,12 +419,13 @@ namespace RavenBench.Core
                 {
                     while (await timer.WaitForNextTickAsync().ConfigureAwait(false))
                     {
-                        var elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
-                        var completed = counters.OperationsCompleted;
-                        RecordSample(elapsedSeconds, completed);
+                        Sample(counters, stopwatch.Elapsed.TotalSeconds);
                     }
                 }, CancellationToken.None);
             }
+
+            /// <summary>Samples the same count the step throughput divides: <see cref="LoadGeneratorCounters.RecordsCompleted"/>.</summary>
+            internal void Sample(LoadGeneratorCounters counters, double elapsedSeconds) => RecordSample(elapsedSeconds, counters.RecordsCompleted);
 
             internal void RecordSample(double elapsedSeconds, long completed)
             {
@@ -445,12 +446,11 @@ namespace RavenBench.Core
                         return;
 
                     var oldest = _history.Peek();
-                    var deltaOps = completed - oldest.completed;
                     var deltaSeconds = elapsedSeconds - oldest.timeSeconds;
                     if (deltaSeconds <= 0)
                         return;
 
-                    var rps = deltaOps / deltaSeconds;
+                    var rps = LoadGeneratorExecution.Rate(completed - oldest.completed, deltaSeconds);
                     _samples.Add(rps);
                     _lastSample = rps;
                     _hasLastSample = true;

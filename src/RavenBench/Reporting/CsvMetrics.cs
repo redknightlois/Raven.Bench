@@ -19,6 +19,7 @@ namespace RavenBench.Reporting
         {
 new("Concurrency", _ => true, s => s.Concurrency),
             new("Throughput", _ => true, s => s.Throughput),
+            new("ThroughputUnit", _ => true, s => s.ThroughputUnit),
             new("TargetThroughput", _ => true, s => s.TargetThroughput),
             new("ErrorRate", _ => true, s => s.ErrorRate),
             new("BytesOut", _ => true, s => s.BytesOut),
