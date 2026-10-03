@@ -56,6 +56,7 @@ public sealed class ServerMetricsTracker : IDisposable
 
     private ServerMetrics _currentMetrics = new();
     private bool _isRunning;
+    private bool _pollInFlight;
 
     public ServerMetricsTracker(Transport.ITransport transport, RunOptions options)
     {
@@ -69,7 +70,9 @@ public sealed class ServerMetricsTracker : IDisposable
         lock (_lock)
         {
             _isRunning = true;
-            _timer.Change(0, Timeout.Infinite);
+            // A poll still in flight reschedules the loop when it ends.
+            if (_pollInFlight == false)
+                _timer.Change(0, Timeout.Infinite);
         }
     }
 
@@ -93,9 +96,16 @@ public sealed class ServerMetricsTracker : IDisposable
         }
     }
 
-    // One-shot timer: rescheduled after each poll completes, so polls never overlap.
+    // One-shot timer: at most one poll is in flight, and it reschedules the next one when it ends.
     private async void PollMetrics(object? state)
     {
+        lock (_lock)
+        {
+            if (_isRunning == false || _pollInFlight)
+                return;
+            _pollInFlight = true;
+        }
+
         try
         {
             var metrics = await _transport.GetServerMetricsAsync();
@@ -162,6 +172,7 @@ public sealed class ServerMetricsTracker : IDisposable
         {
             lock (_lock)
             {
+                _pollInFlight = false;
                 if (_isRunning)
                 {
                     _timer.Change((int)_options.Snmp.PollInterval.TotalMilliseconds, Timeout.Infinite);

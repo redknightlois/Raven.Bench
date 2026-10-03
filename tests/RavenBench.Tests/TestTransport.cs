@@ -74,7 +74,10 @@ public sealed class TestTransport : ITransport
     public Task ValidateClientAsync() => Task.CompletedTask;
 
 
-    public Task<ServerMetrics> GetServerMetricsAsync() => Task.FromResult(_serverMetrics);
+    /// <summary>Replaces the fixed server metrics, for a test that scripts or gates each poll.</summary>
+    public Func<Task<ServerMetrics>>? ServerMetricsSource { get; init; }
+
+    public Task<ServerMetrics> GetServerMetricsAsync() => ServerMetricsSource?.Invoke() ?? Task.FromResult(_serverMetrics);
 
     public Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
     {
