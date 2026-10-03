@@ -46,9 +46,9 @@ public static class YcsbCrossCheck
     public const string NoiseRule =
         "within noise when |median(candidate) - median(reference)| <= max(range(reference), range(candidate)), " +
         "where range is the largest minus the smallest repetition of the row in one mode; " +
-        "each mode needs at least 2 repetitions";
+        "each mode needs at least 2 valid repetitions";
 
-    /// <summary>Compares the two sides of one row. Fewer than two repetitions on either side fails instead of giving a verdict.</summary>
+    /// <summary>Compares the two sides of one row. Fewer than two valid repetitions on either side fails instead of giving a verdict.</summary>
     public static YcsbCrossCheckComparison Compare(string rowKey, YcsbCrossCheckSide reference, YcsbCrossCheckSide candidate)
     {
         foreach (var side in new[] { reference, candidate })
@@ -57,7 +57,7 @@ public static class YcsbCrossCheck
                 throw new ArgumentException($"Mode '{side.Mode}' names {side.Results.Count} results for {side.Values.Count} values.");
             if (side.Values.Count < MinimumRepetitions)
                 throw new YcsbCrossCheckException(
-                    $"Row '{rowKey}' has {side.Values.Count} repetition(s) through '{side.Mode}'; measuring the run-to-run noise needs at least {MinimumRepetitions}. Raise Repetitions.");
+                    $"Row '{rowKey}' has {side.Values.Count} valid repetition(s) through '{side.Mode}'; measuring the run-to-run noise needs at least {MinimumRepetitions}. Raise Repetitions or remove the cause of the invalid steps.");
         }
 
         var difference = candidate.Median - reference.Median;

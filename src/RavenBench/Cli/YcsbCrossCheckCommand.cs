@@ -35,9 +35,8 @@ public sealed class YcsbCrossCheckCommand : AsyncCommand<YcsbSettings>
             throw new YcsbScenarioException($"The cross-check compares the PostgreSQL transports; target '{resolved.Target}' is not '{PostgresYcsbTransport.Target}'.");
 
         var reference = await new YcsbRunner(resolved, settings, ReferenceMode, id => id.Kind == YcsbRunKind.Load || IsComparedRow(id)).RunAsync();
-        var candidate = await new YcsbRunner(resolved, settings, CandidateMode, IsComparedRow).RunAsync();
-
         WriteRuns(settings, ReferenceMode, reference);
+        var candidate = await new YcsbRunner(resolved, settings, CandidateMode, IsComparedRow).RunAsync();
         WriteRuns(settings, CandidateMode, candidate);
 
         var comparisons = Compare(reference, candidate);
@@ -75,16 +74,24 @@ public sealed class YcsbCrossCheckCommand : AsyncCommand<YcsbSettings>
             .ToList();
     }
 
-    private static Dictionary<string, YcsbCrossCheckSide> Rows(TransportKind mode, IReadOnlyList<YcsbRunResult> results) =>
+    /// <summary>
+    /// The sides of every compared row through one mode, from the valid repetitions only, so an
+    /// empty or client-bound repetition is never scored as a throughput.
+    /// </summary>
+    internal static Dictionary<string, YcsbCrossCheckSide> Rows(TransportKind mode, IReadOnlyList<YcsbRunResult> results) =>
         results
             .Where(r => IsComparedRow(r.Identity))
             .GroupBy(r => r.Identity.RowKey)
             .ToDictionary(
                 g => g.Key,
-                g => new YcsbCrossCheckSide(
-                    CliParsing.FormatTransport(mode),
-                    g.Select(r => $"{CliParsing.FormatTransport(mode)}-{r.Identity.ResultName}").ToList(),
-                    g.Select(r => YcsbMedianSelector.Statistic(r.Summary.Steps)).ToList()));
+                g =>
+                {
+                    var valid = g.Where(r => YcsbMedianSelector.IsValid(r.Summary.Steps)).ToList();
+                    return new YcsbCrossCheckSide(
+                        CliParsing.FormatTransport(mode),
+                        valid.Select(r => $"{CliParsing.FormatTransport(mode)}-{r.Identity.ResultName}").ToList(),
+                        valid.Select(r => YcsbMedianSelector.Statistic(r.Summary.Steps)).ToList());
+                });
 
     private static void WriteRuns(YcsbSettings settings, TransportKind mode, IReadOnlyList<YcsbRunResult> results)
     {
