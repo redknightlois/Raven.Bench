@@ -51,6 +51,9 @@ public sealed class ComparisonModel
     /// </summary>
     public required List<string> KeyTakeaways { get; init; }
 
+    /// <summary>True when the aligned steps are keyed by target throughput; false when they are keyed by concurrency.</summary>
+    public required bool IsRateBased { get; init; }
+
     /// <summary>
     /// X-axis title for aligned-step charts ("Concurrency" or "Target RPS").
     /// </summary>
@@ -116,6 +119,7 @@ public sealed class StepMetrics
     public required double P99 { get; init; }
     public required double P999 { get; init; }
     public required double ErrorRate { get; init; }
+    public double? QualityScore { get; init; }
     public double? ClientCpu { get; init; }
     public double? ServerCpu { get; init; }
     public long? ServerMemoryMB { get; init; }

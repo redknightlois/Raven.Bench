@@ -36,7 +36,8 @@ public static class ComparisonModelBuilder
         var contenders = runs.Where((_, i) => i != baselineIndex).ToList();
 
         bool isRateBased = runs.Any(r => r.Summary.Steps.Any(s => s.TargetThroughput.HasValue));
-        var alignedSteps = BuildAlignedSteps(runs, isRateBased);
+        // Each snapshot lists the baseline first, then the contenders, the order the model publishes its runs in.
+        var alignedSteps = BuildAlignedSteps([baseline, .. contenders], isRateBased);
         var latencyContrasts = BuildLatencyContrasts(baseline, contenders);
         var throughputContrasts = BuildThroughputContrasts(baseline, contenders);
         var errorRateContrasts = BuildErrorRateContrasts(baseline, contenders);
@@ -53,39 +54,23 @@ public static class ComparisonModelBuilder
             ErrorRateContrasts = errorRateContrasts,
             ResourceContrasts = resourceContrasts,
             KeyTakeaways = keyTakeaways,
+            IsRateBased = isRateBased,
             AxisLabel = isRateBased ? "Target RPS" : "Concurrency"
         };
     }
 
     private static RunComparison BuildRunComparison(BenchmarkSummary summary, string label)
     {
-        var steps = summary.Steps.ToList();
-
-        // Find best and second-best steps by quality score: throughput / p999
-        StepResult? bestStep = null;
-        StepResult? secondBestStep = null;
-        double bestScore = 0;
-        double secondBestScore = 0;
-
-        foreach (var step in steps)
-        {
-            double p999 = step.Raw.P999;
-            if (p999 <= 0) continue; // Skip invalid steps
-
-            double score = step.Throughput / p999;
-            if (score > bestScore)
-            {
-                secondBestStep = bestStep;
-                secondBestScore = bestScore;
-                bestStep = step;
-                bestScore = score;
-            }
-            else if (score > secondBestScore)
-            {
-                secondBestStep = step;
-                secondBestScore = score;
-            }
-        }
+        // Ranked by quality score (throughput / p999). A step marked invalid never ranks, and a step above the run's
+        // error limit ranks behind every step within it, because a failing request answers fast.
+        var ranked = summary.Steps
+            .Where(s => s.Raw.P999 > 0 && s.InvalidReason == null)
+            .OrderBy(s => s.ErrorRate > summary.Options.MaxErrorRate)
+            .ThenByDescending(s => QualityScore(s))
+            .ToList();
+        var bestStep = ranked.ElementAtOrDefault(0);
+        var secondBestStep = ranked.ElementAtOrDefault(1);
+        double bestScore = bestStep == null ? 0 : QualityScore(bestStep)!.Value;
 
         return new RunComparison
         {
@@ -296,6 +281,9 @@ public static class ComparisonModelBuilder
         return snapshots;
     }
 
+    /// <summary>The one quality score of the report: throughput over P999, null when the step has no P999.</summary>
+    private static double? QualityScore(StepResult step) => step.Raw.P999 > 0 ? step.Throughput / step.Raw.P999 : null;
+
     private static StepMetrics ToStepMetrics(StepResult step)
     {
         return new StepMetrics
@@ -305,6 +293,7 @@ public static class ComparisonModelBuilder
             P99 = step.Raw.P99,
             P999 = step.Raw.P999,
             ErrorRate = step.ErrorRate,
+            QualityScore = QualityScore(step),
             ClientCpu = step.ClientCpu,
             ServerCpu = step.ServerCpu,
             ServerMemoryMB = step.ServerMemoryMB
@@ -323,6 +312,9 @@ public static class ComparisonModelBuilder
         List<RunComparison> contenders)
     {
         var takeaways = new List<string>();
+
+        foreach (var run in contenders.Prepend(baseline).Where(r => r.BestStep == null))
+            takeaways.Add($"{run.Label} has no valid best step: every step is invalid or has no latency.");
 
         var biggestThroughput = BiggestChange(throughputContrasts);
         if (biggestThroughput != null)
