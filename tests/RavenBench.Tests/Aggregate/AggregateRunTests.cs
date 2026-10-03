@@ -210,11 +210,44 @@ public class AggregateRunTests
             category[op.Id] = op.Category;
             bulkIds.Add(op.Id);
         }
-        foreach (var probe in UnderWriteSplit.ProbeSources(documents, tracked).Take(100))
+        foreach (var probe in UnderWriteSplit.ProbeSources(documents, tracked, 100).Take(100))
         {
             probe.Category.Should().NotBe(tracked);
             bulkIds.Should().NotContain(probe.Id, "the probe and the bulk writers never share a document");
         }
+    }
+
+    [Fact]
+    public void A_Probe_Supply_Short_Of_The_Step_Fails_Before_The_Step()
+    {
+        var (documents, _, tracked) = SmallSet();
+        var supply = (documents.Count(d => d.Category != tracked) + 1) / 2;
+
+        UnderWriteSplit.ProbeSources(documents, tracked, supply).Should().HaveCount(supply, "the probe takes every other document outside the tracked group");
+        var act = () => UnderWriteSplit.ProbeSources(documents, tracked, supply + 5);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage($"*needs {supply + 5}*has {supply}*5 short*");
+    }
+
+    [Fact]
+    public async Task A_Ramp_Fault_Awaits_The_Writers_And_Propagates_Over_A_Writer_Fault()
+    {
+        using var stop = new CancellationTokenSource();
+        var writerStopped = new TaskCompletionSource();
+        var writer = Task.Run(async () =>
+        {
+            await Task.Delay(Timeout.Infinite, stop.Token).ContinueWith(_ => { }, TaskScheduler.Default);
+            writerStopped.SetResult();
+            throw new InvalidOperationException("writer");
+        });
+        var probe = Task.Run(() => Task.Delay(Timeout.Infinite, stop.Token));
+
+        var act = () => AggregateRunner.AlongsideAsync<int>(Task.FromException<int>(new TimeoutException("ramp")), stop, writer, probe);
+
+        (await act.Should().ThrowAsync<TimeoutException>()).WithMessage("ramp");
+        writerStopped.Task.IsCompleted.Should().BeTrue();
+        writer.IsFaulted.Should().BeTrue();
+        probe.IsCanceled.Should().BeTrue();
     }
 
     [Fact]
@@ -234,7 +267,7 @@ public class AggregateRunTests
         var (documents, counts, tracked) = SmallSet();
         const int writers = 8;
         var bulk = UnderWriteSplit.BulkWriters(documents, counts, tracked, writers, documentsPerWriter: 50, seed: 1);
-        using var probeSources = UnderWriteSplit.ProbeSources(documents, tracked).GetEnumerator();
+        using var probeSources = ((IEnumerable<AggregateDocument>)UnderWriteSplit.ProbeSources(documents, tracked, 400)).GetEnumerator();
         var store = new ConcurrentDictionary<string, string>(documents.ToDictionary(d => d.Id, d => d.Category));
         long Count(string group) => store.Values.Count(c => c == group);
         var baseline = counts[tracked];
