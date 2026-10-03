@@ -15,6 +15,12 @@ public static class LoadGeneratorExecution
     public const string LatencySamples = "succeeded, failed and timed-out operations; cancelled excluded";
 
     /// <summary>
+    /// The one rate definition for the step throughput and the rolling rate: documents carried by succeeded operations, per second.
+    /// Failed requests (often rejected fast) add nothing, and a bulk batch counts its documents.
+    /// </summary>
+    public static double Rate(long recordsCompleted, double seconds) => seconds > 0 ? recordsCompleted / seconds : 0;
+
+    /// <summary>
     /// Optional callback invoked on the first occurrence of each unique error message.
     /// Wire up from BenchmarkRunner to surface errors without requiring --verbose.
     /// </summary>
@@ -119,11 +125,7 @@ public static class LoadGeneratorExecution
         var completed = counters.OperationsCompleted;
         var errorCount = counters.ErrorCount;
         var errorRate = completed > 0 ? (double)errorCount / completed : 0.0;
-        // Goodput: documents carried by the operations that succeeded. Failed requests (often
-        // rejected fast) must not inflate throughput, and a bulk batch counts its documents.
-        var throughput = duration.TotalSeconds > 0
-            ? counters.RecordsCompleted / duration.TotalSeconds
-            : 0;
+        var throughput = Rate(counters.RecordsCompleted, duration.TotalSeconds);
         var bytesOut = counters.BytesOut;
         var bytesIn = counters.BytesIn;
 
@@ -212,7 +214,10 @@ public sealed class LoadGeneratorCounters
 
     public long OperationsCompleted => Volatile.Read(ref _operations);
 
-    /// <summary>Documents written or read by the operations that succeeded.</summary>
+    /// <summary>The unit of every throughput figure, the step throughput and the rolling rate alike.</summary>
+    public const string ThroughputUnit = "documents/s of succeeded operations";
+
+    /// <summary>Documents written or read by the operations that succeeded: the count every throughput figure divides by its window.</summary>
     public long RecordsCompleted => Volatile.Read(ref _records);
     public long ErrorCount => Volatile.Read(ref _errors);
     public long BytesOut => Volatile.Read(ref _bytesOut);

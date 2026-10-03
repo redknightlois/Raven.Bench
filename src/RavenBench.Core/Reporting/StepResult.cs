@@ -7,6 +7,9 @@ public sealed class StepResult
 {
     public int Concurrency { get; init; }
     public double Throughput { get; init; }
+
+    /// <summary>The unit of <see cref="Throughput"/> and <see cref="RollingRate"/>.</summary>
+    public string ThroughputUnit { get; init; } = LoadGeneratorCounters.ThroughputUnit;
     public double ErrorRate { get; init; }
     
     /// <summary>
