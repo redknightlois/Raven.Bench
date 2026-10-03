@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using RavenBench.Core.Aggregate;
@@ -100,7 +101,7 @@ public static class AggregateOrdering
             if (op.Filter is not null && Matches(op.Filter, Field(d, op.Filter.Field)) == false)
                 continue;
             var key = Field(d, op.GroupBy);
-            long add = op.Kind == AggregateKind.Count ? 1 : long.Parse(Field(d, op.SumField!));
+            long add = op.Kind == AggregateKind.Count ? 1 : long.Parse(Field(d, op.SumField!), CultureInfo.InvariantCulture);
             totals[key] = totals.GetValueOrDefault(key) + add;
         }
         return Top(totals.Select(t => new AggregateGroup(t.Key, t.Value)), op.TopN);

@@ -1,3 +1,4 @@
+using System.Globalization;
 using RavenBench.Core;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Reporting;
@@ -50,7 +51,7 @@ internal static class HistogramExporter
                     {
                         var valueMicros = histogram.GetValueAtPercentile(p);
                         var valueMs = valueMicros / 1000.0;
-                        writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
+                        writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{p:F3},{valueMicros},{valueMs:F3}"));
                     }
                 }
                 catch (Exception ex)
@@ -76,7 +77,7 @@ internal static class HistogramExporter
                     {
                         var valueMicros = histogram.GetValueAtPercentile(p);
                         var valueMs = valueMicros / 1000.0;
-                        writer.WriteLine($"{p:F3},{valueMicros},{valueMs:F3}");
+                        writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{p:F3},{valueMicros},{valueMs:F3}"));
                     }
                 }
                 catch (Exception ex)

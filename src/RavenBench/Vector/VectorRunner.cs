@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using RavenBench.Analysis;
@@ -93,7 +94,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             return published;
         if (name.StartsWith("sphere-", StringComparison.OrdinalIgnoreCase))
             return new SphereDatasetProvider(name["sphere-".Length..]);
-        if (name.StartsWith("clinical-words-", StringComparison.OrdinalIgnoreCase) && int.TryParse(name["clinical-words-".Length..], out var dims))
+        if (name.StartsWith("clinical-words-", StringComparison.OrdinalIgnoreCase) && int.TryParse(name["clinical-words-".Length..], CultureInfo.InvariantCulture, out var dims))
             return new ClinicalWordsDatasetProvider(dims);
         throw new VectorScenarioException($"Scenario key 'Dataset' is '{name}'; valid sets are {string.Join(", ", VectorSets.Published.Select(s => s.Name))}, sphere-<profile> and clinical-words-<100|300|600>.");
     }

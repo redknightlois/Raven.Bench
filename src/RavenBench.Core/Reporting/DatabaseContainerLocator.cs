@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using RavenBench.Core.Diagnostics;
 
@@ -71,7 +72,7 @@ public sealed class DockerDatabaseContainerLocator
     {
         var inspect = RunDocker("inspect", "--format", "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}", containerId);
         var fields = inspect.StandardOutput.Split(' ');
-        if (inspect.ExitCode != 0 || fields.Length != 2 || long.TryParse(fields[0], out var memory) == false || long.TryParse(fields[1], out var swap) == false)
+        if (inspect.ExitCode != 0 || fields.Length != 2 || long.TryParse(fields[0], CultureInfo.InvariantCulture, out var memory) == false || long.TryParse(fields[1], CultureInfo.InvariantCulture, out var swap) == false)
             throw new DatabaseContainerLocatorException($"Could not read the memory limit of container '{containerId}': {Describe(inspect)}");
         return (memory, swap);
     }
@@ -80,7 +81,7 @@ public sealed class DockerDatabaseContainerLocator
     public long ReadHostMemory()
     {
         var info = RunDocker("info", "--format", "{{.MemTotal}}");
-        if (info.ExitCode != 0 || long.TryParse(info.StandardOutput.Trim(), out var total) == false)
+        if (info.ExitCode != 0 || long.TryParse(info.StandardOutput.Trim(), CultureInfo.InvariantCulture, out var total) == false)
             throw new DatabaseContainerLocatorException($"Could not read the Docker host memory: {Describe(info)}");
         return total;
     }

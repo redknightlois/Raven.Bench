@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using System.Collections.Concurrent;
@@ -93,7 +94,7 @@ public static class RavenServerMetricsCollector
 
         // Parses strings like "3.231 GBytes" or "512.5 MBytes".
         var parts = workingSetString.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2 && double.TryParse(parts[0], out var value))
+        if (parts.Length >= 2 && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
         {
             return parts[1].ToLowerInvariant() switch
             {
@@ -108,7 +109,7 @@ public static class RavenServerMetricsCollector
     }
 
     private static TimeSpan? ParseProcessorTime(string? totalProcessorTime) =>
-        TimeSpan.TryParse(totalProcessorTime, out var value) ? value : null;
+        TimeSpan.TryParse(totalProcessorTime, CultureInfo.InvariantCulture, out var value) ? value : null;
 }
 
 internal sealed class MemoryStatsResult

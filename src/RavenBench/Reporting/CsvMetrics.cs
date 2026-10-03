@@ -1,3 +1,4 @@
+using System.Globalization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -41,7 +42,7 @@ new("Concurrency", _ => true, s => s.Concurrency),
             new("SampleCount", _ => true, s => s.SampleCount),
             new("CorrectedCount", _ => true, s => s.CorrectedCount),
             new("ScheduledOperations", _ => true, s => s.ScheduledOperations),
-            new("MaxTimestamp", _ => true, s => s.MaxTimestamp?.ToString("O")),
+            new("MaxTimestamp", _ => true, s => s.MaxTimestamp?.ToString("O", CultureInfo.InvariantCulture)),
             new("ClientCpu", _ => true, s => s.ClientCpu),
             new("NetworkUtilization", _ => true, s => s.NetworkUtilization),
             

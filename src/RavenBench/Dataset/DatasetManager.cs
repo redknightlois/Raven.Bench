@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http;
 using System.IO;
 using RavenBench.Core;
@@ -218,7 +219,7 @@ public sealed class DatasetManager : IDisposable
         var text = System.Text.Encoding.Latin1.GetString(prefix, 0, prefixLength);
         var version = System.Text.RegularExpressions.Regex.Match(text, """^\{\s*"BuildVersion"\s*:\s*(\d+)""");
         if (version.Success && version.Groups[1].Length == 5 &&
-            long.Parse(version.Groups[1].Value) >= 40000 && text.Contains("\"Raven-Entity-Name\""))
+            long.Parse(version.Groups[1].Value, CultureInfo.InvariantCulture) >= 40000 && text.Contains("\"Raven-Entity-Name\""))
         {
             Console.WriteLine("[Dataset] Dump carries v3 metadata under a v4+ BuildVersion; rewriting header so collections are preserved");
             System.Text.Encoding.Latin1.GetBytes("30000", prefix.AsSpan(version.Groups[1].Index, 5));
