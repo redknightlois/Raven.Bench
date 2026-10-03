@@ -395,7 +395,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
             if (response.Failure != null)
                 return new TransportResult(0, 0, response.Failure);
             if (response.Status is < 200 or > 299)
-                return new TransportResult(0, 0, $"HTTP {response.Status} {(HttpStatusCode)response.Status}: {response.ErrorBody}");
+                return new TransportResult(0, 0, $"HTTP {response.Status} {(HttpStatusCode)response.Status}: {response.ErrorBody}") { NotFound = response.Status == (int)HttpStatusCode.NotFound };
 
             var envelope = response.Envelope;
             return new TransportResult(exchange.BytesOut, response.BytesIn,
@@ -595,7 +595,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         if (resp.IsSuccessStatusCode == false)
         {
             var errorContent = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            return new TransportResult(0, 0, $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}");
+            return new TransportResult(0, 0, $"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {errorContent}") { NotFound = resp.StatusCode == HttpStatusCode.NotFound };
         }
 
         var readToken = readDeadline == ResponseReadDeadline.Capped ? cts.Token : ct;

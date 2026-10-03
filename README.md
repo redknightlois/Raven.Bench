@@ -118,6 +118,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `uniform`: equal probability across existing keys.
   - `zipfian`: favors smaller (older) keys.
   - `latest`: favors the most recently inserted portion of the keyspace.
+- The ycsb parity check deletes only the documents its own inserts created. A sample id that already holds a document fails the check and the document is left in place.
 
 - Profiles:
   - `--profile query-by-id`: parameterized query by id only. Requires `--preload N`. Raw HTTP posts to `/databases/<db>/queries` with `from @all_docs where id() = $id`. Measures query endpoint overhead vs. direct reads.

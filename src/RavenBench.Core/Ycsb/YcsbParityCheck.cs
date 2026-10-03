@@ -140,6 +140,8 @@ public sealed class YcsbParityCheck
                 afterInsert, afterUpdate, readOutcomes, $"{product.Name}: nothing was written.");
         }
 
+        string? failure = null;
+        var inserted = new List<string>(_sampleSize);
         try
         {
             await product.Transport.EnsureDatabaseExistsAsync(product.Database).ConfigureAwait(false);
@@ -147,17 +149,20 @@ public sealed class YcsbParityCheck
             for (int i = 1; i <= _sampleSize; i++)
             {
                 var id = BenchIds.IdFor(i);
+                if (await inspector.ReadStoredFieldsAsync(id, ct).ConfigureAwait(false) != null)
+                    throw new InvalidOperationException($"the sample id '{id}' already holds a document; the check writes only ids it creates, so it leaves that document alone");
+
                 var insert = await product.Transport
                     .ExecuteAsync(new InsertOperation<string> { Id = id, Payload = Document(id) }, ct)
                     .ConfigureAwait(false);
 
                 if (insert.IsSuccess == false)
                     throw new InvalidOperationException($"the single insert of '{id}' failed: {insert.ErrorDetails}");
+                inserted.Add(id);
 
                 afterInsert[id] = Snapshot(await inspector.ReadStoredFieldsAsync(id, ct).ConfigureAwait(false));
 
-                var read = await product.Transport.ExecuteAsync(new ReadOperation { Id = id }, ct).ConfigureAwait(false);
-                readOutcomes[id] = read.IsSuccess ? "found" : "not-found";
+                readOutcomes[id] = await ReadOutcomeAsync(product.Transport, id, ct).ConfigureAwait(false);
 
                 var update = UpdateFor(i, id);
                 var updated = await product.Transport.ExecuteAsync(update, ct).ConfigureAwait(false);
@@ -168,22 +173,44 @@ public sealed class YcsbParityCheck
             }
 
             var missingId = BenchIds.IdFor(_sampleSize + MissingIdOffset);
-            var missing = await product.Transport.ExecuteAsync(new ReadOperation { Id = missingId }, ct).ConfigureAwait(false);
-            readOutcomes[missingId] = missing.IsSuccess ? "found" : "not-found";
-
-            for (int i = 1; i <= _sampleSize; i++)
-                await inspector.DeleteStoredDocumentAsync(BenchIds.IdFor(i), ct).ConfigureAwait(false);
-
-            return new ProductObservation(null, afterInsert, afterUpdate, readOutcomes,
-                $"{product.Name}: the {_sampleSize}-document sample was removed from database '{product.Database}'.");
+            readOutcomes[missingId] = await ReadOutcomeAsync(product.Transport, missingId, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            return new ProductObservation(
-                $"{product.Name} at {product.Endpoint} could not be checked: {ex.Message}",
-                afterInsert, afterUpdate, readOutcomes,
-                $"{product.Name}: the sample may remain in database '{product.Database}'; the check stopped on a failure.");
+            failure = $"{product.Name} at {product.Endpoint} could not be checked: {ex.Message}";
         }
+
+        return new ProductObservation(failure, afterInsert, afterUpdate, readOutcomes, await RemoveInsertedAsync(product, inspector, inserted, ct).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Deletes the ids this check inserted, so the next run starts from a clean sample and a document
+    /// the check did not write is never removed. A failed delete is reported as what was left behind
+    /// and never replaces the failure of the check itself.
+    /// </summary>
+    private static async Task<string> RemoveInsertedAsync(YcsbParityProduct product, IInspectsStoredDocuments inspector, IReadOnlyList<string> inserted, CancellationToken ct)
+    {
+        try
+        {
+            foreach (var id in inserted)
+                await inspector.DeleteStoredDocumentAsync(id, ct).ConfigureAwait(false);
+            return $"{product.Name}: the {inserted.Count} documents this check inserted were removed from database '{product.Database}'; no other document was deleted.";
+        }
+        catch (Exception ex)
+        {
+            return $"{product.Name}: documents this check inserted may remain in database '{product.Database}'; their removal failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>Reads one id: "found", or "not-found" only when the store reports the document absent. Any other failure throws.</summary>
+    private static async Task<string> ReadOutcomeAsync(IYcsbTransport transport, string id, CancellationToken ct)
+    {
+        var read = await transport.ExecuteAsync(new ReadOperation { Id = id }, ct).ConfigureAwait(false);
+        if (read.NotFound)
+            return "not-found";
+        if (read.IsSuccess)
+            return "found";
+        throw new InvalidOperationException($"the read of '{id}' failed: {read.ErrorDetails}");
     }
 
     private YcsbParityPair Compare(string operation, string product, ProductObservation observed, ProductObservation reference)

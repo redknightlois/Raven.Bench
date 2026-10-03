@@ -306,7 +306,7 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
         {
             var rows = await slot.Read.QueryAsync(SqlParameters.Create(read.Id), ct).ConfigureAwait(false);
             return rows.Count == 0
-                ? new TransportResult(0, 0, $"Document '{read.Id}' was not found.")
+                ? TransportResult.DocumentNotFound(read.Id)
                 : new TransportResult(0, 0);
         }, ct).ConfigureAwait(false);
     }
@@ -338,7 +338,7 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
             // The server reports a missing match as a successful no-op; a run that updates a key it
             // never loaded is an error, not throughput.
             return result.AffectedRows == 0
-                ? new TransportResult(0, 0, $"Document '{update.Id}' was not found for field update.")
+                ? TransportResult.DocumentNotFound(update.Id, "field update")
                 : new TransportResult(0, 0);
         }, ct).ConfigureAwait(false);
     }

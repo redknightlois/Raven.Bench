@@ -26,6 +26,16 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     public static TransportResult CancelledResult { get; } = new TransportResult(0, 0) { Cancelled = true };
 
     /// <summary>
+    /// True when the store answered that the addressed document does not exist. A transport error
+    /// leaves this false, so a caller never reads a failed request as an absent document.
+    /// </summary>
+    public bool NotFound { get; init; }
+
+    /// <summary>The result of a request whose document does not exist: an error that is a real not-found.</summary>
+    public static TransportResult DocumentNotFound(string id, string? operation = null) =>
+        new(0, 0, $"Document '{id}' was not found{(operation is null ? "" : $" for {operation}")}.") { NotFound = true };
+
+    /// <summary>
     /// Maps a failure raised out of a transport's ExecuteAsync to a result. External cancellation
     /// yields <see cref="CancelledResult"/>, which callers must not count as an error.
     /// </summary>

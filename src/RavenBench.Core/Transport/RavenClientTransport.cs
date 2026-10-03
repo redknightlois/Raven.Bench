@@ -120,11 +120,11 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
                         if (_mapEntities)
                         {
                             var record = await s.LoadAsync<YcsbRecord>(readOp.Id, ct).ConfigureAwait(false);
-                            return new TransportResult(headerBytes, record?.EstimateJsonSize() ?? 0);
+                            return new TransportResult(headerBytes, record?.EstimateJsonSize() ?? 0) { NotFound = record == null };
                         }
 
                         var doc = await s.LoadAsync<BlittableJsonReaderObject>(readOp.Id, ct).ConfigureAwait(false);
-                        return new TransportResult(headerBytes, doc?.Size ?? 0);
+                        return new TransportResult(headerBytes, doc?.Size ?? 0) { NotFound = doc == null };
                     }
                 }
                 case InsertOperation<YcsbRecord> recordInsert:
