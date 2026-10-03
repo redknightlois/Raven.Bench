@@ -121,6 +121,13 @@ public static class YcsbMedianSelector
         steps.Count == 0 ? 0.0 : steps.Max(s => s.Throughput);
 
     /// <summary>
+    /// True when a repetition holds a measurement the plan allows to publish: at least one step, and
+    /// no step that the client-bound guard marked invalid.
+    /// </summary>
+    public static bool IsValid(IReadOnlyList<StepResult> steps) =>
+        steps.Count > 0 && steps.All(s => s.InvalidReason == null);
+
+    /// <summary>
     /// The median result of each row, by the statistic over that row's repetitions.
     ///
     /// A repetition whose steps the client-bound guard marked invalid is a number the plan forbids
@@ -141,7 +148,7 @@ public static class YcsbMedianSelector
             // OrderBy is stable, so repetitions of equal statistic keep their run order and the
             // selection names one of them.
             var candidates = row
-                .Where(r => steps(r).Count > 0 && steps(r).All(s => s.InvalidReason == null))
+                .Where(r => IsValid(steps(r)))
                 .OrderBy(r => Statistic(steps(r)))
                 .ToList();
 

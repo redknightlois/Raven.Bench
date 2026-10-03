@@ -1,8 +1,12 @@
 using System;
+using System.Linq;
 using FluentAssertions;
 using RavenBench.Cli;
 using RavenBench.Core;
+using RavenBench.Core.Reporting;
+using RavenBench.Core.Transport;
 using RavenBench.Core.Ycsb;
+using RavenBench.Ycsb;
 using Xunit;
 
 namespace RavenBench.Tests.Ycsb;
@@ -45,6 +49,22 @@ public class YcsbCrossCheckTests
         YcsbCrossCheckCommand.IsComparedRow(Identity(YcsbRunKind.WorkloadC, LoadShape.Rate)).Should().BeFalse();
         YcsbCrossCheckCommand.IsComparedRow(Identity(YcsbRunKind.Load, LoadShape.Closed)).Should().BeFalse();
         YcsbCrossCheckCommand.IsComparedRow(Identity(YcsbRunKind.WorkloadA, LoadShape.Closed)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_Side_With_No_Valid_Repetition_Is_Never_Within_Noise()
+    {
+        YcsbRunResult Repetition(int repetition, params StepResult[] steps) => new(
+            Identity(YcsbRunKind.WorkloadC, LoadShape.Closed) with { Repetition = repetition },
+            new BenchmarkSummary { Options = new RunOptions { Url = "u", Database = "d" }, Steps = steps.ToList(), Verdict = "v", ClientCompression = "identity", EffectiveHttpVersion = "1.1" });
+        var results = new[] { Repetition(1), Repetition(2, new StepResult { Throughput = 0, InvalidReason = "client-bound" }) };
+
+        var reference = YcsbCrossCheckCommand.Rows(TransportKind.Raw, results).Single();
+        var candidate = YcsbCrossCheckCommand.Rows(TransportKind.Client, results).Single();
+
+        reference.Value.Values.Should().BeEmpty();
+        var compare = () => YcsbCrossCheck.Compare(reference.Key, reference.Value, candidate.Value);
+        compare.Should().Throw<YcsbCrossCheckException>().WithMessage("*0 valid repetition(s)*");
     }
 
     private static YcsbRunIdentity Identity(YcsbRunKind kind, LoadShape shape) => new()
