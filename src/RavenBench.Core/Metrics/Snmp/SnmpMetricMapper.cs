@@ -1,3 +1,4 @@
+using System.Globalization;
 using System;
 using System.Collections.Generic;
 using Lextm.SharpSnmpLib;
@@ -119,7 +120,7 @@ public static class SnmpMetricMapper
         {
             return variable.Data switch
             {
-                OctetString octetString => double.TryParse(octetString.ToString(), out var result) ? result : null,
+                OctetString octetString => double.TryParse(octetString.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : null,
                 Integer32 i32 => (double)i32.ToInt32(),
                 _ => null
             };

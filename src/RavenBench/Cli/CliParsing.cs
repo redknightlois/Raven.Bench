@@ -263,10 +263,10 @@ internal static class CliParsing
     public static int ParseSize(string s)
     {
         s = s.Trim().ToUpperInvariant();
-        if (s.EndsWith("KB")) return int.Parse(s.AsSpan(0, s.Length - 2)) * 1024;
-        if (s.EndsWith("MB")) return int.Parse(s.AsSpan(0, s.Length - 2)) * 1024 * 1024;
-        if (s.EndsWith("B")) return int.Parse(s.AsSpan(0, s.Length - 1));
-        return int.Parse(s);
+        if (s.EndsWith("KB")) return int.Parse(s.AsSpan(0, s.Length - 2), CultureInfo.InvariantCulture) * 1024;
+        if (s.EndsWith("MB")) return int.Parse(s.AsSpan(0, s.Length - 2), CultureInfo.InvariantCulture) * 1024 * 1024;
+        if (s.EndsWith("B")) return int.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture);
+        return int.Parse(s, CultureInfo.InvariantCulture);
     }
 
     public static TimeSpan ParseDuration(string s)

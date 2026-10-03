@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -67,6 +68,6 @@ public static class TemplateHtmlBuilder
 
     private sealed record ReportContext(string? Title, string? Notes, string ReporterVersion)
     {
-        public string GeneratedAt { get; } = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'");
+        public string GeneratedAt { get; } = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'", CultureInfo.InvariantCulture);
     }
 }

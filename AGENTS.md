@@ -51,6 +51,10 @@ This is the **root AGENTS.md** containing universal guidelines that apply to the
 - Keep public APIs documented with XML comments.
 - **Boolean Negation:** Prefer `== false` over `!` for boolean negation to improve readability and consistency.
 
+### Culture
+- Invariant data (numbers, dates and time spans that the harness parses, writes to a result file, hashes, or reads from a server, a process or a CLI argument) is parsed and formatted with `CultureInfo.InvariantCulture`. Every `Parse`, `TryParse`, `ToString(format)` and formatted interpolation that touches invariant data passes it explicitly (`string.Create(CultureInfo.InvariantCulture, $"...")` for interpolation).
+- The only exception is display text that is written to the console and never parsed back (for example the console tables in `TableMetrics` and `IndexBuildCommand`): it follows the current culture.
+
 ## Performance Considerations
 - Be mindful of performance, especially in performance-sensitive areas.
 - Code marked with `PERF` is performance-critical and should not be modified without careful consideration and benchmarking.

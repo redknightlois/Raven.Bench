@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -142,7 +143,7 @@ public sealed class AggregateDataSet(AggregateDataSpec spec)
             var category = CategoryKey(categories.NextKey(random, Spec.CategoryCardinality), Spec.CategoryCardinality);
             var region = RegionKey(regions.NextKey(random, Spec.RegionCardinality), Spec.RegionCardinality);
             long amount = random.NextInt64(1, MaxAmount + 1);
-            var timestamp = Epoch.AddSeconds(i).ToString("yyyy-MM-ddTHH:mm:ssZ");
+            var timestamp = Epoch.AddSeconds(i).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
             for (int c = 0; c < payload.Length; c++)
                 payload[c] = (char)('a' + random.Next(26));
             yield return new AggregateDocument("aggregates/" + i, category, region, amount, timestamp, new string(payload));

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.ComponentModel;
 using System.Collections.Generic;
 using RavenBench.Core;
@@ -145,7 +146,7 @@ public static class SnmpOids
         // OID format: 1.3.6.1.4.1.45751.1.1.5.2.{index}.X.Y
         // Positions:   0 1 2 3 4 5  6    7 8 9 10  11   12 13
         // The database index is at position 11
-        if (parts.Length >= 12 && long.TryParse(parts[11], out databaseIndex))
+        if (parts.Length >= 12 && long.TryParse(parts[11], CultureInfo.InvariantCulture, out databaseIndex))
         {
             return true;
         }
