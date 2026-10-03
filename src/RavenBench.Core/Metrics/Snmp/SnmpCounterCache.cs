@@ -16,12 +16,15 @@ public sealed class SnmpCounterCache
     /// <summary>
     /// Converts SNMP sample to rates by calculating averages over the polling interval.
     /// Server requests per second is computed from TotalRequests counter delta.
-    /// Returns null on first sample to establish baseline.
+    /// Returns null on first sample to establish baseline. An empty sample (a failed poll) returns null and keeps the baseline.
     /// </summary>
     public SnmpRates? ComputeRates(SnmpSample newSample)
     {
         lock (_lock)
         {
+            if (newSample.IsEmpty)
+                return null;
+
             if (_previousSample == null)
             {
                 _previousSample = newSample;
@@ -53,7 +56,7 @@ public sealed class SnmpCounterCache
                 Load5Min = newSample.Load5Min,
                 Load15Min = newSample.Load15Min,
 
-                // Rate metrics (calculated from counter deltas for average over polling interval)
+                // IO rates are the server's own reported rates (KB scaled to bytes); only the request rate comes from a counter delta
                 IoReadOpsPerSec = newSample.IoReadOpsPerSec,
                 IoWriteOpsPerSec = newSample.IoWriteOpsPerSec,
                 IoReadBytesPerSec = newSample.IoReadKbPerSec != null ? newSample.IoReadKbPerSec * 1024 : null,  // Convert KB to bytes

@@ -140,6 +140,8 @@ public sealed class ServerMetricsTracker : IDisposable
             window = _window;
         }
 
+        // The poll's own exceptions are not the measured step's.
+        using var suppress = RavenBench.Core.Diagnostics.FirstChanceExceptionTracker.Suppress();
         try
         {
             var metrics = await _transport.GetServerMetricsAsync();
@@ -185,10 +187,9 @@ public sealed class ServerMetricsTracker : IDisposable
                         : "unknown: the server did not report its core count"
                 };
 
-                if (_options.Snmp.Enabled && metrics.IsValid)
-                {
+                // An admin poll that fails comes back invalid; its SNMP sample is kept regardless.
+                if (_options.Snmp.Enabled)
                     _metricsHistory.Add(metrics);
-                }
             }
         }
         catch

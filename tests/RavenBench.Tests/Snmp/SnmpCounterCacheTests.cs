@@ -107,12 +107,14 @@ public class SnmpCounterCacheTests
         var sample1 = new SnmpSample
         {
             Timestamp = time1,
+            TotalRequests = 1,
             IoReadOpsPerSec = null
         };
 
         var sample2 = new SnmpSample
         {
             Timestamp = time2,
+            TotalRequests = 1,
             IoReadOpsPerSec = null
         };
 
@@ -237,5 +239,18 @@ public class SnmpCounterCacheTests
         rates2!.IoReadOpsPerSec.Should().Be(200.0);
         rates3.Should().NotBeNull();
         rates3!.IoReadOpsPerSec.Should().Be(150.0);
+    }
+
+    [Fact]
+    public void FailedPoll_KeepsTheRateBaseline()
+    {
+        var cache = new SnmpCounterCache();
+        var t0 = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        cache.ComputeRates(new SnmpSample { Timestamp = t0, TotalRequests = 1000 });
+        cache.ComputeRates(new SnmpSample { Timestamp = t0.AddSeconds(1) }).Should().BeNull("a failed poll carries no counters");
+        var rates = cache.ComputeRates(new SnmpSample { Timestamp = t0.AddSeconds(2), TotalRequests = 3000 });
+
+        rates!.ServerRequestsPerSec.Should().Be(1000);
     }
 }
