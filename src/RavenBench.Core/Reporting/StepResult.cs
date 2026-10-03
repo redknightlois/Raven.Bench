@@ -125,6 +125,13 @@ public sealed class StepResult
 
     public string? Reason { get; set; }
 
+    /// <summary>
+    /// True when the knee finder chose this step because a later step degraded (errors or quality).
+    /// False for a knee that no comparison between steps produced: a single step or the end of the range.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool KneeDegraded { get; set; }
+
     // Query metadata (populated for query workload profiles)
     public long? QueryOperations { get; init; }
     public IReadOnlyDictionary<string, long>? IndexUsage { get; init; }
