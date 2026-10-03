@@ -5,6 +5,7 @@ namespace RavenBench.Core.Reporting;
 
 public sealed class StepResult
 {
+    /// <summary>The planned concurrency, not an observed in-flight count: connections for a closed loop, rate workers for a rate step.</summary>
     public int Concurrency { get; init; }
     public double Throughput { get; init; }
 
