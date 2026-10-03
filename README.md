@@ -142,6 +142,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - Latency percentiles (`Raw.*`, `Normalized.*`) hold every completed operation: failed and timed-out operations add a sample, cancelled operations do not, so a failing run cannot report a better tail. Each step states this in `LatencySamples`, in the JSON summary and the CSV.
   - Closed-loop percentiles hold only the measured service time of each issued request: no synthetic samples are added for coordinated omission. Rate-mode latency runs from each arrival's due time, and an arrival that was due but never issued when the step stops adds one sample from its due time to the stop.
   - SNMP metrics included when `--snmp-enabled` (gauge metrics: CPU, memory, load; rate metrics: IO ops/sec, requests/sec). A step's SNMP rates cover the whole step window, and each counter rate starts from a sample taken inside the window. The run totals (`TotalSnmpIo*`) integrate only time inside the steps' measurement windows, and each total equals its average multiplied by that integrated time.
+  - Steps with an `InvalidReason` never become the knee or the best step; a knee stopped by a client-bound step gives a client-limited verdict. A ramp that ends without a knee reports its last step as degraded when that step is in the danger zone or has errors.
   - Knee panel and a one-line Verdict.
 - JSON summary
   - Use `--out results.json` to write a structured `BenchmarkSummary` with options, steps, knee, verdict, HTTP version, compression, and calibration points.
