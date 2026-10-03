@@ -47,6 +47,7 @@ new("Concurrency", _ => true, s => s.Concurrency),
             
             // Server metrics
             new("ServerCpu", summary => summary.Options.SnmpEnabled == false, s => s.ServerCpu),
+            new("ServerCpuBasis", summary => summary.Options.SnmpEnabled == false, s => s.ServerCpuBasis),
             new("ServerMemoryMB", summary => summary.Options.SnmpEnabled == false, s => s.ServerMemoryMB),
             new("ServerRequestsPerSec", summary => summary.Options.SnmpEnabled == false, s => s.ServerRequestsPerSec),
             new("ServerIoReadOps", summary => summary.Options.SnmpEnabled == false, s => s.ServerIoReadOps),

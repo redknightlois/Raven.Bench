@@ -83,6 +83,9 @@ public sealed class StepResult
     /// <summary>The source that filled <see cref="ServerCpu"/>: "node_exporter" or "ravendb-debug". Absent when the column is.</summary>
     public string? ServerCpuSource { get; init; }
 
+    /// <summary>The definition behind <see cref="ServerCpu"/>: the core count it is a percent of, and the window it averages over. Absent when no source was read.</summary>
+    public string? ServerCpuBasis { get; init; }
+
     /// <summary>The source that filled <see cref="ServerMemoryMB"/>: "node_exporter" or "ravendb-debug". Absent when the column is.</summary>
     public string? ServerMemorySource { get; init; }
 
