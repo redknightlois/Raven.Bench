@@ -136,22 +136,6 @@ namespace RavenBench.Core
             return true;
         }
 
-        /// <summary>
-        /// Checks if the ring buffer is empty.
-        /// </summary>
-        public int Count
-        {
-            get
-            {
-                long currentEnqueuePos = Volatile.Read(ref _positions.Enqueue);
-                Cell enqueueCell = _buffer[currentEnqueuePos & _bufferMask];
-
-                long currentDequeuePos = Volatile.Read(ref _positions.Dequeue);
-                Cell dequeueCell = _buffer[currentDequeuePos & _bufferMask];
-
-                return (int) (Volatile.Read(ref enqueueCell.Sequence) - Volatile.Read(ref dequeueCell.Sequence));
-            }
-        }
 
         /// <summary>
         /// Checks if the ring buffer is empty.

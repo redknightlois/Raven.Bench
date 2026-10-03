@@ -309,11 +309,6 @@ public class BenchmarkRunner(RunOptions opts)
         histogramArtifacts = rampResult.HistogramArtifacts;
         maxNetUtil = rampResult.MaxNetworkUtilization;
 
-        if (opts.Verbose)
-        {
-            VerboseErrorTracker.PrintSummary();
-        }
-
         var serverMetricsHistory = serverTracker.GetHistory();
 
         return new BenchmarkRun
@@ -608,7 +603,7 @@ public class BenchmarkRunner(RunOptions opts)
                 catch (Exception ex)
                 {
                     Interlocked.Increment(ref failures);
-                    VerboseErrorTracker.LogError(ex.Message, opts.Verbose);
+                    VerboseErrorTracker.LogError(ex.Message);
                 }
             });
 
@@ -647,7 +642,7 @@ public class BenchmarkRunner(RunOptions opts)
                 if (result.IsSuccess == false)
                 {
                     Interlocked.Increment(ref failures);
-                    VerboseErrorTracker.LogError(result.ErrorDetails ?? "attachment preload failed", opts.Verbose);
+                    VerboseErrorTracker.LogError(result.ErrorDetails ?? "attachment preload failed");
                 }
             });
 
