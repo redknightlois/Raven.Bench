@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench.Core.Metrics;
@@ -205,5 +206,69 @@ public class ServerMetricsTrackerTests
         var metrics = tracker.Current;
         metrics.Should().NotBeNull();
         metrics.IsValid.Should().BeTrue();
+    }
+
+    // Every poll blocks until the test answers it; the test waits for a poll to arrive, never for time to pass.
+    private sealed class PollGate
+    {
+        private readonly Channel<TaskCompletionSource<ServerMetrics>> _polls = Channel.CreateUnbounded<TaskCompletionSource<ServerMetrics>>();
+        private int _inFlight;
+        public int Calls;
+        public int MaxInFlight;
+
+        public async Task<ServerMetrics> PollAsync()
+        {
+            Interlocked.Increment(ref Calls);
+            var inFlight = Interlocked.Increment(ref _inFlight);
+            InterlockedMax(ref MaxInFlight, inFlight);
+            var poll = new TaskCompletionSource<ServerMetrics>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _polls.Writer.TryWrite(poll);
+            try
+            {
+                return await poll.Task;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inFlight);
+            }
+        }
+
+        public async Task<TaskCompletionSource<ServerMetrics>> NextAsync() =>
+            await _polls.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30));
+
+        private static void InterlockedMax(ref int target, int value)
+        {
+            int current;
+            while ((current = Volatile.Read(ref target)) < value && Interlocked.CompareExchange(ref target, value, current) != current) { }
+        }
+    }
+
+    private static (ServerMetricsTracker Tracker, PollGate Gate) GatedTracker()
+    {
+        var gate = new PollGate();
+        var transport = new TestTransport { ServerMetricsSource = gate.PollAsync };
+        var options = new RunOptions { Url = "http://localhost", Database = "test" };
+        return (new ServerMetricsTracker(transport, options), gate);
+    }
+
+    [Fact]
+    public async Task Restart_During_An_InFlight_Poll_Leaves_One_Poll_Loop()
+    {
+        var (tracker, gate) = GatedTracker();
+        using var _ = tracker;
+
+        tracker.Start();
+        var first = await gate.NextAsync();
+        tracker.Stop();
+        tracker.Start();
+        tracker.Stop();
+        tracker.Start();
+
+        first.SetResult(new ServerMetrics());
+        (await gate.NextAsync()).SetResult(new ServerMetrics());
+        await gate.NextAsync();
+
+        gate.MaxInFlight.Should().Be(1);
+        gate.Calls.Should().Be(3, "each answered poll schedules exactly one next poll");
     }
 }
