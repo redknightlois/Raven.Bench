@@ -122,6 +122,7 @@ namespace RavenBench.Core
         }
 
         private const string RavenDebugSource = "ravendb-debug";
+        private const string NodeExporterCpuBasis = "step average over all host CPUs";
 
         private StepResult BuildStepResult(
             ILoadGenerator loadGenerator,
@@ -181,6 +182,7 @@ namespace RavenBench.Core
                 ServerCpu = serverCpu,
                 ServerMemoryMB = serverMemory,
                 ServerCpuSource = serverCpu.HasValue ? source : null,
+                ServerCpuBasis = nodeWindow != null ? NodeExporterCpuBasis : serverMetrics.CpuBasis,
                 ServerMemorySource = serverMemory.HasValue ? source : null,
                 ServerMetricsHostWide = serverCpu.HasValue || serverMemory.HasValue ? nodeWindow != null : null,
                 ServerMetricsUnavailable = nodeWindow?.Unavailable,

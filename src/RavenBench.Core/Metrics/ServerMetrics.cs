@@ -6,9 +6,20 @@ namespace RavenBench.Core.Metrics;
 /// <summary>
 /// Represents server-side metrics collected from RavenDB endpoints.
 /// </summary>
-public sealed class ServerMetrics
+public sealed record ServerMetrics
 {
+    /// <summary>Server process CPU percent of all server cores, averaged from the first sample of the tracker window to this one; null when unknown.</summary>
     public double? CpuUsagePercent { get; init; }
+
+    /// <summary>How <see cref="CpuUsagePercent"/> was computed: the core basis and the window.</summary>
+    public string? CpuBasis { get; init; }
+
+    /// <summary>Cumulative CPU time of the server process, as the server reports it.</summary>
+    public TimeSpan? ServerProcessorTime { get; init; }
+
+    /// <summary>Core count the server reports for itself; null when the server does not report it.</summary>
+    public int? ServerCores { get; init; }
+
     public long? MemoryUsageMB { get; init; }
     public int? ActiveConnections { get; init; }
     public double? RequestsPerSecond { get; init; }
@@ -44,6 +55,7 @@ public sealed class ServerMetrics
 
 /// <summary>
 /// Polls server-side metrics from RavenDB endpoints during benchmark execution.
+/// Each Start opens a new window: the server CPU figure averages over the samples taken since that Start only.
 /// </summary>
 public sealed class ServerMetricsTracker : IDisposable
 {
@@ -55,8 +67,10 @@ public sealed class ServerMetricsTracker : IDisposable
     private readonly List<ServerMetrics> _metricsHistory = new();
 
     private ServerMetrics _currentMetrics = new();
+    private ServerMetrics? _windowStart;
     private bool _isRunning;
     private bool _pollInFlight;
+    private int _window;
 
     public ServerMetricsTracker(Transport.ITransport transport, RunOptions options)
     {
@@ -65,12 +79,16 @@ public sealed class ServerMetricsTracker : IDisposable
         _timer = new Timer(PollMetrics, null, Timeout.Infinite, Timeout.Infinite);
     }
 
+    /// <summary>Opens a new measurement window and starts polling.</summary>
     public void Start()
     {
         lock (_lock)
         {
             _isRunning = true;
-            // A poll still in flight reschedules the loop when it ends.
+            _window++;
+            _windowStart = null;
+            _currentMetrics = new ServerMetrics();
+            // A poll still in flight from an earlier window reschedules the loop when it ends.
             if (_pollInFlight == false)
                 _timer.Change(0, Timeout.Infinite);
         }
@@ -96,14 +114,30 @@ public sealed class ServerMetricsTracker : IDisposable
         }
     }
 
+    /// <summary>
+    /// The server CPU percent between two samples of the server process, against the server's own core count.
+    /// Null when either sample lacks the CPU time, the server core count is unknown, or no time elapsed.
+    /// </summary>
+    public static double? CpuPercent(ServerMetrics start, ServerMetrics end)
+    {
+        var elapsed = end.Timestamp - start.Timestamp;
+        if (start.ServerProcessorTime is not { } startCpu || end.ServerProcessorTime is not { } endCpu
+            || end.ServerCores is not { } cores || elapsed <= TimeSpan.Zero || endCpu < startCpu)
+            return null;
+
+        return Math.Clamp((endCpu - startCpu) / (elapsed * cores) * 100.0, 0, 100);
+    }
+
     // One-shot timer: at most one poll is in flight, and it reschedules the next one when it ends.
     private async void PollMetrics(object? state)
     {
+        int window;
         lock (_lock)
         {
             if (_isRunning == false || _pollInFlight)
                 return;
             _pollInFlight = true;
+            window = _window;
         }
 
         try
@@ -115,19 +149,8 @@ public sealed class ServerMetricsTracker : IDisposable
                 var snmpSample = await _transport.GetSnmpMetricsAsync(_options.Snmp, _options.Database);
                 var snmpRates = _counterCache.ComputeRates(snmpSample);
 
-                metrics = new ServerMetrics
+                metrics = metrics with
                 {
-                    CpuUsagePercent = metrics.CpuUsagePercent,
-                    MemoryUsageMB = metrics.MemoryUsageMB,
-                    ActiveConnections = metrics.ActiveConnections,
-                    RequestsPerSecond = metrics.RequestsPerSecond,
-                    QueuedRequests = metrics.QueuedRequests,
-                    IoReadOperations = metrics.IoReadOperations,
-                    IoWriteOperations = metrics.IoWriteOperations,
-                    ReadThroughputKb = metrics.ReadThroughputKb,
-                    WriteThroughputKb = metrics.WriteThroughputKb,
-                    QueueLength = metrics.QueueLength,
-
                     MachineCpu = snmpSample.MachineCpu,
                     ProcessCpu = snmpSample.ProcessCpu,
                     ManagedMemoryMb = snmpSample.ManagedMemoryMb,
@@ -144,19 +167,23 @@ public sealed class ServerMetricsTracker : IDisposable
                     SnmpIoWriteBytesPerSec = snmpRates?.IoWriteBytesPerSec,
                     ServerSnmpRequestsPerSec = snmpRates?.ServerRequestsPerSec,
                     SnmpErrorsPerSec = snmpRates?.ErrorsPerSec,
-
-                    Timestamp = metrics.Timestamp,
-                    IsValid = metrics.IsValid,
-                    ErrorMessage = metrics.ErrorMessage
                 };
             }
 
             lock (_lock)
             {
-                if (_isRunning == false)
+                if (_isRunning == false || window != _window)
                     return;
 
-                _currentMetrics = metrics;
+                if (metrics.ServerProcessorTime.HasValue)
+                    _windowStart ??= metrics;
+                _currentMetrics = metrics with
+                {
+                    CpuUsagePercent = _windowStart == null ? null : CpuPercent(_windowStart, metrics),
+                    CpuBasis = metrics.ServerCores is { } cores
+                        ? $"step average over {cores} server-reported cores"
+                        : "unknown: the server did not report its core count"
+                };
 
                 if (_options.Snmp.Enabled && metrics.IsValid)
                 {
@@ -175,7 +202,8 @@ public sealed class ServerMetricsTracker : IDisposable
                 _pollInFlight = false;
                 if (_isRunning)
                 {
-                    _timer.Change((int)_options.Snmp.PollInterval.TotalMilliseconds, Timeout.Infinite);
+                    // A poll from an earlier window hands the loop to the current window at once.
+                    _timer.Change(window == _window ? (int)_options.Snmp.PollInterval.TotalMilliseconds : 0, Timeout.Infinite);
                 }
             }
         }

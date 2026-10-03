@@ -243,12 +243,69 @@ public class ServerMetricsTrackerTests
         }
     }
 
+    private static readonly DateTime T0 = new(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private static ServerMetrics Sample(double seconds, double cpuSeconds, int? cores) => new()
+    {
+        Timestamp = T0.AddSeconds(seconds),
+        ServerProcessorTime = TimeSpan.FromSeconds(cpuSeconds),
+        ServerCores = cores
+    };
+
     private static (ServerMetricsTracker Tracker, PollGate Gate) GatedTracker()
     {
         var gate = new PollGate();
         var transport = new TestTransport { ServerMetricsSource = gate.PollAsync };
         var options = new RunOptions { Url = "http://localhost", Database = "test" };
         return (new ServerMetricsTracker(transport, options), gate);
+    }
+
+    [Fact]
+    public void CpuPercent_Uses_The_Server_Core_Count()
+    {
+        var serverCores = Environment.ProcessorCount + 3;
+
+        // The server process uses half of every server core for one second.
+        ServerMetricsTracker.CpuPercent(Sample(0, 0, serverCores), Sample(1, serverCores * 0.5, serverCores))
+            .Should().BeApproximately(50, 1e-9);
+    }
+
+    [Fact]
+    public void CpuPercent_Is_Unknown_Without_The_Server_Core_Count()
+    {
+        ServerMetricsTracker.CpuPercent(Sample(0, 0, null), Sample(1, 1, null)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Step_Cpu_Averages_Over_Its_Own_Window_Only()
+    {
+        const int cores = 4;
+        var (tracker, gate) = GatedTracker();
+        using var _ = tracker;
+
+        tracker.Start();
+        (await gate.NextAsync()).SetResult(Sample(0, 0, cores));
+        (await gate.NextAsync()).SetResult(Sample(1, 1, cores));
+        (await gate.NextAsync()).SetResult(Sample(2, 4, cores));
+        var stalePoll = await gate.NextAsync();
+
+        // Two intervals at 25% and 75%: the step average is 50%, not the last interval.
+        tracker.Current.CpuUsagePercent.Should().BeApproximately(50, 1e-9);
+        tracker.Current.CpuBasis.Should().Contain("step average").And.Contain("4 server-reported cores");
+
+        tracker.Stop();
+        tracker.Start();
+        tracker.Current.CpuUsagePercent.Should().BeNull("a new step has no sample yet");
+
+        // A poll from the earlier step answers after the restart; it must not become the new step's baseline.
+        stalePoll.SetResult(Sample(3, 4, cores));
+        (await gate.NextAsync()).SetResult(Sample(10, 40, cores));
+        var lastPoll = await gate.NextAsync();
+        tracker.Current.CpuUsagePercent.Should().BeNull("the first poll of a step has nothing in the step to compare to");
+        lastPoll.SetResult(Sample(12, 42, cores));
+        await gate.NextAsync();
+
+        tracker.Current.CpuUsagePercent.Should().BeApproximately(25, 1e-9);
     }
 
     [Fact]
@@ -264,8 +321,8 @@ public class ServerMetricsTrackerTests
         tracker.Stop();
         tracker.Start();
 
-        first.SetResult(new ServerMetrics());
-        (await gate.NextAsync()).SetResult(new ServerMetrics());
+        first.SetResult(Sample(0, 0, 1));
+        (await gate.NextAsync()).SetResult(Sample(1, 0, 1));
         await gate.NextAsync();
 
         gate.MaxInFlight.Should().Be(1);

@@ -12,10 +12,15 @@ namespace RavenBench.Core.Metrics;
 /// </summary>
 public static class RavenServerMetricsCollector
 {
-    private static readonly ConcurrentDictionary<string, CpuSample> _previousCpuSamples = new();
     // Stores are cached for the process lifetime; callers share one store per endpoint.
     private static readonly ConcurrentDictionary<string, Lazy<DocumentStore>> _stores = new();
+    // A server's core count does not change while it runs, so it is read once per endpoint.
+    private static readonly ConcurrentDictionary<string, int> _serverCores = new();
 
+    /// <summary>
+    /// Reads the server's working set, its cumulative process CPU time and its core count.
+    /// The CPU percent is left to the caller, which averages it over a window of its own.
+    /// </summary>
     public static async Task<ServerMetrics> CollectAsync(string baseUrl, string database, string? httpVersion = null)
     {
         try
@@ -23,19 +28,13 @@ public static class RavenServerMetricsCollector
             var store = GetStore(baseUrl, database, httpVersion);
             var httpClient = store.GetRequestExecutor().HttpClient;
 
-            var memoryStatsTask = GetMemoryStatsAsync(httpClient, baseUrl);
-            var cpuStatsTask = GetCpuStatsAsync(httpClient, baseUrl);
+            var memoryStatsTask = httpClient.GetStringAsync($"{baseUrl}/admin/debug/memory/stats");
+            var cpuStatsTask = httpClient.GetStringAsync($"{baseUrl}/admin/debug/cpu/stats");
+            var coresTask = GetServerCoresAsync(httpClient, baseUrl);
 
-            await Task.WhenAll(memoryStatsTask, cpuStatsTask);
+            await Task.WhenAll(memoryStatsTask, cpuStatsTask, coresTask);
 
-            var memoryStats = await memoryStatsTask;
-            var cpuStats = await cpuStatsTask;
-
-            return new ServerMetrics
-            {
-                CpuUsagePercent = CalculateCpuUsagePercent(cpuStats, baseUrl),
-                MemoryUsageMB = ExtractMemoryMB(memoryStats.MemoryInformation?.WorkingSet)
-            };
+            return Parse(await memoryStatsTask, await cpuStatsTask, await coresTask);
         }
         catch (Exception ex)
         {
@@ -47,6 +46,19 @@ public static class RavenServerMetricsCollector
         }
     }
 
+    /// <summary>Builds a sample from the bodies of the memory and CPU debug endpoints.</summary>
+    internal static ServerMetrics Parse(string memoryStatsJson, string cpuStatsJson, int? serverCores)
+    {
+        var memoryStats = JsonSerializer.Deserialize<MemoryStatsResult>(memoryStatsJson);
+        var cpuStats = JsonSerializer.Deserialize<CpuStatsResult>(cpuStatsJson);
+        return new ServerMetrics
+        {
+            ServerProcessorTime = ParseProcessorTime(cpuStats?.CpuStats?.FirstOrDefault()?.TotalProcessorTime),
+            ServerCores = serverCores,
+            MemoryUsageMB = ExtractMemoryMB(memoryStats?.MemoryInformation?.WorkingSet)
+        };
+    }
+
     private static DocumentStore GetStore(string baseUrl, string database, string? httpVersion)
     {
         var key = $"{baseUrl}|{database}|{httpVersion}";
@@ -54,11 +66,24 @@ public static class RavenServerMetricsCollector
             () => HttpHelper.CreateFromVersionString(baseUrl, database, httpVersion))).Value;
     }
 
-    private static async Task<MemoryStatsResult> GetMemoryStatsAsync(HttpClient httpClient, string baseUrl)
+    // The core count the server process sees; null when the server does not report it.
+    private static async Task<int?> GetServerCoresAsync(HttpClient httpClient, string baseUrl)
     {
-        var response = await httpClient.GetStringAsync($"{baseUrl}/admin/debug/memory/stats");
-        using var doc = JsonDocument.Parse(response);
-        return doc.RootElement.Deserialize<MemoryStatsResult>() ?? new MemoryStatsResult();
+        if (_serverCores.TryGetValue(baseUrl, out var cached))
+            return cached;
+
+        try
+        {
+            var response = await httpClient.GetStringAsync($"{baseUrl}/cluster/node-info");
+            using var doc = JsonDocument.Parse(response);
+            if (doc.RootElement.TryGetProperty("NumberOfCores", out var cores) && cores.TryGetInt32(out var count) && count > 0)
+                return _serverCores[baseUrl] = count;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException)
+        {
+            // An unknown core count leaves the server CPU figure unknown; memory is still valid.
+        }
+        return null;
     }
 
     private static long ExtractMemoryMB(string? workingSetString)
@@ -82,52 +107,8 @@ public static class RavenServerMetricsCollector
         return 0;
     }
 
-    private static async Task<CpuStatsResult> GetCpuStatsAsync(HttpClient httpClient, string baseUrl)
-    {
-        var response = await httpClient.GetStringAsync($"{baseUrl}/admin/debug/cpu/stats");
-        using var doc = JsonDocument.Parse(response);
-        return doc.RootElement.Deserialize<CpuStatsResult>() ?? new CpuStatsResult();
-    }
-
-    private static double? CalculateCpuUsagePercent(CpuStatsResult cpuStats, string serverKey)
-    {
-        var currentSample = ExtractCpuSample(cpuStats);
-        if (currentSample == null)
-            return null;
-
-        var previousSample = _previousCpuSamples.GetValueOrDefault(serverKey);
-        _previousCpuSamples[serverKey] = currentSample;
-
-        if (previousSample == null)
-            return null;
-
-        var totalProcessorTimeDiff = currentSample.TotalProcessorTime - previousSample.TotalProcessorTime;
-        var timeDiff = currentSample.Timestamp - previousSample.Timestamp;
-
-        if (timeDiff.TotalMilliseconds <= 0 || totalProcessorTimeDiff.TotalMilliseconds < 0)
-            return null;
-
-        var availableCpuTime = timeDiff.TotalMilliseconds * Environment.ProcessorCount;
-        var cpuUsagePercent = (totalProcessorTimeDiff.TotalMilliseconds / availableCpuTime) * 100.0;
-
-        return Math.Max(0, Math.Min(100, cpuUsagePercent));
-    }
-
-    private static CpuSample? ExtractCpuSample(CpuStatsResult cpuStats)
-    {
-        var cpuStatEntry = cpuStats.CpuStats?.FirstOrDefault();
-        if (cpuStatEntry?.TotalProcessorTime == null)
-            return null;
-
-        if (TimeSpan.TryParse(cpuStatEntry.TotalProcessorTime, out var totalProcessorTime) == false)
-            return null;
-
-        return new CpuSample
-        {
-            TotalProcessorTime = totalProcessorTime,
-            Timestamp = DateTime.UtcNow
-        };
-    }
+    private static TimeSpan? ParseProcessorTime(string? totalProcessorTime) =>
+        TimeSpan.TryParse(totalProcessorTime, out var value) ? value : null;
 }
 
 internal sealed class MemoryStatsResult
@@ -147,14 +128,5 @@ internal sealed class CpuStatsResult
 
 internal sealed class CpuStatEntry
 {
-    public string? ProcessName { get; set; }
     public string? TotalProcessorTime { get; set; }
-    public string? UserProcessorTime { get; set; }
-    public string? PrivilegedProcessorTime { get; set; }
-}
-
-internal sealed class CpuSample
-{
-    public TimeSpan TotalProcessorTime { get; set; }
-    public DateTime Timestamp { get; set; }
 }

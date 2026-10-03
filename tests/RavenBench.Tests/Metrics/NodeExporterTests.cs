@@ -124,6 +124,8 @@ public class NodeExporterTests
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(step));
         json.RootElement.GetProperty(nameof(StepResult.ServerCpuSource)).GetString().Should().Be("node_exporter");
         json.RootElement.GetProperty(nameof(StepResult.ServerMetricsHostWide)).GetBoolean().Should().BeTrue();
+        json.RootElement.GetProperty(nameof(StepResult.ServerCpuBasis)).GetString().Should().Be("step average over all host CPUs");
+        RavenBench.Reporting.CsvMetrics.AllFields.Single(f => f.Name == nameof(StepResult.ServerCpuBasis)).ValueSelector(step).Should().Be(step.ServerCpuBasis);
 
         var columns = ServerColumnAvailability.FromSteps("PostgreSQL", new[] { step });
         columns.Columns.Should().Contain(new[] { nameof(StepResult.ServerCpu), nameof(StepResult.ServerMemoryMB) });
