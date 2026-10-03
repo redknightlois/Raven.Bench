@@ -46,6 +46,37 @@ public class CompareCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unit")]
+    public void MultiRun_Report_Shows_The_Serialized_Profile()
+    {
+        var model = ComparisonModelBuilder.Build(new List<BenchmarkSummary> { CreateSummary(WorkloadProfile.Writes), CreateSummary(WorkloadProfile.Writes) }, new List<string> { "A", "B" });
+
+        var html = TemplateHtmlBuilder.Build("multi-run.html", "__COMPARISON_MODEL__", model, null, null);
+
+        // The payload writes the profile as its enum name, and the template prints that value as it is.
+        Assert.Contains("\"profile\":\"Writes\"", html);
+        Assert.DoesNotContain("profileNames", html);
+        Assert.Contains("options?.profile", html);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void MultiRun_Report_Shows_Only_The_Model_Quality_Score()
+    {
+        var model = ComparisonModelBuilder.Build(new List<BenchmarkSummary> { CreateSummary(WorkloadProfile.Writes), CreateSummary(WorkloadProfile.Writes) }, new List<string> { "A", "B" });
+
+        var html = TemplateHtmlBuilder.Build("multi-run.html", "__COMPARISON_MODEL__", model, null, null);
+
+        Assert.DoesNotContain("metrics.throughput /", html);
+        Assert.DoesNotContain("(1 + metrics.p99)", html);
+        foreach (var (run, index) in new[] { model.Baseline }.Concat(model.Contenders).Select((r, i) => (r, i)))
+        {
+            var bestMetrics = model.AlignedSteps.Single(s => s.Concurrency == run.BestStep!.Concurrency).RunMetrics[index]!;
+            Assert.Equal(run.BestQualityScore, bestMetrics.QualityScore);
+        }
+    }
+
+    [Fact]
     public void ComparisonModelBuilder_Build_IncompatibleSummaries_Throws()
     {
         // Different workload profiles should be incompatible
@@ -315,6 +346,8 @@ public class CompareCommandTests
         // Latency contrasts should be empty or handle null steps gracefully
         // The current implementation only creates contrasts when both best steps exist
         Assert.Empty(model.LatencyContrasts);
+        Assert.Contains(model.KeyTakeaways, t => t.StartsWith("Run A has no valid best step"));
+        Assert.Contains(model.KeyTakeaways, t => t.StartsWith("Run B has no valid best step"));
     }
 
     [Fact]
@@ -350,6 +383,53 @@ public class CompareCommandTests
 
         // The contrast still surfaces in takeaways via its absolute delta
         Assert.Contains(model.KeyTakeaways, t => t.Contains("Error rate increase") && t.Contains("1.000%"));
+    }
+
+    [Fact]
+    public void ComparisonModelBuilder_Best_Step_Is_Never_Invalid_And_Never_A_Fast_Failing_Step()
+    {
+        var invalid = CreateStepResult(4, 5000, p99: 1, p999: 1, errorRate: 0);
+        invalid.InvalidReason = "client CPU saturated";
+        var failing = CreateStepResult(8, 5000, p99: 1, p999: 1, errorRate: 0.5);
+        var clean = CreateStepResult(16, 1000, p99: 9, p999: 10, errorRate: 0);
+        var slower = CreateStepResult(32, 1000, p99: 19, p999: 20, errorRate: 0);
+        var summary = CreateSummaryWithSteps(new[] { invalid, failing, clean, slower });
+
+        var model = ComparisonModelBuilder.Build(new List<BenchmarkSummary> { summary, summary }, new List<string> { "A", "B" });
+
+        Assert.Same(clean, model.Baseline.BestStep);
+        Assert.Same(slower, model.Baseline.SecondBestStep);
+    }
+
+    [Fact]
+    public void ComparisonModelBuilder_Aligned_Metrics_Follow_The_Published_Run_Order_For_Any_Baseline()
+    {
+        var summaries = new List<BenchmarkSummary>
+        {
+            CreateSummaryWithSteps(new[] { CreateStepResult(16, 1000, p99: 9, p999: 10) }),
+            CreateSummaryWithSteps(new[] { CreateStepResult(16, 2000, p99: 9, p999: 10) }),
+            CreateSummaryWithSteps(new[] { CreateStepResult(16, 3000, p99: 9, p999: 10) }),
+        };
+
+        var model = ComparisonModelBuilder.Build(summaries, new List<string> { "A", "B", "C" }, baselineIndex: 1);
+
+        var published = new[] { model.Baseline }.Concat(model.Contenders).ToList();
+        var metrics = model.AlignedSteps.Single().RunMetrics;
+        Assert.Equal(published.Select(r => r.Summary.Steps[0].Throughput), metrics.Select(m => m!.Throughput));
+    }
+
+    [Fact]
+    public void ComparisonModelBuilder_Rate_Runs_Align_And_Rank_By_Target_Throughput()
+    {
+        StepResult Rate(double target, double throughput, double p999) =>
+            new() { Concurrency = 8, Throughput = throughput, Raw = new Percentiles(1, 1, 1, 1, p999, p999), TargetThroughput = target };
+        var summary = CreateSummaryWithSteps(new[] { Rate(1000, 1000, 10), Rate(2000, 1500, 50) });
+
+        var model = ComparisonModelBuilder.Build(new List<BenchmarkSummary> { summary, summary }, new List<string> { "A", "B" });
+
+        Assert.True(model.IsRateBased);
+        Assert.Equal(new double[] { 1000, 2000 }, model.AlignedSteps.Select(s => s.Concurrency));
+        Assert.Equal(model.Baseline.BestStep!.TargetThroughput, model.AlignedSteps.Single(s => s.RunMetrics[0]!.Throughput == model.Baseline.BestStep.Throughput).Concurrency);
     }
 
     private static List<BenchmarkSummary> CreateCompatibleSummaries(int count)

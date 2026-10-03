@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Reflection;
 
 namespace RavenBench.Reporter.Commands;
@@ -29,12 +30,13 @@ public static class TemplateHtmlBuilder
         string payloadJson = JsonSerializer.Serialize(payload, JsonOptions);
         string contextJson = JsonSerializer.Serialize(new ReportContext(title, notes, ResolveReporterVersion()), JsonOptions);
 
-        payloadJson = payloadJson.Replace("</script>", "<\\/script>", StringComparison.OrdinalIgnoreCase);
-        contextJson = contextJson.Replace("</script>", "<\\/script>", StringComparison.OrdinalIgnoreCase);
+        // A JSON block with no '<' cannot close or open a tag inside the script element.
+        payloadJson = payloadJson.Replace("<", "\\u003c", StringComparison.Ordinal);
+        contextJson = contextJson.Replace("<", "\\u003c", StringComparison.Ordinal);
 
-        return template
-            .Replace(payloadPlaceholder, payloadJson, StringComparison.Ordinal)
-            .Replace(ContextPlaceholder, contextJson, StringComparison.Ordinal);
+        // One pass over the template text, so an injected value is never searched for a placeholder.
+        return Regex.Replace(template, $"{Regex.Escape(payloadPlaceholder)}|{Regex.Escape(ContextPlaceholder)}",
+            m => m.Value == ContextPlaceholder ? contextJson : payloadJson);
     }
 
     private static string LoadTemplateFromEmbeddedResource(string resourceName)

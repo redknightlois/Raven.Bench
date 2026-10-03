@@ -188,12 +188,8 @@
         const metaSummary = document.getElementById('meta-summary');
         const baseline = model.baseline;
         if (baseline && baseline.summary) {
-          const profileNames = {
-            0: 'Unspecified', 1: 'Mixed', 2: 'Writes', 3: 'Reads',
-            4: 'QueryById', 5: 'BulkWrites', 6: 'StackOverflowReads',
-            7: 'StackOverflowQueries', 8: 'QueryUsersByName'
-          };
-          const profile = profileNames[baseline.summary.options?.profile] || 'Scenario';
+          const rawProfile = baseline.summary.options?.profile;
+          const profile = !rawProfile || rawProfile === 'Unspecified' ? 'none (no workload profile)' : rawProfile;
           metaSummary.textContent = `Profile: ${profile} • Transport: ${baseline.summary.options?.transport || 'n/a'} • HTTP: ${baseline.summary.effectiveHttpVersion || 'n/a'} • Generated: ${context.generatedAt || 'n/a'}`;
         }
 
@@ -209,6 +205,8 @@
         const alignedSteps = model.alignedSteps || [];
         const concurrencies = alignedSteps.map(s => s.concurrency);
         const axisLabel = model.axisLabel || 'Concurrency';
+        // The aligned-step key of a step: target throughput for rate runs, concurrency otherwise.
+        const stepKey = step => step ? (model.isRateBased ? step.targetThroughput : step.concurrency) : undefined;
 
         // Chart references
         let throughputChart = null;
@@ -219,21 +217,6 @@
         // Latency contrast references
         const latencyContrastsContainer = document.getElementById('latency-contrasts');
         let contrastCards = [];
-
-        // Helper function to calculate quality score at a specific concurrency
-        function calculateQualityScoreAtConcurrency(run, targetConcurrency) {
-          // Find the step at the target concurrency
-          const runIndex = allRuns.indexOf(run);
-          const alignedStep = alignedSteps.find(s => s.concurrency === targetConcurrency);
-          if (!alignedStep) return null;
-
-          const metrics = alignedStep.runMetrics[runIndex];
-          if (!metrics) return null;
-
-          // Quality score formula: throughput / (1 + p99)
-          const qualityScore = metrics.throughput / (1 + metrics.p99);
-          return qualityScore;
-        }
 
         // Helper function to render card metrics - always shows each run's own best
         function renderCardMetrics(card, run, runIndex, baselineRun) {
@@ -340,7 +323,7 @@
         function updateLatencyContrasts() {
           const orderedRuns = getReorderedRuns();
           const baseline = orderedRuns[0];
-          const baselineKneeConcurrency = baseline.bestStep?.concurrency;
+          const baselineKneeConcurrency = stepKey(baseline.bestStep);
 
           // Update baseline C label
           const baselineCLabel = document.getElementById('baseline-c-label');
@@ -366,7 +349,7 @@
         function renderComparisonCards() {
           const orderedRuns = getReorderedRuns();
           const baseline = orderedRuns[0];
-          const baselineKneeConcurrency = baseline.bestStep?.concurrency;
+          const baselineKneeConcurrency = stepKey(baseline.bestStep);
           const comparisonRow = document.getElementById('comparison-row');
           const comparisonTitle = document.getElementById('comparison-title');
           const toggleButton = document.getElementById('toggle-comparison');
@@ -396,14 +379,14 @@
               const borderColor = runColors[index % runColors.length];
               card.style.borderColor = borderColor;
 
-              const qualityScore = metrics.throughput / (1 + metrics.p99);
+              const qualityScore = metrics.qualityScore;
 
               card.innerHTML = `
                 <div style="font-weight: 600; color: ${borderColor}; margin-bottom: 8px;">${esc(run.label)}</div>
                 <div style="font-size: 13px; color: #64748b;">
                   <div><strong>${metrics.p99.toFixed(2)}</strong> ms P99</div>
                   <div><strong>${metrics.throughput.toFixed(0)}</strong> ops/s</div>
-                  <div>QS: <strong>${qualityScore.toFixed(1)}</strong></div>
+                  <div>QS: <strong>${qualityScore != null ? qualityScore.toFixed(1) : 'N/A'}</strong></div>
                 </div>
               `;
 
@@ -436,7 +419,7 @@
                 <div style="font-size: 13px; color: #64748b;">
                   <div><strong>${p99.toFixed(2)}</strong> ms P99</div>
                   <div><strong>${bestStep.throughput.toFixed(0)}</strong> ops/s</div>
-                  <div>QS: <strong>${qualityScore.toFixed(1)}</strong></div>
+                  <div>QS: <strong>${qualityScore != null ? qualityScore.toFixed(1) : 'N/A'}</strong></div>
                 </div>
               `;
 

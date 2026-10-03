@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using RavenBench.Core;
@@ -258,6 +259,26 @@ public class ReporterTests
     }
 
     [Fact]
+    public void SingleRunTemplate_Reads_Only_Fields_The_Serialized_Objects_Carry()
+    {
+        var summary = CreateSummary();
+        string html = TemplateHtmlBuilder.Build("single-run.html", "__SUMMARY_JSON__", summary, null, null);
+        var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        HashSet<string> Reads(string variable) => System.Text.RegularExpressions.Regex.Matches(html, $@"\b{variable}\.([A-Za-z0-9]+)").Select(m => m.Groups[1].Value).ToHashSet();
+        HashSet<string> Serialized(object value) => JsonSerializer.SerializeToElement(value, value.GetType(), json).EnumerateObject().Select(p => p.Name).ToHashSet();
+        var artifact = new HistogramArtifact
+        {
+            StepIndex = 0, Concurrency = 1, TotalCount = 1, MaxValueInMicroseconds = 1,
+            Percentiles = [], LatencyInMicroseconds = [], LatencyInMilliseconds = []
+        };
+
+        Assert.Contains("targetThroughput", Reads("step"));
+        Assert.Empty(Reads("step").Except(Serialized(new StepResult())));
+        Assert.Contains("stepIndex", Reads("artifact"));
+        Assert.Empty(Reads("artifact").Except(Serialized(artifact)));
+    }
+
+    [Fact]
     public void TemplateHtmlBuilder_SubstitutesPayloadAndContext()
     {
         var summary = CreateSummary();
@@ -271,15 +292,42 @@ public class ReporterTests
         Assert.Contains("\"schemaVersion\":1", html);
     }
 
-    [Fact]
-    public void TemplateHtmlBuilder_EscapesScriptCloseTagInPayload()
+    [Theory]
+    [InlineData("</script x><img src=x onerror=alert(1)>")]
+    [InlineData("</script/>")]
+    [InlineData("</SCRIPT>")]
+    [InlineData("</script\n>")]
+    public void TemplateHtmlBuilder_No_Value_Closes_A_Json_Block(string hostile)
     {
-        var summary = CreateSummary(notes: "</script><script>alert(1)</script>");
+        var summary = CreateSummary(notes: hostile);
 
-        string html = TemplateHtmlBuilder.Build("single-run.html", "__SUMMARY_JSON__", summary, null, null);
+        string html = TemplateHtmlBuilder.Build("single-run.html", "__SUMMARY_JSON__", summary, hostile, hostile);
 
-        Assert.DoesNotContain("</script><script>alert(1)", html);
-        Assert.Contains("<\\/script><script>alert(1)<\\/script>", html);
+        Assert.Equal(hostile, JsonBlock(html, "report-context").GetProperty("notes").GetString());
+        Assert.Equal(hostile, JsonBlock(html, "report-context").GetProperty("title").GetString());
+        Assert.Equal(hostile, JsonBlock(html, "summary-data").GetProperty("notes").GetString());
+        Assert.DoesNotContain("<img src=x", html);
+    }
+
+    [Fact]
+    public void TemplateHtmlBuilder_Replaces_Placeholders_Only_In_The_Template()
+    {
+        var summary = CreateSummary(notes: "x __REPORT_CONTEXT__ y");
+
+        string html = TemplateHtmlBuilder.Build("single-run.html", "__SUMMARY_JSON__", summary, "a __SUMMARY_JSON__ b", null);
+
+        Assert.Equal("x __REPORT_CONTEXT__ y", JsonBlock(html, "summary-data").GetProperty("notes").GetString());
+        Assert.Equal("a __SUMMARY_JSON__ b", JsonBlock(html, "report-context").GetProperty("title").GetString());
+    }
+
+    // The block content between its opening tag and the first closing tag, which must hold no '<'.
+    private static JsonElement JsonBlock(string html, string id)
+    {
+        var open = $"<script id=\"{id}\" type=\"application/json\">";
+        int start = html.IndexOf(open, StringComparison.Ordinal) + open.Length;
+        string json = html[start..html.IndexOf("</script>", start, StringComparison.Ordinal)];
+        Assert.DoesNotContain("<", json);
+        return JsonDocument.Parse(json).RootElement.Clone();
     }
 
     private static BenchmarkSummary CreateSummary(string? notes = null)
