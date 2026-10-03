@@ -364,14 +364,8 @@ public class BenchmarkRunner(RunOptions opts)
                 : 0L;
 
             var rateWorkerCount = opts.Shape == LoadShape.Rate
-                ? RateWorkerPlanner.ResolveRateWorkerCount(opts, (int)currentValue, baselineLatencyMicros, observedServiceTimeSeconds)
+                ? RateWorkerPlanner.ResolveRateWorkerCount(opts, (int)currentValue, baselineLatencyMicros, observedServiceTimeSeconds, previousAutoRateWorkers)
                 : 0;
-
-            if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false && previousAutoRateWorkers.HasValue)
-            {
-                // Auto worker growth is capped at 2x per step to absorb transient tail-latency spikes.
-                rateWorkerCount = Math.Min(rateWorkerCount, previousAutoRateWorkers.Value * 2);
-            }
 
             ILoadGenerator loadGenerator = opts.Shape switch
             {
@@ -388,18 +382,9 @@ public class BenchmarkRunner(RunOptions opts)
 
             if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false)
             {
-                // Workers for the next step are sized from measured service time, not baseline RTT,
-                // which under-drives the client when per-op CPU/serialization dominates.
-                var p99ServiceTimeSeconds = Math.Max(1e-6, snapshot.GetPercentile(99) / 1_000_000.0);
-                var throughputImpliedServiceTimeSeconds = stepResult.Throughput > 0
-                    ? stepResult.Concurrency / stepResult.Throughput
-                    : 0;
-                var estimatedServiceTimeSeconds = Math.Max(p99ServiceTimeSeconds, throughputImpliedServiceTimeSeconds);
-                observedServiceTimeSeconds = observedServiceTimeSeconds.HasValue
-                    ? Math.Max(observedServiceTimeSeconds.Value, estimatedServiceTimeSeconds)
-                    : estimatedServiceTimeSeconds;
-
-                previousAutoRateWorkers = stepResult.Concurrency;
+                // The mean latency per operation sizes the next step; rate mode records no coordinated-omission backfill, so the mean is over real operations.
+                observedServiceTimeSeconds = snapshot.MeanMicros / 1_000_000.0;
+                previousAutoRateWorkers = rateWorkerCount;
             }
 
             double[] percentiles = { 50, 75, 90, 95, 99, 99.9 };

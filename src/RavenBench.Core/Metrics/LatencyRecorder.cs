@@ -176,6 +176,9 @@ public sealed class HistogramSnapshot
     /// </summary>
     public long TotalCount => _histogram?.TotalCount ?? 0;
 
+    /// <summary>Mean recorded latency in microseconds, coordinated-omission backfill included; zero when empty.</summary>
+    public double MeanMicros => _histogram is { TotalCount: > 0 } h ? h.GetMean() : 0;
+
     internal HistogramSnapshot(HistogramBase? histogram, long maxMicros)
     {
         _histogram = histogram;

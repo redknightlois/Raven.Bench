@@ -4,12 +4,12 @@ namespace RavenBench;
 
 internal static class RateWorkerPlanner
 {
-    internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros)
-    {
-        return ResolveRateWorkerCount(opts, targetRps, baselineLatencyMicros, observedServiceTimeSeconds: null);
-    }
-
-    internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros, double? observedServiceTimeSeconds)
+    /// <summary>
+    /// Sizes the rate workers by Little's Law from the target operation rate and a service time in seconds per operation.
+    /// The service time is the mean latency the previous step observed, or the baseline RTT before any step ran.
+    /// An automatic count grows at most 2x over <paramref name="previousAutoWorkers"/>; an explicit RateWorkers option wins.
+    /// </summary>
+    internal static int ResolveRateWorkerCount(RunOptions opts, int targetRps, long baselineLatencyMicros, double? observedServiceTimeSeconds = null, int? previousAutoWorkers = null)
     {
         if (opts == null)
             throw new ArgumentNullException(nameof(opts));
@@ -36,12 +36,7 @@ internal static class RateWorkerPlanner
         const int minWorkers = 32;
         const int maxWorkers = 16384;
 
-        if (plannedWorkers < minWorkers)
-            return minWorkers;
-
-        if (plannedWorkers > maxWorkers)
-            return maxWorkers;
-
-        return plannedWorkers;
+        plannedWorkers = Math.Clamp(plannedWorkers, minWorkers, maxWorkers);
+        return previousAutoWorkers.HasValue ? Math.Min(plannedWorkers, previousAutoWorkers.Value * 2) : plannedWorkers;
     }
 }

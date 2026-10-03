@@ -60,4 +60,36 @@ public sealed class RateWorkerPlannerTests
         var workers = RateWorkerPlanner.ResolveRateWorkerCount(opts, targetRps: 16000, baselineLatencyMicros: 200, observedServiceTimeSeconds: 0.005);
         workers.Should().Be(120);
     }
+
+    [Fact]
+    public void Steady_Service_Time_Keeps_Workers_At_The_Little_Law_Bound()
+    {
+        var opts = CreateOptions();
+        int? previous = null;
+        foreach (var rps in new[] { 1000, 2000, 3000, 4000 })
+        {
+            // A server that meets every rate with a 1 ms service time; bulk size does not enter the plan.
+            var workers = RateWorkerPlanner.ResolveRateWorkerCount(opts, rps, baselineLatencyMicros: 1000, observedServiceTimeSeconds: previous.HasValue ? 0.001 : null, previous);
+            workers.Should().BeLessThanOrEqualTo(RateWorkerPlanner.ResolveRateWorkerCount(opts, rps, 1000, observedServiceTimeSeconds: 0.001));
+            previous = workers;
+        }
+    }
+
+    [Fact]
+    public void A_Faster_Later_Step_Lowers_The_Next_Plan()
+    {
+        var opts = CreateOptions();
+        var afterSlow = RateWorkerPlanner.ResolveRateWorkerCount(opts, 50_000, 1000, observedServiceTimeSeconds: 0.050, previousAutoWorkers: 8192);
+        var afterFast = RateWorkerPlanner.ResolveRateWorkerCount(opts, 50_000, 1000, observedServiceTimeSeconds: 0.002, previousAutoWorkers: afterSlow);
+
+        afterFast.Should().Be(RateWorkerPlanner.ResolveRateWorkerCount(opts, 50_000, 1000, observedServiceTimeSeconds: 0.002));
+        afterFast.Should().BeLessThan(afterSlow);
+    }
+
+    [Fact]
+    public void Explicit_Workers_Ignore_The_Growth_Limit()
+    {
+        RateWorkerPlanner.ResolveRateWorkerCount(CreateOptions(rateWorkers: 512), 5000, 0, 0.1, previousAutoWorkers: 32).Should().Be(512);
+        RateWorkerPlanner.ResolveRateWorkerCount(CreateOptions(), 50_000, 0, 0.1, previousAutoWorkers: 32).Should().Be(64);
+    }
 }
