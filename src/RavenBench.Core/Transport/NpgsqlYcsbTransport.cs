@@ -197,7 +197,7 @@ public sealed class NpgsqlYcsbTransport : IYcsbTransport, IReportsStorageSize, I
     {
         var json = await ReadStoredJsonAsync(id, ct).ConfigureAwait(false);
         if (json is null)
-            return new TransportResult(0, 0, $"Document '{id}' was not found.");
+            return TransportResult.DocumentNotFound(id);
 
         if (_mapEntities)
             _ = JsonSerializer.Deserialize<YcsbRecord>(json) ?? throw new JsonException($"Document '{id}' deserialized to null.");
@@ -217,7 +217,7 @@ public sealed class NpgsqlYcsbTransport : IYcsbTransport, IReportsStorageSize, I
     {
         var affected = await ExecuteNonQueryAsync(PostgresYcsbTransport.UpdateSql, ct, Text(update.Id), Text(update.FieldName), Text(update.Value)).ConfigureAwait(false);
         return affected == 0
-            ? new TransportResult(0, 0, $"Document '{update.Id}' was not found for field update.")
+            ? TransportResult.DocumentNotFound(update.Id, "field update")
             : new TransportResult(0, 0);
     }
 

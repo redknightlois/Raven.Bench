@@ -92,18 +92,68 @@ public class YcsbParityCheckTests
         second.Stored.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task A_Transport_Error_On_A_Read_Is_Not_Read_As_Not_Found()
+    {
+        var broken = new YcsbParityProduct("broken", "memory://broken", "ycsb", new InMemoryProduct(missingReadError: "connection reset by peer"));
+
+        var report = await RunAsync(Product("reference"), broken);
+
+        var read = report.Pairs.Single(p => p.Operation == YcsbParityOperations.ReadById && p.Product == "broken");
+        read.Agreed.Should().BeFalse();
+        read.Failure.Should().Contain("connection reset by peer");
+        report.ExitCode.Should().NotBe(YcsbParityReport.AgreedExitCode);
+    }
+
+    [Fact]
+    public async Task A_Run_That_Fails_Partway_Leaves_A_Clean_Sample_For_The_Next_Run()
+    {
+        var product = new YcsbParityProduct("flaky", "memory://flaky", "ycsb", new InMemoryProduct(failFirstUpdate: true));
+
+        var first = await RunAsync(product);
+        var second = await RunAsync(product);
+
+        first.Agreed.Should().BeFalse();
+        first.Pairs.Should().OnlyContain(p => p.Failure!.Contains("the connection dropped during the update"));
+        second.Agreed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task The_Check_Deletes_Only_The_Documents_It_Inserted()
+    {
+        var transport = new InMemoryProduct();
+        var foreign = new Dictionary<string, Dictionary<string, string>>();
+        foreach (var id in Enumerable.Range(1, Sample).Select(i => BenchIds.IdFor(i)))
+        {
+            foreign[id] = new Dictionary<string, string> { ["field0"] = "not written by the check" };
+            transport.Preload(id, foreign[id]);
+        }
+
+        var report = await RunAsync(new YcsbParityProduct("seeded", "memory://seeded", "ycsb", transport));
+
+        transport.Stored.Should().BeEquivalentTo(foreign);
+        report.LeftBehind.Should().ContainSingle().Which.Should().Contain("the 0 documents this check inserted");
+    }
+
     private static Task<YcsbParityReport> RunAsync(params YcsbParityProduct[] products) =>
         new YcsbParityCheck(Seed, DocumentSize, Sample).RunAsync(products, CancellationToken.None);
 
     private static YcsbParityProduct Product(string name, bool ignoreUpdates = false) =>
         new(name, $"memory://{name}", "ycsb", new InMemoryProduct(ignoreUpdates));
 
-    /// <summary>A product that stores the ycsb documents in memory, optionally dropping the one-field update.</summary>
-    private sealed class InMemoryProduct(bool ignoreUpdates = false) : IYcsbTransport, IInspectsStoredDocuments
+    /// <summary>
+    /// A product that stores the ycsb documents in memory, optionally dropping the one-field update,
+    /// answering a read of an absent id with a transport error, or failing its first update once.
+    /// An insert of an id it already holds overwrites it, as a RavenDB put does.
+    /// </summary>
+    private sealed class InMemoryProduct(bool ignoreUpdates = false, string? missingReadError = null, bool failFirstUpdate = false) : IYcsbTransport, IInspectsStoredDocuments
     {
         private readonly Dictionary<string, Dictionary<string, string>> _stored = new();
+        private bool _updateFailed;
 
         public IReadOnlyDictionary<string, Dictionary<string, string>> Stored => _stored;
+
+        public void Preload(string id, Dictionary<string, string> document) => _stored[id] = new Dictionary<string, string>(document);
 
         public string ProductName => "InMemory";
         public bool ReportsWireBytes => false;
@@ -118,10 +168,15 @@ public class YcsbParityCheckTests
                 case ReadOperation read:
                     return Task.FromResult(_stored.ContainsKey(read.Id)
                         ? new TransportResult(0, 0)
-                        : new TransportResult(0, 0, $"Document '{read.Id}' was not found."));
+                        : missingReadError is null ? TransportResult.DocumentNotFound(read.Id) : new TransportResult(0, 0, missingReadError));
                 case UpdateFieldOperation update:
+                    if (failFirstUpdate && _updateFailed == false)
+                    {
+                        _updateFailed = true;
+                        throw new InvalidOperationException("the connection dropped during the update");
+                    }
                     if (_stored.TryGetValue(update.Id, out var document) == false)
-                        return Task.FromResult(new TransportResult(0, 0, $"Document '{update.Id}' was not found."));
+                        return Task.FromResult(TransportResult.DocumentNotFound(update.Id));
                     if (ignoreUpdates == false)
                         document[update.FieldName] = update.Value;
                     return Task.FromResult(new TransportResult(0, 0));

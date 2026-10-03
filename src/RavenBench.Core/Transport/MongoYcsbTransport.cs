@@ -283,7 +283,7 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
     {
         var document = await _collection.Find(ReadFilter(read.Id)).FirstOrDefaultAsync(ct).ConfigureAwait(false);
         return document == null
-            ? new TransportResult(0, 0, $"Document '{read.Id}' was not found.")
+            ? TransportResult.DocumentNotFound(read.Id)
             : new TransportResult(0, 0);
     }
 
@@ -302,7 +302,7 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         // The server reports a missing match as a successful no-op; a run that updates a key it
         // never loaded is an error, not throughput.
         return result.MatchedCount == 0
-            ? new TransportResult(0, 0, $"Document '{update.Id}' was not found for field update.")
+            ? TransportResult.DocumentNotFound(update.Id, "field update")
             : new TransportResult(0, 0);
     }
 
