@@ -125,7 +125,7 @@ public class RawHttpTransportTests
         counters.Record(result);
         counters.OperationsCompleted.Should().Be(1);
         counters.ErrorCount.Should().Be(1);
-        latencyRecorder.Snapshot().TotalCount.Should().Be(0);
+        latencyRecorder.Snapshot().TotalCount.Should().Be(1);
     }
 
     [Theory]

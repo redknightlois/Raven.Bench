@@ -16,6 +16,9 @@ public sealed class StepResult
     public long BytesOut { get; init; }
     public long BytesIn { get; init; }
 
+    /// <summary>The operations the latency figures hold: failed and timed-out operations add a sample, cancelled ones do not.</summary>
+    public string LatencySamples { get; init; } = LoadGeneratorExecution.LatencySamples;
+
     public Percentiles Raw { get; set; }
     public Percentiles Normalized { get; set; }
 
