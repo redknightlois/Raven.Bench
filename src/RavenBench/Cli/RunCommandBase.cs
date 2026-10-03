@@ -112,7 +112,7 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
         if (string.IsNullOrWhiteSpace(opts.OutCsv) == false)
         {
             AnsiConsole.MarkupLine($"[dim]Attempting to write CSV to: {opts.OutCsv}[/]");
-            CsvResultsWriter.Write(opts.OutCsv!, summary, opts.SnmpEnabled);
+            CsvResultsWriter.Write(opts.OutCsv!, summary);
         }
 
         RenderResults(summary, run.MaxNetworkUtilization, analysis, opts.LatencyDisplay);

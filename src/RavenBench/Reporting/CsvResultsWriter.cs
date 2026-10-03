@@ -8,7 +8,7 @@ namespace RavenBench.Reporting
 {
     public static class CsvResultsWriter
     { 
-        public static void Write(string path, BenchmarkSummary summary, bool snmpEnabled)
+        public static void Write(string path, BenchmarkSummary summary)
         {
             using var writer = new StreamWriter(path);
             using var csv = new CsvWriter(writer, CultureInfo.InvariantCulture);
