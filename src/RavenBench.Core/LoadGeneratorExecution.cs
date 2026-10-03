@@ -11,6 +11,9 @@ namespace RavenBench.Core;
 
 public static class LoadGeneratorExecution
 {
+    /// <summary>The operations the latency figures hold: every completed operation, failed and timed-out ones included. Cancelled operations add no sample.</summary>
+    public const string LatencySamples = "succeeded, failed and timed-out operations; cancelled excluded";
+
     /// <summary>
     /// Optional callback invoked on the first occurrence of each unique error message.
     /// Wire up from BenchmarkRunner to surface errors without requiring --verbose.
@@ -40,21 +43,15 @@ public static class LoadGeneratorExecution
         string? errorDetails = null;
         long bytesOut = 0;
         long bytesIn = 0;
-        long latencyMicros = 0;
         string? indexName = null;
         int? resultCount = null;
         bool? isStale = null;
-
-        bool cancelled = false;
 
         try
         {
             var result = await transport.ExecuteAsync(operation, cancellationToken);
             if (result.Cancelled)
-            {
-                cancelled = true;
                 return new WorkItemResult { Cancelled = true };
-            }
             if (result.IsSuccess == false)
             {
                 isError = true;
@@ -71,31 +68,30 @@ public static class LoadGeneratorExecution
                 isStale = result.IsStale;
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new WorkItemResult { Cancelled = true };
+        }
         catch (Exception ex)
         {
             isError = true;
             errorDetails = ex.Message;
         }
-        finally
+
+        // Every operation that reaches here adds a sample, failed and timed-out ones included.
+        var end = Stopwatch.GetTimestamp();
+        var latencyMicros = Math.Max(1, (long)Math.Round((end - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency));
+        try
         {
-            var end = Stopwatch.GetTimestamp();
-            latencyMicros = Math.Max(1, (long)Math.Round((end - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency));
-            if (cancelled == false && isError == false)
-            {
-                try
-                {
-                    if (expectedIntervalMicros > 0)
-                        latencyRecorder.RecordWithExpectedInterval(latencyMicros, expectedIntervalMicros);
-                    else
-                        latencyRecorder.Record(latencyMicros);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Histogram overflow - latency exceeded 60s. This indicates extreme server degradation.
-                    // Treat as error to trigger early termination of the benchmark step.
-                    isError = true;
-                }
-            }
+            if (expectedIntervalMicros > 0)
+                latencyRecorder.RecordWithExpectedInterval(latencyMicros, expectedIntervalMicros);
+            else
+                latencyRecorder.Record(latencyMicros);
+        }
+        catch (InvalidOperationException)
+        {
+            // Histogram overflow: a latency above the limit ends the step as an error.
+            isError = true;
         }
 
         return new WorkItemResult
