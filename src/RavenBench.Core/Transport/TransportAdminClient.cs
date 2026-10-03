@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Text.Json;
 using Raven.Client.Documents;
@@ -62,6 +63,8 @@ internal sealed class TransportAdminClient
 
     private readonly HttpClient _http;
     private readonly string _baseUrl;
+    private readonly ConcurrentDictionary<string, Lazy<Task<long?>>> _snmpIndexes = new(StringComparer.Ordinal);
+    private readonly SnmpClient _snmpClient = new();
 
     public TransportAdminClient(HttpClient http, string baseUrl)
     {
@@ -116,20 +119,31 @@ internal sealed class TransportAdminClient
     public async Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
     {
         long? databaseIndex = null;
-        if (string.IsNullOrEmpty(databaseName) == false && await TryGetDatabaseSnmpIndexAsync(databaseName).ConfigureAwait(false) is { } index)
+        if (string.IsNullOrEmpty(databaseName) == false && await GetDatabaseSnmpIndexAsync(databaseName).ConfigureAwait(false) is { } index)
         {
             databaseIndex = index;
         }
 
-        var snmpClient = new SnmpClient();
         var oids = SnmpOids.GetOidsForProfile(snmpOptions.Profile, databaseIndex);
         var host = new Uri(_baseUrl).Host;
         var timeoutMs = (int)snmpOptions.Timeout.TotalMilliseconds;
-        var snmpResults = await snmpClient.GetManyAsync(oids, host, snmpOptions.Port, SnmpOptions.Community, timeoutMs).ConfigureAwait(false);
+        var snmpResults = await _snmpClient.GetManyAsync(oids, host, snmpOptions.Port, SnmpOptions.Community, timeoutMs).ConfigureAwait(false);
         return SnmpMetricMapper.MapToSample(snmpResults);
     }
 
-    public async Task<long?> TryGetDatabaseSnmpIndexAsync(string databaseName)
+    /// <summary>The database's SNMP index, looked up once per database for the life of this client; null when the server does not map it.</summary>
+    internal Task<long?> GetDatabaseSnmpIndexAsync(string databaseName) =>
+        _snmpIndexes.GetOrAdd(databaseName, name => new Lazy<Task<long?>>(() => ResolveDatabaseSnmpIndexAsync(name))).Value;
+
+    private async Task<long?> ResolveDatabaseSnmpIndexAsync(string databaseName)
+    {
+        var index = await LookupDatabaseSnmpIndexAsync(databaseName).ConfigureAwait(false);
+        if (index is null)
+            Console.WriteLine($"[WARN] No SNMP index for database '{databaseName}': the lookup is not retried, and the rest of the run uses server-wide SNMP metrics (IO/request metrics will be unavailable)");
+        return index;
+    }
+
+    private async Task<long?> LookupDatabaseSnmpIndexAsync(string databaseName)
     {
         try
         {
@@ -168,7 +182,6 @@ internal sealed class TransportAdminClient
         catch (Exception ex)
         {
             Console.WriteLine($"[WARN] Failed to discover SNMP database index for '{databaseName}': {ex.Message}");
-            Console.WriteLine("[WARN] Falling back to server-wide SNMP metrics (IO/request metrics will be unavailable)");
             return null;
         }
     }

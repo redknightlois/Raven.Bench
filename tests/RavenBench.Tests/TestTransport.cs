@@ -79,8 +79,13 @@ public sealed class TestTransport : ITransport
 
     public Task<ServerMetrics> GetServerMetricsAsync() => ServerMetricsSource?.Invoke() ?? Task.FromResult(_serverMetrics);
 
+    /// <summary>Replaces the fixed SNMP sample, for a test that scripts each poll.</summary>
+    public Func<SnmpSample>? SnmpSource { get; init; }
+
     public Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
     {
+        if (SnmpSource != null)
+            return Task.FromResult(SnmpSource());
         var sample = new SnmpSample
         {
             MachineCpu = 50.0,

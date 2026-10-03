@@ -73,7 +73,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
     - `--snmp-port <int>`: SNMP agent port (default: 161)
     - `--snmp-interval <duration>`: poll interval (default: 250ms)
     - `--snmp-timeout <duration>`: query timeout (default: 5s)
-    - See [docs/snmp-metric-catalog.md](docs/snmp-metric-catalog.md) for metric details and troubleshooting
+    - The polled OIDs per profile are defined in `src/RavenBench.Core/Metrics/Snmp/SnmpOids.cs`
   - `--network-limited` and `--link-mbps <double>`: annotate verdicts for known link speeds.
   - `--raw-endpoint <path-with-{id}>`: with `--transport raw`, test a custom endpoint (e.g., `/databases/db/docs?id={id}`).
    - `--tp-workers/--tp-iocp <int>`: adjust ThreadPool minimums (defaults are high to avoid client-side starvation).
@@ -170,7 +170,6 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 - SNMP validation fails
   - Ensure RavenDB server has `Monitoring.Snmp.Enabled=true` in settings.json and firewall allows UDP port 161.
   - Test connectivity: `snmpwalk -v2c -c ravendb <server-host> .1.3.6.1.4.1.45751`
-  - See [docs/snmp-metric-catalog.md](docs/snmp-metric-catalog.md) for detailed troubleshooting.
 - High errors early, HTTP/1.x
   - Socket exhaustion can hit at low C with HTTP/1. Consider HTTP/2 or HTTP/3, or decrease step concurrency.
 - Identity runs hit network limit fast

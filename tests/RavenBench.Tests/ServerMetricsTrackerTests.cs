@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench.Core.Metrics;
+using RavenBench.Core.Metrics.Snmp;
 using RavenBench.Core.Transport;
 using RavenBench.Core;
 using Xunit;
@@ -327,5 +328,34 @@ public class ServerMetricsTrackerTests
 
         gate.MaxInFlight.Should().Be(1);
         gate.Calls.Should().Be(3, "each answered poll schedules exactly one next poll");
+    }
+
+    private static SnmpSample Snmp(double seconds, long requests, double ioReadOps) =>
+        new() { Timestamp = T0.AddSeconds(seconds), TotalRequests = requests, IoReadOpsPerSec = ioReadOps };
+
+    private static (ServerMetricsTracker Tracker, PollGate Gate) SnmpTracker(params SnmpSample[] samples)
+    {
+        var queue = new System.Collections.Generic.Queue<SnmpSample>(samples);
+        var gate = new PollGate();
+        var transport = new TestTransport { ServerMetricsSource = gate.PollAsync, SnmpSource = queue.Dequeue };
+        var options = new RunOptions { Url = "http://localhost", Database = "test", Snmp = new SnmpOptions { Enabled = true } };
+        return (new ServerMetricsTracker(transport, options), gate);
+    }
+
+    [Fact]
+    public async Task An_Snmp_Sample_Is_Kept_When_The_Admin_Poll_Fails()
+    {
+        var (tracker, gate) = SnmpTracker(Snmp(0, 0, 0), Snmp(1, 100, 0));
+        using var _ = tracker;
+        var failed = new ServerMetrics { IsValid = false, ErrorMessage = "admin endpoint unreachable" };
+
+        tracker.Start();
+        (await gate.NextAsync()).SetResult(failed);
+        (await gate.NextAsync()).SetResult(failed);
+        await gate.NextAsync();
+
+        var history = tracker.GetHistory();
+        history.Should().HaveCount(2);
+        history[1].ServerSnmpRequestsPerSec.Should().BeApproximately(100, 1e-9);
     }
 }

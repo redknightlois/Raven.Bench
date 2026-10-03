@@ -10,11 +10,13 @@ namespace RavenBench.Core.Diagnostics;
 // Per-step usage:
 //   using (var t = FirstChanceExceptionTracker.BeginStep()) { ... measurement ... }
 //   var snap = t.Snapshot;  // counts by type, first-stack sample
+// Background work that is not part of the step runs inside Suppress(), across awaits.
 public sealed class FirstChanceExceptionTracker : IDisposable
 {
     private static readonly object _gate = new();
     private static FirstChanceExceptionTracker? _active;
     private static bool _hooked;
+    private static readonly AsyncLocal<bool> _suppressed = new();
 
     private long _total;
     private readonly ConcurrentDictionary<string, long> _byType = new();
@@ -43,7 +45,7 @@ public sealed class FirstChanceExceptionTracker : IDisposable
     private static void OnFirstChance(object? sender, FirstChanceExceptionEventArgs e)
     {
         var t = Volatile.Read(ref _active);
-        if (t == null) return;
+        if (t == null || _suppressed.Value) return;
         Interlocked.Increment(ref t._total);
         var typeName = e.Exception.GetType().FullName ?? "Unknown";
         t._byType.AddOrUpdate(typeName, 1, (_, v) => v + 1);
@@ -54,6 +56,19 @@ public sealed class FirstChanceExceptionTracker : IDisposable
             // Capture the throwing stack at the moment it was thrown.
             t._firstSampleStack = e.Exception.StackTrace ?? new System.Diagnostics.StackTrace(true).ToString();
         }
+    }
+
+    /// <summary>Exceptions on this async flow are not counted until the scope is disposed.</summary>
+    public static IDisposable Suppress()
+    {
+        var previous = _suppressed.Value;
+        _suppressed.Value = true;
+        return new SuppressScope(previous);
+    }
+
+    private sealed class SuppressScope(bool previous) : IDisposable
+    {
+        public void Dispose() => _suppressed.Value = previous;
     }
 
     public Snapshot Take() => new(
