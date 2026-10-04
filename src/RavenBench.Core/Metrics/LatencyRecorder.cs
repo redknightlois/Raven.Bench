@@ -5,19 +5,10 @@ using HdrHistogram;
 namespace RavenBench.Core.Metrics;
 
 /// <summary>
-/// HDRHistogram-based latency recorder that corrects for coordinated omission.
-///
-/// Coordinated omission occurs in closed-loop benchmarks when a slow response delays
-/// subsequent requests. The worker waits on the slow response before issuing the next request,
-/// causing "should-have-been" samples to be omitted from the latency distribution.
-///
-/// This recorder uses HdrHistogram.Recorder with expected interval correction to backfill
-/// missing samples, providing accurate tail latency measurements.
+/// HDRHistogram-based latency recorder holding one sample per recorded operation and no synthetic samples.
+/// A closed-loop step measures the service time each worker observes; a rate step measures from each
+/// arrival's due time, which is where coordinated omission is accounted for.
 /// </summary>
-/// <remarks>
-/// Based on Gil Tene's "How NOT to Measure Latency" methodology.
-/// See: https://www.youtube.com/watch?v=lJ8ydIuPFeU
-/// </remarks>
 public sealed class LatencyRecorder : IDisposable
 {
     public const long MaxTrackableMicros = 3_600_000_000;
@@ -58,8 +49,7 @@ public sealed class LatencyRecorder : IDisposable
     }
 
     /// <summary>
-    /// Records a latency measurement without coordinated omission correction.
-    /// Use this for initial measurements or when coordinated omission is not a concern.
+    /// Records a latency measurement.
     /// </summary>
     /// <param name="micros">Observed latency in microseconds.</param>
     public void Record(long micros)
@@ -83,52 +73,6 @@ public sealed class LatencyRecorder : IDisposable
             // Histogram range exceeded - this indicates a configuration issue
             throw new InvalidOperationException(
                 RangeMessage(micros),
-                ex);
-        }
-    }
-
-    /// <summary>
-    /// Records a latency measurement with coordinated omission correction.
-    ///
-    /// When a response is delayed, this method backfills the histogram with samples
-    /// at the expected interval to account for requests that "should have been" issued
-    /// during the stall.
-    /// </summary>
-    /// <param name="observedMicros">Actual observed latency in microseconds.</param>
-    /// <param name="expectedIntervalMicros">Expected interval between requests in microseconds.
-    /// This represents the baseline inter-request time. When observedMicros >> expectedIntervalMicros,
-    /// coordinated omission correction adds synthetic samples to fill the gap.</param>
-    public void RecordWithExpectedInterval(long observedMicros, long expectedIntervalMicros)
-    {
-        if (_enabled == false) return;
-
-        try
-        {
-            if (expectedIntervalMicros > 0)
-            {
-                // Use HDRHistogram's built-in coordinated omission correction
-                // This will add synthetic samples at the expected interval
-                _recorder.RecordValueWithExpectedInterval(observedMicros, expectedIntervalMicros);
-            }
-            else
-            {
-                // No expected interval provided - record without correction
-                _recorder.RecordValue(observedMicros);
-            }
-
-            // Track maximum latency (only from actual observed values, not synthetic)
-            long currentMax;
-            do
-            {
-                currentMax = Volatile.Read(ref _maxMicros);
-                if (observedMicros <= currentMax)
-                    break;
-            } while (Interlocked.CompareExchange(ref _maxMicros, observedMicros, currentMax) != currentMax);
-        }
-        catch (IndexOutOfRangeException ex)
-        {
-            throw new InvalidOperationException(
-                RangeMessage(observedMicros),
                 ex);
         }
     }
@@ -172,11 +116,11 @@ public sealed class HistogramSnapshot
     public long MaxMicros { get; }
 
     /// <summary>
-    /// Total number of samples recorded (including coordinated omission corrections).
+    /// Total number of samples recorded.
     /// </summary>
     public long TotalCount => _histogram?.TotalCount ?? 0;
 
-    /// <summary>Mean recorded latency in microseconds, coordinated-omission backfill included; zero when empty.</summary>
+    /// <summary>Mean recorded latency in microseconds; zero when empty.</summary>
     public double MeanMicros => _histogram is { TotalCount: > 0 } h ? h.GetMean() : 0;
 
     internal HistogramSnapshot(HistogramBase? histogram, long maxMicros)

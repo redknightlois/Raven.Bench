@@ -18,7 +18,7 @@ public sealed class FailedOperationLatencyTests
     // The latency is scripted through the start timestamp, so no assertion depends on a delay.
     private static Task<WorkItemResult> Run(IYcsbTransport transport, LatencyRecorder recorder, int ageMs, CancellationToken ct = default) =>
         LoadGeneratorExecution.ExecuteOperationAsync(transport, Op, recorder,
-            Stopwatch.GetTimestamp() - ageMs * Stopwatch.Frequency / 1000, expectedIntervalMicros: 0, ct);
+            Stopwatch.GetTimestamp() - ageMs * Stopwatch.Frequency / 1000, ct);
 
     private static async Task<HistogramSnapshot> SlowOperationRun(Func<TransportResult> slowOutcome)
     {

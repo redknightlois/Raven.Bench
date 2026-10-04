@@ -355,11 +355,6 @@ public class CliParsingTests
             };
             return Task.FromResult((recorder, metrics));
         }
-
-        public void SetBaselineLatency(long baselineLatencyMicros)
-        {
-            // No-op for test
-        }
     }
 
     private sealed class MockWorkload : IWorkload

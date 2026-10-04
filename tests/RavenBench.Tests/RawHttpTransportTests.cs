@@ -89,7 +89,6 @@ public class RawHttpTransportTests
             new ReadOperation { Id = "bench/1" },
             latencyRecorder,
             Stopwatch.GetTimestamp(),
-            expectedIntervalMicros: 0,
             CancellationToken.None);
 
         result.Cancelled.Should().BeTrue();
@@ -116,7 +115,6 @@ public class RawHttpTransportTests
             new ReadOperation { Id = "bench/1" },
             latencyRecorder,
             Stopwatch.GetTimestamp(),
-            expectedIntervalMicros: 0,
             CancellationToken.None);
 
         result.Cancelled.Should().BeFalse();

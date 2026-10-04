@@ -16,48 +16,67 @@ namespace RavenBench.Tests;
 public sealed class LoadGeneratorCoordinatedOmissionTests
 {
     [Fact]
-    public async Task ClosedLoop_UsesWarmupBaselineForCoordinatedOmission()
+    public async Task ClosedLoop_Records_One_Sample_Per_Issued_Request_At_Its_Service_Time()
     {
-        var transport = new VariableLatencyTransport(latencyMs: 2);
-        var workload = new SingleOperationWorkload();
+        const int requests = 20;
+        var transport = new VariableLatencyTransport(latencyMs: 0);
+        var workload = new CountedWorkload { Remaining = 50 };
         var generator = new ClosedLoopLoadGenerator(transport, workload, concurrency: 1, new Random(17));
 
-        // Warmup with faster latency to establish baseline
-        await generator.ExecuteWarmupAsync(TimeSpan.FromMilliseconds(200), CancellationToken.None);
+        // A near-zero warmup floor followed by slow requests is what synthetic backfill would inflate.
+        await generator.ExecuteWarmupAsync(TimeSpan.FromMinutes(1), CancellationToken.None);
+        transport.LatencyMs = 10;
+        workload.Remaining = requests;
 
-        // Increase latency significantly for measurement
-        transport.LatencyMs = 20;
-
-        var (recorder, metrics) = await generator.ExecuteMeasurementAsync(
-            TimeSpan.FromMilliseconds(200), CancellationToken.None);
-
-        metrics.OperationsCompleted.Should().BeGreaterThan(0);
+        var (recorder, metrics) = await generator.ExecuteMeasurementAsync(TimeSpan.FromMinutes(1), CancellationToken.None);
         var snapshot = recorder.Snapshot();
 
-        // With 2ms baseline and 20ms actual latency, coordinated omission correction
-        // should add synthetic samples, making TotalCount > OperationsCompleted
-        snapshot.TotalCount.Should().BeGreaterThan(metrics.OperationsCompleted);
+        metrics.OperationsCompleted.Should().Be(requests);
+        snapshot.TotalCount.Should().Be(requests);
+        snapshot.GetPercentile(50).Should().BeGreaterOrEqualTo(10_000);
     }
+
+    // One worker serving at 20 ms against 200 arrivals/s holds a quarter of the rate, so the queue grows for the whole step.
+    private const int ServiceMs = 20;
+    private const double TargetRps = 200;
+    private static readonly TimeSpan SaturatedStep = TimeSpan.FromMilliseconds(500);
+
+    private static Task<(LatencyRecorder, LoadGeneratorMetrics)> RunSaturatedRateStep() =>
+        new RateLoadGenerator(new VariableLatencyTransport(ServiceMs), new SingleOperationWorkload(), TargetRps, maxConcurrency: 1, new Random(42))
+            .ExecuteMeasurementAsync(SaturatedStep, CancellationToken.None);
 
     [Fact]
     public async Task RateGenerator_IncludesQueueWaitUnderSaturation()
     {
-        var transport = new VariableLatencyTransport(latencyMs: 5);
-        var workload = new SingleOperationWorkload();
-        // 8 workers at 100ms each cap throughput near 80 rps, well below the 100 rps target: saturation.
-        var generator = new RateLoadGenerator(transport, workload, targetRps: 100, maxConcurrency: 8, new Random(42));
-
-        await generator.ExecuteWarmupAsync(TimeSpan.FromMilliseconds(200), CancellationToken.None);
-        transport.LatencyMs = 100;
-
-        var (recorder, metrics) = await generator.ExecuteMeasurementAsync(
-            TimeSpan.FromMilliseconds(500), CancellationToken.None);
+        var (recorder, metrics) = await RunSaturatedRateStep();
 
         metrics.OperationsCompleted.Should().BeGreaterThan(0);
-        var snapshot = recorder.Snapshot();
-        // Latency is measured against each request's scheduled time, so the backlog accumulated while
-        // all workers were busy surfaces as latency beyond the 100ms service time instead of being omitted.
-        snapshot.MaxMicros.Should().BeGreaterThan(100_000);
+        // An arrival late in the step waits about step × (1 − capacity / rate) behind the queue; half of it leaves room for timer slack.
+        var capacityRps = 1000.0 / ServiceMs;
+        var expectedQueueWaitMs = SaturatedStep.TotalMilliseconds * (1 - capacityRps / TargetRps);
+        recorder.Snapshot().MaxMicros.Should().BeGreaterThan((long)((ServiceMs + expectedQueueWaitMs / 2) * 1000),
+            "latency is measured from each arrival's due time, so the queue wait adds to the service time");
+    }
+
+    [Fact]
+    public async Task RateGenerator_Counts_Every_Due_Arrival_In_The_Latency()
+    {
+        var (recorder, metrics) = await RunSaturatedRateStep();
+
+        metrics.ScheduledOperations.Should().BeGreaterThan(metrics.OperationsCompleted, "the step stops with arrivals never issued");
+        recorder.Snapshot().TotalCount.Should().Be(metrics.ScheduledOperations);
+    }
+
+    // Ends the step once its remaining operations are drawn.
+    private sealed class CountedWorkload : IWorkload
+    {
+        public int Remaining;
+        public bool IsExhausted => Remaining <= 0;
+        public OperationBase NextOperation(Random rng)
+        {
+            Remaining--;
+            return new ReadOperation { Id = "users/1" };
+        }
     }
 
     private sealed class SingleOperationWorkload : IWorkload

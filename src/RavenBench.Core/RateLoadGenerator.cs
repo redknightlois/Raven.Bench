@@ -56,11 +56,6 @@ namespace RavenBench.Core
             return await ExecuteAsync(duration, _targetRps, isWarmup: false, cancellationToken);
         }
 
-        public void SetBaselineLatency(long baselineLatencyMicros)
-        {
-            // Rate mode derives its expected schedule from the target rate, not from a measured baseline.
-        }
-
         private async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteAsync(
             TimeSpan duration, double targetRps, bool isWarmup, CancellationToken cancellationToken)
         {
@@ -73,6 +68,7 @@ namespace RavenBench.Core
 
             await using var scheduler = new TokenBucketScheduler(
                 targetRps,
+                latenessRecorder,
                 // Give each worker a few in-flight permits; this keeps pacing predictable while still allowing short spikes.
                 burstCapacity: Math.Max(_workers * 4, 32),
                 cancellationToken);
@@ -80,7 +76,6 @@ namespace RavenBench.Core
             var workers = StartWorkers(
                 scheduler,
                 latencyRecorder,
-                latenessRecorder,
                 counters,
                 cancellationToken);
 
@@ -92,6 +87,7 @@ namespace RavenBench.Core
                 rollingSampler.Start(counters, measurementStopwatch, cancellationToken);
             }
 
+            long stopTicks = 0;
             try
             {
                 await Task.Delay(duration, cancellationToken);
@@ -103,6 +99,8 @@ namespace RavenBench.Core
             finally
             {
                 await scheduler.StopAsync();
+                // The step stops here; the workers then drain the arrivals already issued.
+                stopTicks = Stopwatch.GetTimestamp();
                 await Task.WhenAll(workers);
 
                 if (rollingSampler != null)
@@ -112,11 +110,15 @@ namespace RavenBench.Core
                 }
             }
 
-            // Arrivals due by the stop but never issued are charged as late from their own due time, so a backlog cannot hide from the lateness figures.
-            var stopTicks = Stopwatch.GetTimestamp();
+            // An arrival due by the stop but never issued adds a latency sample from its due time to the stop, a lower bound
+            // on what it would have seen, and send lateness only for the delay the producer itself caused.
             var (firstUnissued, unissued) = scheduler.ReleaseOverdue(stopTicks);
             for (var sequence = firstUnissued; sequence < firstUnissued + unissued; sequence++)
-                latenessRecorder.Record((stopTicks - scheduler.DueTicks(sequence)) * 1_000_000 / Stopwatch.Frequency);
+            {
+                var due = scheduler.DueTicks(sequence);
+                latencyRecorder.Record(Math.Max(1, (stopTicks - due) * 1_000_000 / Stopwatch.Frequency));
+                latenessRecorder.Record(scheduler.HostLatenessTicks(due, stopTicks) * 1_000_000 / Stopwatch.Frequency);
+            }
 
             var metrics = LoadGeneratorExecution.BuildMetrics(
                 counters,
@@ -132,7 +134,6 @@ namespace RavenBench.Core
         private Task[] StartWorkers(
             TokenBucketScheduler scheduler,
             LatencyRecorder latencyRecorder,
-            LatencyRecorder latenessRecorder,
             LoadGeneratorCounters counters,
             CancellationToken cancellationToken)
         {
@@ -150,8 +151,6 @@ namespace RavenBench.Core
                         await foreach (var dueTimestamp in scheduler.ConsumeAsync(cancellationToken))
                         {
                             var operation = _workload.NextOperation(workerRng);
-                            var lateTicks = Math.Max(0, Stopwatch.GetTimestamp() - dueTimestamp);
-                            latenessRecorder.Record(lateTicks * 1_000_000 / Stopwatch.Frequency);
 
                             // Measure from the token's scheduled time, not pickup: any wait while all
                             // workers were busy is real client-observed latency, not to be omitted.
@@ -160,7 +159,6 @@ namespace RavenBench.Core
                                 operation,
                                 latencyRecorder,
                                 dueTimestamp,
-                                expectedIntervalMicros: 0,
                                 cancellationToken);
                             counters.Record(result);
                         }
@@ -203,7 +201,10 @@ namespace RavenBench.Core
             private readonly Channel<long> _tokens;
             private readonly TokenPacer _pacer;
             private readonly CancellationToken _cancellationToken;
+            private readonly LatencyRecorder _lateness;
             private readonly Task _producerTask;
+            // When the producer last stopped waiting for a free channel slot; written by the producer only.
+            private long _unblockedTicks;
             private int _stopped;
             // The first arrival no worker has received; read only after the producer exits.
             private long _nextUnissued;
@@ -211,8 +212,9 @@ namespace RavenBench.Core
             /// <summary>Tokens released; counts arrivals scheduled, which may exceed completed operations.</summary>
             public long ScheduledOperations => _pacer.ReleasedTokens;
 
-            public TokenBucketScheduler(double ratePerSecond, int burstCapacity, CancellationToken cancellationToken)
+            public TokenBucketScheduler(double ratePerSecond, LatencyRecorder lateness, int burstCapacity, CancellationToken cancellationToken)
             {
+                _lateness = lateness;
                 _pacer = new TokenPacer(ratePerSecond, Stopwatch.Frequency);
                 _cancellationToken = cancellationToken;
 
@@ -252,6 +254,13 @@ namespace RavenBench.Core
 
             public long DueTicks(long sequence) => _pacer.DueTicks(sequence);
 
+            /// <summary>
+            /// The send lateness of an arrival released at <paramref name="releaseTicks"/>: the delay the load host added. Time the
+            /// producer spent blocked because every worker was busy and the burst was queued is server saturation, not lateness.
+            /// </summary>
+            public long HostLatenessTicks(long dueTicks, long releaseTicks) =>
+                Math.Max(0, releaseTicks - Math.Max(dueTicks, Volatile.Read(ref _unblockedTicks)));
+
             private bool Running => Volatile.Read(ref _stopped) == 0 && _cancellationToken.IsCancellationRequested == false;
 
             private void Replenish()
@@ -268,9 +277,12 @@ namespace RavenBench.Core
                             while (writer.TryWrite(due) == false)
                             {
                                 // All workers are busy and the burst is queued: block this thread until a slot frees. Stopping completes the writer, which ends the wait without an exception.
-                                if (writer.WaitToWriteAsync().AsTask().GetAwaiter().GetResult() == false)
+                                var more = writer.WaitToWriteAsync().AsTask().GetAwaiter().GetResult();
+                                Volatile.Write(ref _unblockedTicks, Stopwatch.GetTimestamp());
+                                if (more == false)
                                     return;
                             }
+                            _lateness.Record(HostLatenessTicks(due, Stopwatch.GetTimestamp()) * 1_000_000 / Stopwatch.Frequency);
                             _nextUnissued = sequence + 1;
                         }
 

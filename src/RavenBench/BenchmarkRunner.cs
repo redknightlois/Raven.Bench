@@ -353,7 +353,7 @@ public class BenchmarkRunner(RunOptions opts)
 
         while (currentValue <= endValue)
         {
-            // Baseline latency for coordinated omission correction, in µs
+            // Unloaded startup latency in µs, sizes the rate workers
             var baselineLatencyMicros = startupCalibration?.Endpoints.Count > 0
                 ? (long)(startupCalibration.Endpoints.Min(e => e.ObservedMs) * 1000)
                 : 0L;
@@ -371,13 +371,13 @@ public class BenchmarkRunner(RunOptions opts)
 
             LogStepStart(opts.Shape, steps.Count + 1, (int)currentValue, rateWorkerCount, opts);
 
-            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None, baselineLatencyMicros);
+            var (latencyRecorder, stepResult) = await executor.ExecuteStepAsync(loadGenerator, steps.Count, (int)currentValue, CancellationToken.None);
 
             var snapshot = latencyRecorder.Snapshot();
 
             if (opts.Shape == LoadShape.Rate && opts.RateWorkers.HasValue == false)
             {
-                // The mean latency per operation sizes the next step; rate mode records no coordinated-omission backfill, so the mean is over real operations.
+                // The mean latency per operation sizes the next step.
                 observedServiceTimeSeconds = snapshot.MeanMicros / 1_000_000.0;
                 previousAutoRateWorkers = rateWorkerCount;
             }

@@ -56,13 +56,10 @@ namespace RavenBench.Core
             ILoadGenerator loadGenerator,
             int stepIndex,
             int currentStepValue,
-            CancellationToken cancellationToken,
-            long baselineLatencyMicros = 0)
+            CancellationToken cancellationToken)
         {
             var warmupTime = _options.Warmup;
             var measurementTime = _options.Duration;
-
-            loadGenerator.SetBaselineLatency(baselineLatencyMicros);
 
             if (warmupTime > TimeSpan.Zero)
             {
@@ -251,10 +248,6 @@ namespace RavenBench.Core
         Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteMeasurementAsync(
             TimeSpan duration, CancellationToken cancellationToken);
 
-        /// <summary>
-        /// Sets the baseline latency for coordinated omission correction.
-        /// </summary>
-        void SetBaselineLatency(long baselineLatencyMicros);
     }
 
     /// <summary>
