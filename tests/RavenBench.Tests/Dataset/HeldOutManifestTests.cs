@@ -34,4 +34,34 @@ public class HeldOutManifestTests : EmbeddedRavenTestBase
         await HeldOutManifest.EnsureLoadedAsync(store, Files("aa"), selection: null);
         await Assert.ThrowsAsync<InvalidOperationException>(() => HeldOutManifest.EnsureLoadedAsync(store, Files("bb"), selection: null));
     }
+
+    private sealed record Passage(string Text);
+
+    private sealed record Checkpoint(long LinesImported);
+
+    [Fact]
+    public async Task The_Load_Record_And_A_Checkpoint_Never_Make_A_Partial_Load_Look_Complete()
+    {
+        using var store = GetDocumentStore();
+        var files = Files("aa");
+        var selection = new QuerySelection(1, 2);
+        const int expected = 3;
+        await HeldOutManifest.StoreAsync(store, files, selection);
+        using (var session = store.OpenAsyncSession())
+        {
+            await session.StoreAsync(new Checkpoint(expected - 1), "sphere/import-checkpoint");
+            for (int i = 0; i < expected - 1; i++)
+                await session.StoreAsync(new Passage("t"), $"Passages/{i}");
+            await session.SaveChangesAsync();
+        }
+        var collection = store.Conventions.FindCollectionName(typeof(Passage));
+        Assert.False(await HeldOutManifest.EnsureMatchesAsync(store, files, selection, collection, expected));
+
+        using (var session = store.OpenAsyncSession())
+        {
+            await session.StoreAsync(new Passage("t"), $"Passages/{expected - 1}");
+            await session.SaveChangesAsync();
+        }
+        Assert.True(await HeldOutManifest.EnsureMatchesAsync(store, files, selection, collection, expected));
+    }
 }

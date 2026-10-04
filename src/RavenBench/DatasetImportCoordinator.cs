@@ -100,7 +100,8 @@ internal static class DatasetImportCoordinator
 
         var files = await PrepareVectorSetAsync(provider, opts);
         var exactSearch = opts.Profile == WorkloadProfile.VectorSearchExact || opts.VectorExactSearch;
-        var imported = await provider.ImportWordsAsync(opts.Url, targetDatabase, files, VectorQuerySelection(opts), opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine);
+        var imported = await provider.ImportWordsAsync(opts.Url, targetDatabase, files, VectorQuerySelection(opts), opts.VectorQuantization, exactSearch, httpVersion: httpVersion, searchEngine: opts.SearchEngine,
+            numberOfEdges: opts.VectorEdges, numberOfCandidatesForIndexing: opts.VectorCandidates);
         return (targetDatabase, imported);
     }
 
@@ -178,9 +179,11 @@ internal static class DatasetImportCoordinator
             var provider = new Dataset.ClinicalWordsDatasetProvider(ClinicalWordsDimensions(datasetName));
             var files = await PrepareVectorSetAsync(provider, opts);
             var metadata = await provider.GenerateQueryVectorsAsync(files, VectorQuerySelection(opts), VectorTruthDepth(opts));
-            metadata.IndexName = VectorIndexNaming.GetIndexName("Words", opts.VectorQuantization, engineSuffix, opts.VectorEdges, opts.VectorCandidates);
+            metadata.IndexName = Dataset.ClinicalWordsDatasetProvider.IndexName(opts.VectorQuantization, opts.SearchEngine, opts.VectorEdges, opts.VectorCandidates);
             metadata.CollectionName = "WordDocuments";
             metadata.IndexedFieldName = "Vector";
+            metadata.EnsureIndexExists = (store, _) => VectorIndexHelper.CreateAndWaitForIndexAsync((IDocumentStore)store,
+                provider.VectorIndex(opts.VectorQuantization, opts.SearchEngine, opts.VectorEdges, opts.VectorCandidates), "[ClinicalWords]");
             return metadata;
         }
 

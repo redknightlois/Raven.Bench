@@ -1,4 +1,6 @@
 using RavenBench.Dataset;
+using RavenBench.Core;
+using RavenBench.Core.Workload;
 using RavenBench.Dataset.Vectors;
 using System;
 using System.IO;
@@ -27,6 +29,18 @@ public class ClinicalWordsDatasetProviderTests
         Assert.Equal(dimensions, vectors.VectorDimensions);
         Assert.Equal(5, vectors.QueryVectors.Length);
         Assert.True(vectors.BaseVectorCount > 300000, $"Expected >300k words, got {vectors.BaseVectorCount}");
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(32, 64)]
+    public void TheImportedIndex_IsTheIndexTheMetadataNames_WithTheSameHnswParameters(int? edges, int? candidates)
+    {
+        var index = new ClinicalWordsDatasetProvider(300).VectorIndex(VectorQuantization.Int8, IndexingEngine.Corax, edges, candidates);
+        Assert.Equal(ClinicalWordsDatasetProvider.IndexName(VectorQuantization.Int8, IndexingEngine.Corax, edges, candidates), index.Name);
+        Assert.Equal(edges, index.Fields["Vector"].Vector.NumberOfEdges);
+        Assert.Equal(candidates, index.Fields["Vector"].Vector.NumberOfCandidatesForIndexing);
+        Assert.Equal(300, index.Fields["Vector"].Vector.Dimensions);
     }
 
     [RequiresClinicalWordsFact]

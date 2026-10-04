@@ -37,7 +37,7 @@ public static class PublishedSetImport
             await store.Maintenance.Server.SendAsync(new CreateDatabaseOperation(new DatabaseRecord(store.Database)), ct);
 
         // The load record is written after the last document, so a record means a complete load.
-        var loaded = await HeldOutManifest.EnsureMatchesAsync(store, files, selection: null, expectedDocuments: 0);
+        var loaded = await HeldOutManifest.EnsureMatchesAsync(store, files, selection: null, CollectionName, expectedDocuments: 0);
         if (loaded == false)
         {
             Console.WriteLine($"[Dataset] {set.Name}: loading base vectors into '{store.Database}'");

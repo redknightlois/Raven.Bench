@@ -190,6 +190,35 @@ public sealed class ClinicalWordsDatasetProvider : HeldOutVectorDataset
 
     public string GetDatabaseName(string? profile = null, int? customSize = null) => $"ClinicalWords{_dimensions}D";
 
+    public static string IndexName(VectorQuantization quantization, IndexingEngine engine, int? numberOfEdges, int? numberOfCandidatesForIndexing) =>
+        VectorIndexNaming.GetIndexName("Words", quantization, VectorIndexMapping.GetEngineSuffix(engine), numberOfEdges, numberOfCandidatesForIndexing);
+
+    /// <summary>The index the import builds and the vector metadata names: one name and one set of HNSW parameters.</summary>
+    public IndexDefinition VectorIndex(VectorQuantization quantization, IndexingEngine engine, int? numberOfEdges, int? numberOfCandidatesForIndexing)
+    {
+        var (sourceType, destType) = VectorIndexMapping.GetEmbeddingTypes(quantization);
+        return new IndexDefinition
+        {
+            Name = IndexName(quantization, engine, numberOfEdges, numberOfCandidatesForIndexing),
+            Maps = { "from w in docs.WordDocuments select new { w.Word, Vector = CreateVector(w.Embedding) }" },
+            Fields =
+            {
+                ["Vector"] = new IndexFieldOptions
+                {
+                    Vector = new VectorOptions
+                    {
+                        Dimensions = _dimensions,
+                        SourceEmbeddingType = sourceType,
+                        DestinationEmbeddingType = destType,
+                        NumberOfEdges = numberOfEdges,
+                        NumberOfCandidatesForIndexing = numberOfCandidatesForIndexing
+                    }
+                }
+            },
+            Configuration = { ["Indexing.Static.SearchEngineType"] = engine == IndexingEngine.Lucene ? "Lucene" : "Corax" }
+        };
+    }
+
     /// <summary>
     /// Imports all words with their embeddings as documents into RavenDB.
     /// Each word becomes a document: {{ "Word": "patient", "Embedding": [0.1, 0.2, ...] }}
@@ -204,7 +233,9 @@ public sealed class ClinicalWordsDatasetProvider : HeldOutVectorDataset
         bool exactSearch = false,
         int batchSize = 1000,
         Version? httpVersion = null,
-        IndexingEngine searchEngine = IndexingEngine.Corax)
+        IndexingEngine searchEngine = IndexingEngine.Corax,
+        int? numberOfEdges = null,
+        int? numberOfCandidatesForIndexing = null)
     {
         using var store = HttpHelper.Create(serverUrl, databaseName, httpVersion);
 
@@ -219,8 +250,8 @@ public sealed class ClinicalWordsDatasetProvider : HeldOutVectorDataset
         // Determine search engine name for per-index configuration
         var engineName = searchEngine == IndexingEngine.Lucene ? "Lucene" : "Corax";
 
-        // The expected count includes the held-out query record itself.
-        var documentsExist = await HeldOutManifest.EnsureMatchesAsync(store, files, selection, await CountRowsAsync(files, default) - selection.Count + 1);
+        var documentsExist = await HeldOutManifest.EnsureMatchesAsync(store, files, selection,
+            store.Conventions.FindCollectionName(typeof(WordDocument)), await CountRowsAsync(files, default) - selection.Count);
 
         if (documentsExist == false)
         {
@@ -255,34 +286,9 @@ public sealed class ClinicalWordsDatasetProvider : HeldOutVectorDataset
             Console.WriteLine($"[ClinicalWords] Database already holds the selection's documents - skipping import");
         }
 
-        var engineSuffix = VectorIndexMapping.GetEngineSuffix(searchEngine);
-        var indexName = VectorIndexNaming.GetIndexName("Words", quantization, engineSuffix);
-
+        var index = VectorIndex(quantization, searchEngine, numberOfEdges, numberOfCandidatesForIndexing);
+        var indexName = index.Name;
         Console.WriteLine($"[ClinicalWords] Creating vector index '{indexName}' (quantization: {quantization}, exact: {exactSearch}, engine: {engineName})...");
-
-        var (sourceType, destType) = VectorIndexMapping.GetEmbeddingTypes(quantization);
-
-        var index = new IndexDefinition
-        {
-            Name = indexName,
-            Maps = new HashSet<string> { "from w in docs.WordDocuments select new { w.Word, Vector = CreateVector(w.Embedding) }" },
-            Fields = new Dictionary<string, IndexFieldOptions>
-            {
-                {
-                    "Vector",
-                    new IndexFieldOptions
-                    {
-                        Vector = new VectorOptions
-                        {
-                            Dimensions = _dimensions,
-                            SourceEmbeddingType = sourceType,
-                            DestinationEmbeddingType = destType
-                        }
-                    }
-                }
-            },
-            Configuration = new IndexConfiguration { { "Indexing.Static.SearchEngineType", engineName } }
-        };
 
         await VectorIndexHelper.CreateAndWaitForIndexAsync(store, index, "[ClinicalWords]");
 
