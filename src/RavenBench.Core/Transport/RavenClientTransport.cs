@@ -59,6 +59,12 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
     /// same document without the mapper in the path.
     /// </param>
     public RavenClientTransport(string url, string database, CompressionMode compression, Version httpVersion, bool mapEntities = false)
+        : this(url, database, compression, httpVersion, mapEntities, handler: null)
+    {
+    }
+
+    /// <param name="handler">When set, the document store sends every request through it with topology updates off.</param>
+    internal RavenClientTransport(string url, string database, CompressionMode compression, Version httpVersion, bool mapEntities, HttpMessageHandler? handler)
     {
         _db = database;
         RecordedEndpoint = ConnectionStringRedaction.Redact(url);
@@ -66,7 +72,17 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
         _httpVersion = httpVersion;
         _mapEntities = mapEntities;
 
-        _store = HttpHelper.Create(url, database, _httpVersion, configure: ConfigureCompression);
+        _store = HttpHelper.Create(url, database, _httpVersion, configure: store =>
+        {
+            ConfigureCompression(store);
+            if (handler != null)
+            {
+                store.Conventions.DisableTopologyUpdates = true;
+                // The client caches HttpClients per handler type, so a stub never shares a real client.
+                store.Conventions.HttpClientType = handler.GetType();
+                store.Conventions.CreateHttpClient = _ => new HttpClient(handler, disposeHandler: false);
+            }
+        });
 
         _calibrationHttp = HttpHelper.CreateVersionedHttpClient(_httpVersion, DecompressionMethods.None, new Uri(url));
         _admin = new TransportAdminClient(_calibrationHttp, url);
@@ -89,7 +105,7 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
         {
             CompressionMode.Gzip => HttpCompressionAlgorithm.Gzip,
             CompressionMode.Zstd => HttpCompressionAlgorithm.Zstd,
-            _ => conventions.HttpCompressionAlgorithm
+            _ => throw new NotSupportedException($"The RavenDB client transport cannot apply {_compression.ToWireFormat()} compression; use identity, gzip or zstd, or the raw transport.")
         };
     }
 
@@ -122,11 +138,11 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
                         if (_mapEntities)
                         {
                             var record = await s.LoadAsync<YcsbRecord>(readOp.Id, ct).ConfigureAwait(false);
-                            return new TransportResult(headerBytes, record?.EstimateJsonSize() ?? 0) { NotFound = record == null };
+                            return record == null ? TransportResult.DocumentNotFound(readOp.Id) : new TransportResult(headerBytes, record.EstimateJsonSize());
                         }
 
                         var doc = await s.LoadAsync<BlittableJsonReaderObject>(readOp.Id, ct).ConfigureAwait(false);
-                        return new TransportResult(headerBytes, doc?.Size ?? 0) { NotFound = doc == null };
+                        return doc == null ? TransportResult.DocumentNotFound(readOp.Id) : new TransportResult(headerBytes, doc.Size);
                     }
                 }
                 case InsertOperation<YcsbRecord> recordInsert:
@@ -167,7 +183,9 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
                                 ["value"] = updateFieldOp.Value
                             }
                         });
-                    await _store.Operations.SendAsync(operation, token: ct).ConfigureAwait(false);
+                    var status = await _store.Operations.SendAsync(operation, token: ct).ConfigureAwait(false);
+                    if (status == Raven.Client.Documents.Operations.PatchStatus.DocumentDoesNotExist)
+                        return TransportResult.DocumentNotFound(updateFieldOp.Id, "field update");
 
                     long payloadBytes = updateFieldOp.FieldName.Length + updateFieldOp.Value.Length + 64;
                     long headerBytes = EstimateHeaderSize("PATCH", $"/databases/{_db}/docs?id={Uri.EscapeDataString(updateFieldOp.Id)}", payloadBytes);
@@ -232,7 +250,9 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
                         patchOp.Id,
                         changeVector: null,
                         new Raven.Client.Documents.Operations.PatchRequest { Script = patchOp.Script });
-                    await _store.Operations.SendAsync(operation, token: ct).ConfigureAwait(false);
+                    var status = await _store.Operations.SendAsync(operation, token: ct).ConfigureAwait(false);
+                    if (status == Raven.Client.Documents.Operations.PatchStatus.DocumentDoesNotExist)
+                        return TransportResult.DocumentNotFound(patchOp.Id, "patch");
 
                     long payloadBytes = patchOp.Script.Length + 64;
                     long headerBytes = EstimateHeaderSize("PATCH", $"/databases/{_db}/docs?id={Uri.EscapeDataString(patchOp.Id)}", payloadBytes);

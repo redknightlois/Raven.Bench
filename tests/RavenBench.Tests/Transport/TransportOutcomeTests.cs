@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -16,6 +17,57 @@ namespace RavenBench.Tests.Transport;
 /// <summary>One outcome rule for every transport: a missing document and a cancelled run are never successes or errors by accident.</summary>
 public class TransportOutcomeTests
 {
+    /// <summary>Answers every request with 404, the RavenDB answer for an absent document.</summary>
+    private sealed class NotFoundHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("") });
+        }
+    }
+
+    private static RavenClientTransport ClientTransport(HttpMessageHandler handler, bool mapEntities = false) =>
+        new("http://127.0.0.1:1", "db", CompressionMode.Identity, HttpVersion.Version11, mapEntities, handler);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RavenClient_Read_Of_An_Absent_Id_Is_A_NotFound_Failure(bool mapEntities)
+    {
+        using var handler = new NotFoundHandler();
+        using var transport = ClientTransport(handler, mapEntities);
+
+        var result = await transport.ExecuteAsync(new ReadOperation { Id = "users/missing" }, CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.NotFound.Should().BeTrue();
+        result.Should().BeEquivalentTo(TransportResult.DocumentNotFound("users/missing"));
+    }
+
+    [Fact]
+    public async Task RavenClient_Field_Update_Of_An_Absent_Id_Is_A_NotFound_Failure_Without_Byte_Counts()
+    {
+        using var handler = new NotFoundHandler();
+        using var transport = ClientTransport(handler);
+
+        var result = await transport.ExecuteAsync(new UpdateFieldOperation { Id = "users/missing", FieldName = "field0", Value = "v" }, CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.NotFound.Should().BeTrue();
+        result.BytesIn.Should().Be(0);
+        result.BytesOut.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(CompressionMode.Brotli)]
+    [InlineData(CompressionMode.Deflate)]
+    public void RavenClient_Refuses_A_Compression_It_Cannot_Apply(CompressionMode compression)
+    {
+        var act = () => new RavenClientTransport("http://127.0.0.1:1", "db", compression, HttpVersion.Version11);
+
+        act.Should().Throw<NotSupportedException>().WithMessage($"*{compression.ToWireFormat()}*");
+    }
+
     [Fact]
     public async Task Plain_OperationCanceledException_Is_Cancelled_Only_When_The_Run_Token_Is_Cancelled()
     {

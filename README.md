@@ -132,7 +132,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - Use `--strict-http-version` to fail if the requested version isn’t available.
 - Compression
   - Raw transport: identity, gzip, brotli, deflate (zstd not supported by .NET decompression).
-  - Client transport: identity, gzip, zstd (recommended for realistic client measurements).
+  - Client transport: identity, gzip, zstd (recommended for realistic client measurements). Brotli or deflate with the client transport stops the run before load with a NotSupportedException, because the client cannot apply them.
 
 **Outputs and Integrations**
 - Console report
@@ -144,6 +144,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - SNMP metrics included when `--snmp-enabled` (gauge metrics: CPU, memory, load; rate metrics: IO ops/sec, requests/sec). A step's SNMP rates cover the whole step window, and each counter rate starts from a sample taken inside the window. The run totals (`TotalSnmpIo*`) integrate only time inside the steps' measurement windows, and each total equals its average multiplied by that integrated time.
   - Steps with an `InvalidReason` never become the knee or the best step; a knee stopped by a client-bound step gives a client-limited verdict. A ramp that ends without a knee reports its last step as degraded when that step is in the danger zone or has errors.
   - Knee panel and a one-line Verdict.
+  - A read or a field update of an absent document is an error on every transport, the RavenDB client transport included, and adds to the error rate. An operation cancelled by the end of the run is neither a success nor an error.
   - Bytes in (`BytesIn`) on the raw transport's socket path count the status line, the headers and the framing; the HttpClient path counts the body only and records `NetworkBytesMeasured` false, so the client network utilization reads n/a.
 - Credentials
   - The recorded endpoint (`Options.Url`) of every run, YCSB, vector and aggregate, is the transport's redacted endpoint: a password in a URL or in a keyword connection string is replaced by `***`.
