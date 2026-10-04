@@ -65,6 +65,20 @@ public sealed class RequiresMongoFactAttribute : FactAttribute
         if (MongoAvailability.IsAvailable == false)
             Skip = $"MongoDB is not reachable at {MongoTestEndpoints.MongoHost}:{MongoTestEndpoints.MongoPort}.";
     }
+
+    /// <summary>True when the test also starts /bin/bash, so it skips without bash too.</summary>
+    public bool Bash
+    {
+        get => _bash;
+        set
+        {
+            _bash = value;
+            if (value && RequiresBashFactAttribute.SkipReason is { } reason)
+                Skip = reason;
+        }
+    }
+
+    private bool _bash;
 }
 
 /// <summary>Skips the test when DocumentDB does not answer on its port.</summary>

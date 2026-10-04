@@ -6,10 +6,6 @@ namespace RavenBench.Tests.Infrastructure;
 
 internal static class ClinicalWordsAvailability
 {
-    private static readonly Lazy<bool> Cached = new(() => PathOf(100) != null);
-
-    public static bool IsAvailable => Cached.Value;
-
     /// <summary>
     /// The parquet the prepare script writes under the repository's datasets directory, searched upwards from the test binaries.
     /// </summary>
@@ -27,31 +23,14 @@ internal static class ClinicalWordsAvailability
 }
 
 /// <summary>
-/// Skips the test when the ClinicalWords parquet embeddings file is not available.
+/// Skips the test when the ClinicalWords parquet embeddings of the given dimensions are not available.
 /// Download with: python datasets/prepare_clinical_embeddings.py
 /// </summary>
 public sealed class RequiresClinicalWordsFactAttribute : FactAttribute
 {
-    private const string SkipReason = "ClinicalWords embeddings not available. Run: python datasets/prepare_clinical_embeddings.py";
-
-    public RequiresClinicalWordsFactAttribute()
+    public RequiresClinicalWordsFactAttribute(int dimensions = 100)
     {
-        if (ClinicalWordsAvailability.IsAvailable == false)
-            Skip = SkipReason;
-    }
-}
-
-/// <summary>
-/// Skips the theory when the ClinicalWords parquet embeddings file is not available.
-/// Download with: python datasets/prepare_clinical_embeddings.py
-/// </summary>
-public sealed class RequiresClinicalWordsTheoryAttribute : TheoryAttribute
-{
-    private const string SkipReason = "ClinicalWords embeddings not available. Run: python datasets/prepare_clinical_embeddings.py";
-
-    public RequiresClinicalWordsTheoryAttribute()
-    {
-        if (ClinicalWordsAvailability.IsAvailable == false)
-            Skip = SkipReason;
+        if (ClinicalWordsAvailability.PathOf(dimensions) == null)
+            Skip = $"ClinicalWords {dimensions}d embeddings not available. Run: python datasets/prepare_clinical_embeddings.py";
     }
 }

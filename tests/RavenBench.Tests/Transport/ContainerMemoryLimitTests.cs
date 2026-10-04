@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using RavenBench.Core.Reporting;
+using RavenBench.Tests.Infrastructure;
 using Xunit;
 
 namespace RavenBench.Tests.Transport;
@@ -40,16 +41,6 @@ public sealed class RequiresDockerFactAttribute : FactAttribute
 {
     public RequiresDockerFactAttribute()
     {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo("docker", "info") { RedirectStandardOutput = true, RedirectStandardError = true })!;
-            process.WaitForExit();
-            if (process.ExitCode != 0)
-                Skip = "A running Docker daemon is required.";
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            Skip = "The docker CLI is required.";
-        }
+        Skip = ToolProbe.SkipReason("docker", "info", "The docker CLI is required.");
     }
 }

@@ -37,6 +37,20 @@ public sealed class RequiresPostgreSqlFactAttribute : FactAttribute
         if (PostgreSqlAvailability.IsAvailable == false)
             Skip = $"PostgreSQL is not reachable at {PostgreSqlTestEndpoints.Host}:{PostgreSqlTestEndpoints.Port}.";
     }
+
+    /// <summary>True when the test also starts /bin/bash, so it skips without bash too.</summary>
+    public bool Bash
+    {
+        get => _bash;
+        set
+        {
+            _bash = value;
+            if (value && RequiresBashFactAttribute.SkipReason is { } reason)
+                Skip = reason;
+        }
+    }
+
+    private bool _bash;
 }
 
 /// <summary>
