@@ -393,7 +393,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             g => VectorRunMath.TruthWithInserts(queries[g.Key], quietTopK[g.Key], slice, g.Select(r => r.InsertedBefore), metric, scenario.K));
         var recall = records.Count == 0
             ? throw new InvalidOperationException("The under-insert run recorded no successful query.")
-            : records.Average(r => VectorRunMath.Recall(r.Ids.Select(id => StripPrefix(id, prefix)).ToList(), truthByQuery[r.Query][r.InsertedBefore], scenario.K));
+            : records.Average(r => VectorRunMath.Recall(r.Ids.Select(id => VectorRunMath.StripPrefix(id, prefix)).ToList(), truthByQuery[r.Query][r.InsertedBefore], scenario.K));
 
         return (ramp, new VectorUnderInsertInfo(scenario.InsertRate, scenario.UnderInsertQueryRate, acknowledged, ramp.Steps[^1].Raw.P99, recall, quietRecall, records.Count,
             $"each query's truth is the loaded base plus every insert acknowledged before the query was sent; an insert still in flight at send time is not in its truth. Visibility is {target.InsertVisibility}"));
@@ -483,7 +483,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
                 if (result.IsSuccess == false)
                     throw new InvalidOperationException($"{target.Transport.ProductName} vector search failed: {result.ErrorDetails}");
                 var returned = result.NeighborIds ?? throw new InvalidOperationException($"{target.Transport.ProductName} returned no neighbour ids.");
-                ids.Add(returned.Select(id => StripPrefix(id, target.IdPrefix)).ToList());
+                ids.Add(returned.Select(id => VectorRunMath.StripPrefix(id, target.IdPrefix)).ToList());
             }
             return queries.Length;
         }, ct);
@@ -563,11 +563,6 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
     }
 
     private static readonly TimeSpan RestartTimeout = TimeSpan.FromMinutes(3);
-
-    private static string StripPrefix(string id, string prefix) =>
-        id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? id[prefix.Length..]
-            : throw new InvalidDataException($"Returned id '{id}' lacks the document prefix '{prefix}'.");
 
     private static string Required(string? value, string option) =>
         string.IsNullOrWhiteSpace(value) ? throw new VectorScenarioException($"{option} is required.") : value;

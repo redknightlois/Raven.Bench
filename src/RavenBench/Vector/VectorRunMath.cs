@@ -104,6 +104,12 @@ public static class VectorRunMath
         var top = returned.Take(k).ToHashSet(StringComparer.Ordinal);
         return (double)truth.Take(k).Count(top.Contains) / k;
     }
+
+    /// <summary>The id without the product's document prefix; an id that lacks the prefix is invalid data.</summary>
+    public static string StripPrefix(string id, string prefix) =>
+        id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? id[prefix.Length..]
+            : throw new InvalidDataException($"Returned id '{id}' lacks the document prefix '{prefix}'.");
 }
 
 /// <summary>Thrown before the load when this host lacks the memory or disk a set needs.</summary>

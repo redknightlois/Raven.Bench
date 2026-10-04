@@ -21,8 +21,6 @@ public class RecallResultTests
             },
             QueryCount = 100,
             GroundTruthDepth = 10,
-            GroundTruthCached = false,
-            GroundTruthComputeTime = TimeSpan.FromSeconds(5),
             MeasurementTime = TimeSpan.FromSeconds(2)
         };
 
@@ -32,7 +30,14 @@ public class RecallResultTests
         Assert.Equal(0.97, result.RecallAtK[10]);
         Assert.Equal(100, result.QueryCount);
         Assert.Equal(10, result.GroundTruthDepth);
-        Assert.False(result.GroundTruthCached);
+    }
+
+    [Fact]
+    public void RecallResult_Serializes_No_Ground_Truth_Provenance_Without_A_Producer()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new RecallResult { RecallAtK = new Dictionary<int, double> { { 10, 1.0 } } });
+        Assert.DoesNotContain("GroundTruthCached", json);
+        Assert.DoesNotContain("GroundTruthComputeTime", json);
     }
 
     [Fact]

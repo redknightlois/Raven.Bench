@@ -214,8 +214,7 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
                 .OrderBy(kvp => kvp.Key)
                 .Select(kvp => $"recall@{kvp.Key} = {kvp.Value:P2}");
             var recallText = string.Join(" | ", recallLines);
-            var cached = summary.Recall.GroundTruthCached ? " (ground truth cached)" : $" (ground truth computed in {summary.Recall.GroundTruthComputeTime.TotalSeconds:F1}s)";
-            var recallPanel = new Panel($"{recallText}\n[dim]{summary.Recall.QueryCount} queries, measurement: {summary.Recall.MeasurementTime.TotalSeconds:F1}s{cached}[/]")
+            var recallPanel = new Panel($"{recallText}\n[dim]{summary.Recall.QueryCount} queries, measurement: {summary.Recall.MeasurementTime.TotalSeconds:F1}s[/]")
                 .Header("Recall@K")
                 .BorderColor(Color.Blue);
             AnsiConsole.Write(recallPanel);

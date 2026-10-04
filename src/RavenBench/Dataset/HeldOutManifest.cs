@@ -46,6 +46,16 @@ internal static class HeldOutManifest
         return stats.CountOfDocuments >= expectedDocuments;
     }
 
+    /// <summary>
+    /// Throws unless the database holds a load of these files under this selection. A null selection, the record of a
+    /// published query split, still compares the files.
+    /// </summary>
+    public static async Task EnsureLoadedAsync(IDocumentStore store, VerifiedFiles files, QuerySelection? selection)
+    {
+        if (await EnsureMatchesAsync(store, files, selection, expectedDocuments: 0) == false)
+            throw new InvalidOperationException($"Database '{store.Database}' holds no load of set '{files.SetName}' ({files.Fingerprint}); load it before measuring recall.");
+    }
+
     public static async Task StoreAsync(IDocumentStore store, VerifiedFiles files, QuerySelection? selection)
     {
         using var session = store.OpenAsyncSession();

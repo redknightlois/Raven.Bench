@@ -5,6 +5,7 @@ using RavenBench.Core;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
+using RavenBench.VectorBench;
 
 namespace RavenBench.Dataset;
 
@@ -89,7 +90,7 @@ public sealed class RecallMeasurement
             if (result.IsSuccess == false)
                 throw new InvalidOperationException($"Recall query {i} failed: {result.ErrorDetails}");
             var ids = result.NeighborIds ?? throw new InvalidOperationException($"{transport.ProductName} returned no neighbour ids.");
-            returned[i] = ids.Select(id => StripPrefix(id, prefix)).ToList();
+            returned[i] = ids.Select(id => VectorRunMath.StripPrefix(id, prefix)).ToList();
         }
         sw.Stop();
         var server = nodeStart == null ? null : await nodeExporter!.EndWindowAsync(nodeStart, ct);
@@ -103,8 +104,6 @@ public sealed class RecallMeasurement
             RecallAtK = recallAtK,
             QueryCount = metadata.QueryVectorCount,
             GroundTruthDepth = truth.Values.Min(t => t.Length),
-            GroundTruthCached = true,
-            GroundTruthComputeTime = TimeSpan.Zero,
             MeasurementTime = sw.Elapsed,
             ServerCpu = server?.CpuPercent,
             ServerMemoryMB = server?.MemoryMB,
@@ -124,24 +123,17 @@ public sealed class RecallMeasurement
         var recallAtK = new Dictionary<int, double>();
         foreach (var k in recallKs)
         {
-            long hits = 0, expected = 0;
+            double sum = 0;
             for (int q = 0; q < returned.Count; q++)
             {
                 if (truth.TryGetValue(q, out var nearest) == false || nearest.Length < k)
                     throw new InvalidOperationException($"Truth for query {q} holds fewer than {k} neighbours.");
-                var top = returned[q].Take(k).ToHashSet(StringComparer.Ordinal);
-                hits += nearest.Take(k).Count(top.Contains);
-                expected += k;
+                sum += VectorRunMath.Recall(returned[q], nearest, k);
             }
-            recallAtK[k] = expected == 0 ? 0 : (double)hits / expected;
+            recallAtK[k] = returned.Count == 0 ? 0 : sum / returned.Count;
         }
         return recallAtK;
     }
-
-    private static string StripPrefix(string id, string prefix) =>
-        id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? id[prefix.Length..]
-            : throw new InvalidDataException($"Returned id '{id}' lacks the document prefix '{prefix}'.");
 
     private static async Task<RawHttpTransport> OpenRavenAsync(string serverUrl, string databaseName, VectorWorkloadMetadata metadata, VectorQuantization quantization, IndexingEngine searchEngine, Version? httpVersion)
     {
