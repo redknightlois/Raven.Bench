@@ -150,6 +150,7 @@ public class YcsbRunScriptTests
         var script = Path.Combine(Folder(), "run.sh");
 
         var missingPath = CreateSymlinkPath("dirname", "date", "mkdir", "sleep", "cat", "head");
+        var deniedBin = VectorBench.VectorRunScriptTests.FakeBin(VectorBench.VectorRunScriptTests.FakeDocker.NoDaemon);
         try
         {
             var missingPort = FreeTcpPort();
@@ -174,23 +175,28 @@ public class YcsbRunScriptTests
                 new[] { "--target", "ravendb-6" },
                 new Dictionary<string, string>
                 {
-                    ["DOCKER_HOST"] = "unix:///nonexistent-ycsb-docker.sock",
+                    ["PATH"] = deniedBin,
+                    ["HOME"] = deniedBin,
+                    ["FAKE_LOG"] = Path.Combine(deniedBin, "calls.log"),
                     ["RAVENDB6_PORT"] = FreeTcpPort().ToString(CultureInfo.InvariantCulture)
-                });
+                },
+                clearEnvironment: true);
 
             denied.ExitCode.Should().NotBe(0, "a denied daemon never starts a run");
             denied.Output.Should().Contain("daemon is not reachable");
             denied.Output.Should().Contain("docker' group");
             denied.Output.Should().NotContain("Docker is not installed", "the two failures have different fixes");
             denied.Output.Should().NotBe(missing.Output, "missing Docker and a denied daemon are not the same message");
+            VectorBench.VectorRunScriptTests.Calls(deniedBin).Should().Contain("docker info", "the denied daemon is the fake docker on PATH, not the host's");
         }
         finally
         {
             Directory.Delete(missingPath, recursive: true);
+            Directory.Delete(deniedBin, recursive: true);
         }
     }
 
-    [RequiresMongoFact]
+    [RequiresMongoFact(Bash = true)]
     public async Task A_No_Docker_Client_Completes_Against_An_Answering_Endpoint()
     {
         var folder = Folder();
@@ -248,7 +254,7 @@ public class YcsbRunScriptTests
         }
     }
 
-    [RequiresPostgreSqlFact]
+    [RequiresPostgreSqlFact(Bash = true)]
     public void The_Script_Creates_The_Postgres_Database_With_Psql_First()
     {
         var script = Path.Combine(Folder(), "run.sh");
@@ -280,7 +286,7 @@ public class YcsbRunScriptTests
         }
     }
 
-    [RequiresPostgreSqlFact]
+    [RequiresPostgreSqlFact(Bash = true)]
     public void Without_Psql_And_Without_Docker_The_Script_Tells_The_User_To_Create_The_Database()
     {
         var script = Path.Combine(Folder(), "run.sh");
@@ -388,32 +394,6 @@ public class YcsbRunScriptTests
         string script,
         string[] arguments,
         IReadOnlyDictionary<string, string>? environment,
-        bool clearEnvironment = false)
-    {
-        var startInfo = new ProcessStartInfo("/bin/bash")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        startInfo.ArgumentList.Add(script);
-        foreach (var argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-
-        if (clearEnvironment)
-            startInfo.Environment.Clear();
-        if (environment != null)
-        {
-            foreach (var (key, value) in environment)
-                startInfo.Environment[key] = value;
-        }
-
-        using var process = Process.Start(startInfo)!;
-        var standardOutput = process.StandardOutput.ReadToEnd();
-        var standardError = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-
-        return (process.ExitCode, standardOutput + standardError);
-    }
+        bool clearEnvironment = false) =>
+        BashScript.Run(script, arguments, environment, clearEnvironment);
 }

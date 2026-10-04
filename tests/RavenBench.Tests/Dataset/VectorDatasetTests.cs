@@ -12,6 +12,7 @@ using PureHDF;
 using RavenBench.Core.Workload;
 using RavenBench.Dataset;
 using RavenBench.Dataset.Vectors;
+using RavenBench.Tests.Infrastructure;
 using Xunit;
 
 namespace RavenBench.Tests.Dataset;
@@ -351,14 +352,6 @@ public sealed class RequiresUvFactAttribute : FactAttribute
 {
     public RequiresUvFactAttribute()
     {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo("uv", "--version") { RedirectStandardOutput = true })!;
-            process.WaitForExit();
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            Skip = "uv is required to prepare VectorDBBench train files.";
-        }
+        Skip = ToolProbe.SkipReason("uv", "--version", "uv is required to prepare VectorDBBench train files.");
     }
 }

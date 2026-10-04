@@ -193,21 +193,6 @@ public class VectorRunScriptTests
         return port;
     }
 
-    internal static (int ExitCode, string Output) RunBash(string script, string[] arguments, IReadOnlyDictionary<string, string>? environment, bool clear = false)
-    {
-        var startInfo = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        startInfo.ArgumentList.Add(script);
-        foreach (var argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-        if (clear)
-            startInfo.Environment.Clear();
-        foreach (var (key, value) in environment ?? new Dictionary<string, string>())
-            startInfo.Environment[key] = value;
-
-        using var process = Process.Start(startInfo)!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdout.Result + stderr);
-    }
+    internal static (int ExitCode, string Output) RunBash(string script, string[] arguments, IReadOnlyDictionary<string, string>? environment, bool clear = false) =>
+        BashScript.Run(script, arguments, environment, clear);
 }

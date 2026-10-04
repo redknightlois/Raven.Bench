@@ -9,9 +9,11 @@ namespace RavenBench.Tests.Infrastructure;
 /// </summary>
 public sealed class RequiresBashFactAttribute : FactAttribute
 {
+    /// <summary>The skip reason of a test that starts /bin/bash; null when bash is present. Gates that also need a database add it to theirs.</summary>
+    public static string? SkipReason => File.Exists("/bin/bash") ? null : "A bash shell is required to drive the benchmark scripts.";
+
     public RequiresBashFactAttribute()
     {
-        if (File.Exists("/bin/bash") == false)
-            Skip = "A bash shell is required to drive benchmarks/ycsb/run.sh.";
+        Skip = SkipReason;
     }
 }

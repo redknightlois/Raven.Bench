@@ -13,11 +13,23 @@ namespace RavenBench.Tests.Dataset;
 
 public class ClinicalWordsDatasetProviderTests
 {
-    [RequiresClinicalWordsTheory]
+    [RequiresClinicalWordsFact(100)]
+    public Task LoadWordVectors_100d_LoadsSuccessfully() => LoadWordVectorsAsync(100);
+
+    [RequiresClinicalWordsFact(300)]
+    public Task LoadWordVectors_300d_LoadsSuccessfully() => LoadWordVectorsAsync(300);
+
+    [RequiresClinicalWordsFact(600)]
+    public Task LoadWordVectors_600d_LoadsSuccessfully() => LoadWordVectorsAsync(600);
+
+    [Theory]
     [InlineData(100)]
     [InlineData(300)]
     [InlineData(600)]
-    public async Task LoadWordVectors_AllDimensions_LoadsSuccessfully(int dimensions)
+    public void SkipGate_SkipsExactlyWhenThatDimensionIsMissing(int dimensions) =>
+        Assert.Equal(ClinicalWordsAvailability.PathOf(dimensions) == null, new RequiresClinicalWordsFactAttribute(dimensions).Skip != null);
+
+    private static async Task LoadWordVectorsAsync(int dimensions)
     {
         // Arrange
         var (provider, files) = await PinLocalParquetAsync(dimensions);
