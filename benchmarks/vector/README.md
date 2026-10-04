@@ -27,7 +27,7 @@ The script is endpoint-driven. It probes the target's endpoint first. It starts 
 
 The `pgvector` service publishes 5432 like the ycsb `postgresql` service, so only one of them runs at a time unless `PGVECTOR_PORT` moves it. The compose project name (`COMPOSE_PROJECT_NAME`) decides the container names, so two runs on one host use two project names and two ports.
 
-Before the load, the run checks that available memory and free disk under the data directory each hold twice the raw base (vectors x dimensions x 4 bytes), and it stops by name when either is short.
+Before the load, the run checks that available memory and free disk under the data directory each hold twice the raw base (vectors x dimensions x 4 bytes), and it stops by name when either is short. The check runs only when the endpoint is local (loopback or an address of this host); against a remote endpoint the run skips it and says so in the output.
 
 The shipped scenario runs the plan's default set, cohere-768-1m. A small set for a quick run is any set with a cap on its base vectors. The under-insert slice, `InsertRate` times `Warmup` plus `Duration`, is held out of that cap and must leave vectors to load, so a small cap also lowers the insert rate, for example:
 

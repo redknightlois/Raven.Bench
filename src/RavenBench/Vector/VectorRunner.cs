@@ -89,7 +89,16 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
     public static readonly IReadOnlyList<string> Runs = ["load", "recall", "readers", "filtered", "under-insert"];
 
+    /// <summary>The set the name selects. The vector runner takes no operator pin, so a set with an unpinned file is refused here.</summary>
     public static IVectorDataset ResolveSet(string name)
+    {
+        var set = FindSet(name);
+        if (set.Files.FirstOrDefault(f => f.Sha256 == null) is { } unpinned)
+            throw new VectorScenarioException($"Scenario key 'Dataset' is '{name}', whose file '{unpinned.FileName}' has no pinned SHA-256, and the vector runner takes no operator pin. Add the file's SHA-256 to the set's catalog entry to run it here, or import it with 'run --dataset ... --dataset-sha256 <hex>'.");
+        return set;
+    }
+
+    private static IVectorDataset FindSet(string name)
     {
         if (VectorSets.FindPublished(name) is { } published)
             return published;
@@ -145,7 +154,10 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         scenario.RequireInsertSliceBelow(baseCount, warmup, duration);
         var split = new VectorSplit(baseCount, scenario.Seed, scenario.InsertCount(warmup, duration), scenario.FilterSelectivity);
 
-        VectorResourceCheck.Require(split.BaseCount, set.Dimensions, Environment.ExpandEnvironmentVariables(scenario.DataDirectory));
+        if (VectorResourceCheck.AppliesTo(url))
+            VectorResourceCheck.Require(split.BaseCount, set.Dimensions, Environment.ExpandEnvironmentVariables(scenario.DataDirectory));
+        else
+            Console.WriteLine("[Vector] resource check skipped: the endpoint is not local, so this host's memory and disk do not describe the database host.");
 
         // One pass outside any product: the insert slice, the labelled subset, and the vectors of the quiet truth.
         var slice = new List<BaseVector>();
