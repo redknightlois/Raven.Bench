@@ -151,22 +151,29 @@ public static class AggregateShapes
     };
 
     /// <summary>The RavenDB index definitions as <c>PUT /admin/indexes</c> accepts them, one per shape.</summary>
-    public static IReadOnlyList<JsonElement> RavenDbIndexes() => Load("ravendb");
+    public static IReadOnlyList<JsonElement> RavenDbIndexes() => Load("ravendb").Values.ToList();
 
-    /// <summary>The MongoDB index specifications, each with a <c>name</c> and a <c>key</c> document.</summary>
-    public static IReadOnlyList<JsonElement> MongoIndexes() => Load("mongodb");
+    /// <summary>
+    /// The MongoDB index specifications, each with a <c>name</c> and a <c>key</c> document. A shape has
+    /// an index file only when its pipeline starts on the index's leading key, so the planner can use it.
+    /// </summary>
+    public static IReadOnlyList<JsonElement> MongoIndexes() => Load("mongodb").Values.ToList();
 
-    private static IReadOnlyList<JsonElement> Load(string product)
+    /// <summary>The MongoDB index of a shape, or null when the shape has none.</summary>
+    public static JsonElement? MongoIndexFor(string shape) => Load("mongodb").TryGetValue(shape, out var spec) ? spec : null;
+
+    /// <summary>The definitions of a product, keyed by file name, which is the shape name.</summary>
+    private static IReadOnlyDictionary<string, JsonElement> Load(string product)
     {
         var assembly = typeof(AggregateShapes).Assembly;
         var prefix = $"{assembly.GetName().Name}.Aggregate.Indexes.{product}.";
-        var list = new List<JsonElement>();
-        foreach (var name in assembly.GetManifestResourceNames().Where(n => n.StartsWith(prefix, StringComparison.Ordinal)).Order(StringComparer.Ordinal))
+        var map = new SortedDictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var name in assembly.GetManifestResourceNames().Where(n => n.StartsWith(prefix, StringComparison.Ordinal)))
         {
             using var stream = assembly.GetManifestResourceStream(name)!;
-            list.Add(JsonDocument.Parse(stream).RootElement.Clone());
+            map[Path.GetFileNameWithoutExtension(name[prefix.Length..])] = JsonDocument.Parse(stream).RootElement.Clone();
         }
-        return list.Count > 0 ? list : throw new InvalidOperationException($"No embedded {product} aggregate index definitions under '{prefix}'.");
+        return map.Count > 0 ? map : throw new InvalidOperationException($"No embedded {product} aggregate index definitions under '{prefix}'.");
     }
 }
 

@@ -8,14 +8,32 @@ namespace RavenBench.Core.Aggregate;
 /// </summary>
 public static class UnderWriteSplit
 {
-    /// <summary>Every document the probe can move into the tracked group, in order; the step needs at least <paramref name="count"/>.</summary>
+    /// <summary>The ids of the first <paramref name="count"/> documents the probe can move into the tracked group, in order.</summary>
     /// <exception cref="InvalidOperationException">Fewer than <paramref name="count"/> documents are outside the tracked group for the probe.</exception>
-    public static AggregateDocument[] ProbeSources(IEnumerable<AggregateDocument> documents, string trackedGroup, long count)
+    public static IReadOnlyList<string> ProbeSources(IEnumerable<AggregateDocument> documents, string trackedGroup, long count)
     {
-        var sources = OutsideTracked(documents, trackedGroup).Where((_, i) => i % 2 == 0).ToArray();
-        if (sources.Length < count)
-            throw new InvalidOperationException($"The probe needs {count} documents outside the tracked group '{trackedGroup}' but has {sources.Length}, {count - sources.Length} short; lower the query rate, shorten the step, or raise documentCount.");
+        var sources = OutsideTracked(documents, trackedGroup).Where((_, i) => i % 2 == 0).TakeWhile((_, i) => i < count).Select(d => d.Id).ToList();
+        if (sources.Count < count)
+            throw new InvalidOperationException($"The probe needs {count} documents outside the tracked group '{trackedGroup}' but has {sources.Count}, {count - sources.Count} short; lower the query rate, shorten the step, or raise documentCount.");
         return sources;
+    }
+
+    /// <summary>
+    /// The probe's write for <see cref="PacedWriter"/>: each call moves the next id into the tracked group through
+    /// <paramref name="update"/>, and returns false once every id is used, which stops the probe without an error.
+    /// </summary>
+    public static Func<int, CancellationToken, Task<bool>> ProbeWrite(IReadOnlyList<string> ids, string trackedGroup, int seed,
+        Func<AggregateUpdateOperation, CancellationToken, Task> update)
+    {
+        var amounts = new Random(seed);
+        int next = 0;
+        return async (_, token) =>
+        {
+            if (next == ids.Count)
+                return false;
+            await update(new AggregateUpdateOperation { Id = ids[next++], Category = trackedGroup, Amount = amounts.NextInt64(1, AggregateDataSet.MaxAmount + 1) }, token);
+            return true;
+        };
     }
 
     /// <summary>
