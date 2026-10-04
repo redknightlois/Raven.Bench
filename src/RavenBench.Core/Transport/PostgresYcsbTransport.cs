@@ -116,10 +116,10 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
     /// <inheritdoc />
     public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) => op switch
     {
-        ReadOperation read => GuardedAsync(() => ReadAsync(read, ct), ct),
-        InsertOperation<string> insert => GuardedAsync(() => InsertAsync(insert, ct), ct),
-        UpdateFieldOperation update => GuardedAsync(() => UpdateFieldAsync(update, ct), ct),
-        BulkInsertOperation<string> bulk => GuardedAsync(() => BulkInsertAsync(bulk, ct), ct),
+        ReadOperation read => TransportResult.GuardedAsync(() => ReadAsync(read, ct), ct),
+        InsertOperation<string> insert => TransportResult.GuardedAsync(() => InsertAsync(insert, ct), ct),
+        UpdateFieldOperation update => TransportResult.GuardedAsync(() => UpdateFieldAsync(update, ct), ct),
+        BulkInsertOperation<string> bulk => TransportResult.GuardedAsync(() => BulkInsertAsync(bulk, ct), ct),
         _ => throw new NotSupportedException($"{nameof(PostgresYcsbTransport)} cannot execute operation type {op.GetType().Name}.")
     };
 
@@ -368,22 +368,6 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
         string.IsNullOrWhiteSpace(value) || string.Equals(value, "unknown", StringComparison.OrdinalIgnoreCase)
             ? throw new InvalidOperationException($"The PostgreSQL server reported no {what} at connect.")
             : value;
-
-    internal static async Task<TransportResult> GuardedAsync(Func<Task<TransportResult>> body, CancellationToken ct)
-    {
-        try
-        {
-            return await body().ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            return TransportResult.CancelledResult;
-        }
-        catch (Exception ex)
-        {
-            return TransportResult.FromException(ex, ct);
-        }
-    }
 
     private async ValueTask DisposeConnectionsAsync()
     {

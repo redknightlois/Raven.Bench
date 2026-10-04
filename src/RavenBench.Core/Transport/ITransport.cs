@@ -41,11 +41,24 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     /// </summary>
     internal static TransportResult FromException(Exception ex, CancellationToken ct) => ex switch
     {
-        TaskCanceledException when ct.IsCancellationRequested => CancelledResult,
+        OperationCanceledException when ct.IsCancellationRequested => CancelledResult,
         TaskCanceledException => new TransportResult(0, 0, "Operation timed out"),
         HttpRequestException httpEx => new TransportResult(0, 0, $"HTTP {httpEx.Data["StatusCode"] ?? "Error"}: {httpEx.Message}"),
         _ => new TransportResult(0, 0, ex.Message)
     };
+
+    /// <summary>Runs a transport operation and maps any failure it raises through <see cref="FromException"/>.</summary>
+    internal static async Task<TransportResult> GuardedAsync(Func<Task<TransportResult>> body, CancellationToken ct)
+    {
+        try
+        {
+            return await body().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return FromException(ex, ct);
+        }
+    }
 
     /// <summary>
     /// Index name used by the query (populated for query operations).

@@ -265,9 +265,9 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
 
     public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) => op switch
     {
-        VectorSearchOperation search => PostgresYcsbTransport.GuardedAsync(() => SearchAsync(search, ct), ct),
-        BulkInsertOperation<VectorRow> bulk => PostgresYcsbTransport.GuardedAsync(() => BulkInsertAsync(bulk, ct), ct),
-        InsertOperation<VectorRow> insert => PostgresYcsbTransport.GuardedAsync(() => InsertAsync(insert, ct), ct),
+        VectorSearchOperation search => TransportResult.GuardedAsync(() => SearchAsync(search, ct), ct),
+        BulkInsertOperation<VectorRow> bulk => TransportResult.GuardedAsync(() => BulkInsertAsync(bulk, ct), ct),
+        InsertOperation<VectorRow> insert => TransportResult.GuardedAsync(() => InsertAsync(insert, ct), ct),
         _ => throw new NotSupportedException($"{nameof(ElasticsearchVectorTransport)} cannot execute operation type {op.GetType().Name}.")
     };
 
