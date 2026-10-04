@@ -11,6 +11,8 @@ namespace RavenBench.Tests;
 
 public class QueryStatsTests
 {
+    private const int StepDraws = 50;
+
     [Fact]
     public void Aggregates_Index_Usage_Result_Counts_And_Staleness()
     {
@@ -55,22 +57,36 @@ public class QueryStatsTests
             Transport = TransportKind.Raw,
             Compression = CompressionMode.Identity,
             Warmup = TimeSpan.Zero,
-            Duration = TimeSpan.FromMilliseconds(100),
+            Duration = TimeSpan.FromHours(1),
             Profile = WorkloadProfile.Mixed
         };
 
         // An index that returns zero rows is the failure mode result-count guards against.
         using var transport = new TestTransport(baseLatencyMs: 1, indexName: "Auto/Questions", resultCount: 0, isStale: true);
-        var workload = new MixedProfileWorkload(WorkloadMix.FromWeights(100, 0, 0), new UniformDistribution(), 1024, seed: 42);
+        // The step stops on a draw count; the duration cannot elapse first.
+        var workload = new CountedWorkload(new MixedProfileWorkload(WorkloadMix.FromWeights(100, 0, 0), new UniformDistribution(), 1024, seed: 42), StepDraws);
         var executor = new BenchmarkExecutor(opts, transport, workload, new ProcessCpuTracker());
         var generator = new ClosedLoopLoadGenerator(transport, workload, concurrency: 4, new Random(42));
 
         var (_, step) = await executor.ExecuteStepAsync(generator, 0, 4, CancellationToken.None);
 
-        step.QueryOperations.Should().BeGreaterThan(0);
+        step.QueryOperations.Should().Be(StepDraws);
         step.IndexUsage!.Should().ContainKey("Auto/Questions");
         step.MaxResultCount.Should().Be(0);
         step.AvgResultCount.Should().Be(0.0);
         step.StaleQueryCount.Should().Be(step.QueryOperations);
+    }
+
+    private sealed class CountedWorkload(IWorkload inner, int limit) : IWorkload
+    {
+        private int _drawn;
+
+        public bool IsExhausted => _drawn >= limit;
+
+        public OperationBase NextOperation(Random rng)
+        {
+            _drawn++;
+            return inner.NextOperation(rng);
+        }
     }
 }

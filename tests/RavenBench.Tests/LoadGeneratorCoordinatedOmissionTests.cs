@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -86,7 +87,13 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
         public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
         {
             if (_latencyMs > 0)
+            {
+                // Timers tick in whole milliseconds and may fire early; the stub serves for at least its latency on the recorder's clock.
+                var due = Stopwatch.GetTimestamp() + Stopwatch.Frequency * _latencyMs / 1000;
                 await Task.Delay(_latencyMs, ct);
+                while (Stopwatch.GetTimestamp() < due)
+                    await Task.Yield();
+            }
 
             return new TransportResult(64, 32);
         }
