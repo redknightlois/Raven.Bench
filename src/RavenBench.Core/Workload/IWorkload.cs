@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
 namespace RavenBench.Core.Workload;
 
@@ -370,7 +371,35 @@ public class UpdateFieldOperation : OperationBase
 
 public class BulkInsertOperation<T> : OperationBase
 {
-    public required List<DocumentToWrite<T>> Documents { get; init; }
+    private Lazy<List<DocumentToWrite<T>>> _documents = null!;
+    private int _count;
 
-    public override int RecordCount => Documents.Count;
+    public BulkInsertOperation()
+    {
+    }
+
+    /// <summary>
+    /// A batch of a known size whose documents are built on their first read, so a workload drawn
+    /// under the generator lock hands out the batch and the sending worker builds its payloads.
+    /// </summary>
+    [SetsRequiredMembers]
+    public BulkInsertOperation(int count, Func<List<DocumentToWrite<T>>> build)
+    {
+        _count = count;
+        _documents = new Lazy<List<DocumentToWrite<T>>>(build);
+    }
+
+    public required List<DocumentToWrite<T>> Documents
+    {
+        get => _documents.Value;
+        init
+        {
+            _count = value.Count;
+            _documents = new Lazy<List<DocumentToWrite<T>>>(value);
+        }
+    }
+
+    internal bool DocumentsBuilt => _documents.IsValueCreated;
+
+    public override int RecordCount => _count;
 }

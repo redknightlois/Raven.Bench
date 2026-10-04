@@ -36,18 +36,15 @@ public sealed class BulkWriteWorkload : IWorkload
         for (int i = 0; i < count; i++)
             ids[i] = BenchIds.IdFor(Interlocked.Increment(ref _maxKey));
 
+        // The ids are reserved here; the payloads are built by whoever first reads the documents.
         if (_payload == PayloadKind.Entity)
         {
-            return new BulkInsertOperation<YcsbRecord>
-            {
-                Documents = ids.Select(id => new DocumentToWrite<YcsbRecord> { Id = id, Document = PayloadGenerator.GenerateRecord(_seed, id, _docSizeBytes) }).ToList()
-            };
+            return new BulkInsertOperation<YcsbRecord>(count,
+                () => ids.Select(id => new DocumentToWrite<YcsbRecord> { Id = id, Document = PayloadGenerator.GenerateRecord(_seed, id, _docSizeBytes) }).ToList());
         }
 
-        return new BulkInsertOperation<string>
-        {
-            Documents = ids.Select(id => new DocumentToWrite<string> { Id = id, Document = PayloadGenerator.Generate(_seed, id, _docSizeBytes) }).ToList()
-        };
+        return new BulkInsertOperation<string>(count,
+            () => ids.Select(id => new DocumentToWrite<string> { Id = id, Document = PayloadGenerator.Generate(_seed, id, _docSizeBytes) }).ToList());
     }
 
     /// <summary>
