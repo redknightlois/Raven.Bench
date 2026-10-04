@@ -23,16 +23,6 @@ public sealed class RecallResult
     public int GroundTruthDepth { get; init; }
 
     /// <summary>
-    /// Whether ground truth was loaded from cache or freshly computed.
-    /// </summary>
-    public bool GroundTruthCached { get; init; }
-
-    /// <summary>
-    /// Time taken to compute ground truth (zero if loaded from cache).
-    /// </summary>
-    public TimeSpan GroundTruthComputeTime { get; init; }
-
-    /// <summary>
     /// Time taken to run the recall measurement queries.
     /// </summary>
     public TimeSpan MeasurementTime { get; init; }

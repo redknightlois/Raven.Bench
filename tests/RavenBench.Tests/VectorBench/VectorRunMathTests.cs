@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using RavenBench.Core.Reporting;
 using RavenBench.Core.Workload;
+using RavenBench.Dataset;
 using RavenBench.Dataset.Vectors;
 using RavenBench.VectorBench;
 using Xunit;
@@ -155,5 +156,21 @@ public class VectorRunMathTests
         VectorResourceCheck.Require(1000, 100, needed, needed);
         FluentActions.Invoking(() => VectorResourceCheck.Require(1000, 100, needed - 1, needed)).Should().Throw<VectorResourceException>().WithMessage("Available memory*");
         FluentActions.Invoking(() => VectorResourceCheck.Require(1000, 100, needed, needed - 1)).Should().Throw<VectorResourceException>().WithMessage("Free disk*");
+    }
+
+    [Fact]
+    public void RecallMeasurement_And_The_Runner_Score_A_Query_Set_Alike()
+    {
+        var returned = new List<IReadOnlyList<string>> { new[] { "a", "b", "x" }, new[] { "d" } };
+        var truth = new Dictionary<int, string[]> { [0] = ["a", "b", "c"], [1] = ["d", "e", "f"] };
+        var runner = returned.Select((r, q) => VectorRunMath.Recall(r, truth[q], 3)).Average();
+        RecallMeasurement.ComputeRecall(returned, truth, [3])[3].Should().BeApproximately(runner, 1e-12);
+    }
+
+    [Fact]
+    public void StripPrefix_Ignores_Case_And_Refuses_An_Id_Without_The_Prefix()
+    {
+        VectorRunMath.StripPrefix("Vectors/7", "vectors/").Should().Be("7");
+        FluentActions.Invoking(() => VectorRunMath.StripPrefix("7", "vectors/")).Should().Throw<InvalidDataException>();
     }
 }

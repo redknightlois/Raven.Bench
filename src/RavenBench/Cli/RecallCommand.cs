@@ -84,12 +84,14 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
         if (string.IsNullOrWhiteSpace(settings.VectorRecallEfSweep) == false)
             efSweep = CliParsing.ParseEfSweepRaw(settings.VectorRecallEfSweep);
 
-        var metadata = await LoadVectorMetadataAsync(settings);
-        if (metadata == null)
+        if (await LoadVectorMetadataAsync(settings) is not var (metadata, files, selection))
         {
             AnsiConsole.MarkupLine("[red]Failed to load vector metadata.[/]");
             return -1;
         }
+
+        using (var store = HttpHelper.Create(settings.Url, GetDatabaseName(settings), httpVersion: null))
+            await HeldOutManifest.EnsureLoadedAsync(store, files, selection);
 
         AnsiConsole.MarkupLine($"[blue]Measuring recall on {metadata.IndexName} ({metadata.QueryVectorCount} queries)[/]");
 
@@ -160,7 +162,8 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
         return "RavenBench";
     }
 
-    private static async Task<VectorWorkloadMetadata?> LoadVectorMetadataAsync(RecallSettings settings)
+    /// <summary>The query metadata, with the files and the held-out selection the database must have been loaded under.</summary>
+    private static async Task<(VectorWorkloadMetadata Metadata, VerifiedFiles Files, QuerySelection? Selection)?> LoadVectorMetadataAsync(RecallSettings settings)
     {
         var engineSuffix = VectorIndexMapping.GetEngineSuffix(settings.SearchEngine);
         var dataDirectory = settings.DatasetCacheDir ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets");
@@ -174,7 +177,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             var metadata = await PublishedSetImport.MetadataAsync(published, files, selection, depth, settings.VectorQuantization, settings.SearchEngine, null, null);
             if (string.IsNullOrWhiteSpace(settings.IndexNameOverride) == false)
                 metadata.IndexName = settings.IndexNameOverride;
-            return metadata;
+            return (metadata, files, null);
         }
 
         if (settings.Dataset?.StartsWith("sphere", StringComparison.OrdinalIgnoreCase) == true)
@@ -195,7 +198,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
                 await SphereDatasetProvider.CreateVectorIndexAsync(
                     s, settings.VectorQuantization, false, settings.SearchEngine);
             };
-            return metadata;
+            return (metadata, files, selection);
         }
 
         return null;
