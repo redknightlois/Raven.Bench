@@ -116,7 +116,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - C is 100% read; A is 50% read and 50% one-field update; B is 95% read and 5% one-field update; insert-stream is 100% single-document insert; load fills the keyspace through the bulk path.
 - Key distributions for reads.
   - `uniform`: equal probability across existing keys.
-  - `zipfian`: favors smaller (older) keys.
+  - `zipfian`: YCSB zipfian popularity (theta 0.99) over ranks, with each rank mapped to a key by a fixed permutation of the keyspace. The hottest keys are spread over the keyspace, not packed onto ids 1, 2, 3; the k-th hottest key keeps the k-th rank's frequency, and a seed reproduces the key stream.
   - `latest`: favors the most recently inserted portion of the keyspace.
 - The ycsb parity check deletes only the documents its own inserts created. A sample id that already holds a document fails the check and the document is left in place.
 

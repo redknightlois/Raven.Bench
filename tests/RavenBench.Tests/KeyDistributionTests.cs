@@ -9,32 +9,48 @@ namespace RavenBench.Tests;
 public class KeyDistributionTests
 {
     [Fact]
-    public void Zipfian_Key1_Is_Most_Frequent()
+    public void Zipfian_Hottest_Keys_Are_Spread_Over_The_Keyspace()
     {
-        var counts = SampleZipfian(maxKey: 100, samples: 100_000);
+        var counts = SampleZipfian(maxKey: 1000, samples: 100_000);
 
-        counts[1].Should().Be(counts.Skip(1).Max());
+        var hottest = Enumerable.Range(1, 1000).OrderByDescending(k => counts[k]).Take(10).ToArray();
+
+        hottest.Should().NotBeEquivalentTo(Enumerable.Range(1, 10));
+        hottest.Count(k => k <= 10).Should().BeLessThan(5, "a contiguous hot set packs the hottest keys onto the first ids");
     }
 
     [Fact]
-    public void Zipfian_Frequencies_Are_Monotonically_NonIncreasing_Over_First_Ranks()
+    public void Zipfian_Sorted_Key_Frequencies_Keep_The_Zipfian_Rank_Shape()
     {
-        var counts = SampleZipfian(maxKey: 100, samples: 100_000);
+        const double theta = 0.99;
+        var counts = SampleZipfian(maxKey: 100, samples: 200_000);
+        var byRank = counts.Skip(1).OrderByDescending(c => c).ToArray();
 
-        // Statistical slack: each rank must hold at least 80% of the next-lower rank's count.
-        for (int k = 1; k < 8; k++)
+        // f(1) / f(k) = k^theta for a zipfian rank-frequency curve; the slack covers sampling noise.
+        for (int k = 2; k <= 8; k++)
         {
-            counts[k].Should().BeGreaterThan((int)(counts[k + 1] * 0.8),
-                $"rank {k} should not be less frequent than rank {k + 1}");
+            ((double)byRank[0] / byRank[k - 1]).Should().BeApproximately(Math.Pow(k, theta), Math.Pow(k, theta) * 0.2,
+                $"rank {k} should hold 1/{k}^theta of rank 1's frequency");
         }
     }
 
     [Fact]
-    public void Zipfian_Max_Key_Gets_No_Anomalous_Mass()
+    public void Zipfian_Alternating_Keyspace_Sizes_Do_Not_Resum_The_Zeta_Cache()
     {
-        var counts = SampleZipfian(maxKey: 100, samples: 100_000);
+        const int n = 100_000;
+        var rng = new Random(3);
+        var zipf = new ZipfianDistribution();
 
-        counts[100].Should().BeLessThan(counts[3]);
+        zipf.NextKey(rng, n + 1);
+        var afterFirst = zipf.ZetaTermsComputed;
+        for (int i = 0; i < 100; i++)
+        {
+            zipf.NextKey(rng, n).Should().BeInRange(1, n);
+            zipf.NextKey(rng, n + 1).Should().BeInRange(1, n + 1);
+        }
+
+        afterFirst.Should().Be(n + 1);
+        (zipf.ZetaTermsComputed - afterFirst).Should().Be(200, "each step between n and n + 1 moves the cache by one term");
     }
 
     [Fact]
@@ -135,6 +151,8 @@ public class KeyDistributionTests
             parsed.Should().Be(kind);
             KeyDistributions.Create(kind).NextKey(new Random(1), 10).Should().BeInRange(1, 10);
         }
+
+        KeyDistributions.TryParse(((int)RavenBench.Core.KeyDistributionKind.Zipfian).ToString(System.Globalization.CultureInfo.InvariantCulture), out _).Should().BeFalse();
     }
 
     private static int[] Draw(IKeyDistribution distribution, int seed)

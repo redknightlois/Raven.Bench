@@ -103,7 +103,10 @@ public sealed record YcsbRunInfo
     /// <summary>The load shape that produced this result: "closed" for the ramp, "rate" for a fixed rate.</summary>
     public required string Shape { get; init; }
 
-    /// <summary>The key distribution this run actually used, not the scenario's first value.</summary>
+    /// <summary>
+    /// The key distribution this run actually used, not the scenario's first value. "zipfian" maps each
+    /// popularity rank to a key by a fixed permutation, so its hottest keys are spread over the keyspace.
+    /// </summary>
     public required string Distribution { get; init; }
 
     /// <summary>The fixed rate this run ran at. Absent for a closed-loop run, which has none.</summary>
