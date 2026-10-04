@@ -48,6 +48,7 @@ public sealed class TestTransport : ITransport
     public string ProductName => "TestProduct";
 
     public bool ReportsWireBytes => true;
+    public string RecordedEndpoint => "stub";
 
     public string TransportPath => "test";
 

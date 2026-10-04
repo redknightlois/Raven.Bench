@@ -88,8 +88,13 @@ internal static class ConnectionStringRedaction
             }
             else
             {
+                // libpq lets a backslash escape a space inside an unquoted value.
                 while (i < connectionString.Length && char.IsWhiteSpace(connectionString[i]) == false)
+                {
+                    if (connectionString[i] == '\\' && i + 1 < connectionString.Length)
+                        i++;
                     i++;
+                }
             }
 
             if (name.Equals("Password", StringComparison.OrdinalIgnoreCase) || name.Equals("Pwd", StringComparison.OrdinalIgnoreCase))

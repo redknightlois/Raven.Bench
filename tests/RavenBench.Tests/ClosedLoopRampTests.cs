@@ -95,6 +95,7 @@ public class ClosedLoopRampTests
         private long _calls;
         public string ProductName => "fake";
         public bool ReportsWireBytes => false;
+        public string RecordedEndpoint => "stub";
 
         public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
         {

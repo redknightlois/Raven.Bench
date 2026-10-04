@@ -50,6 +50,7 @@ public sealed class RecordingTransport(IYcsbTransport inner, Func<long> inserted
 
     public string ProductName => inner.ProductName;
     public bool ReportsWireBytes => inner.ReportsWireBytes;
+    public string RecordedEndpoint => inner.RecordedEndpoint;
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
@@ -223,7 +224,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         var common = (Target: targetName, Product: productName, Version: serverVersion, Container: container, Settings: productSettings, Dataset: datasetInfo, Fingerprint: fingerprint, Durability: target.Durability);
         VectorRunResult Result(string run, List<StepResult> steps, List<HistogramArtifact>? histograms, Func<VectorRunInfo, VectorRunInfo> fill)
         {
-            var opts = new RunOptions { Url = url, Database = database, Seed = scenario.Seed, Warmup = warmup, Duration = duration };
+            var opts = new RunOptions { Url = target.Transport.RecordedEndpoint, Database = database, Seed = scenario.Seed, Warmup = warmup, Duration = duration };
             var info = fill(new VectorRunInfo
             {
                 Run = run,
@@ -271,9 +272,9 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
         // readers: the closed loop finds the sustained rate, then the fixed-rate runner runs at it.
         var readersWorkload = new VectorQueryWorkload(queries.Queries, target, k, effort);
-        var closed = await RampAsync(target.Transport, readersWorkload, url, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
+        var closed = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
         var sustained = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
-        var fixedRate = await RampAsync(target.Transport, readersWorkload, url, database, LoadShape.Rate, sustained, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
+        var fixedRate = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Rate, sustained, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
         var readerSteps = closed.Steps.Concat(fixedRate.Steps).ToList();
         var readersInfo = new VectorReadersInfo(scenario.Readers, closed.Steps[^1].Throughput, sustained, readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)));
 
@@ -289,7 +290,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             + (productSettings.TryGetValue("hnsw.iterative_scan", out var iterative) ? $"; hnsw.iterative_scan={iterative}, hnsw.max_scan_tuples={productSettings["hnsw.max_scan_tuples"]} as the server reports them" : ""));
 
         // under-insert
-        var (underInsertRamp, underInsertInfo) = await UnderInsertAsync(target, queries.Queries, quietTopK, slice, set.Metric, effort, inForce.Recall, url, database, warmup, duration, nodeExporter, ct);
+        var (underInsertRamp, underInsertInfo) = await UnderInsertAsync(target, queries.Queries, quietTopK, slice, set.Metric, effort, inForce.Recall, database, warmup, duration, nodeExporter, ct);
 
         // cross-check: last, because it replaces the index the other runs measured.
         var crossCheck = await CrossCheckAsync(target, set, queries, slice, split.LoadedCount, productSettings, datasetInfo.TruthSource, nodeExporter, ct);
@@ -348,7 +349,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
     private async Task<(BenchmarkRunner.RampResult Ramp, VectorUnderInsertInfo Info)> UnderInsertAsync(IVectorTarget target, float[][] queries,
         IReadOnlyList<BaseVector>[] quietTopK, IReadOnlyList<BaseVector> slice, VectorMetric metric, SearchEffort effort, double quietRecall,
-        string url, string database, TimeSpan warmup, TimeSpan duration, NodeExporterClient? nodeExporter, CancellationToken ct)
+        string database, TimeSpan warmup, TimeSpan duration, NodeExporterClient? nodeExporter, CancellationToken ct)
     {
         long acknowledged = 0;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -377,7 +378,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         BenchmarkRunner.RampResult ramp;
         try
         {
-            ramp = await RampAsync(recording, workload, url, database, LoadShape.Rate, (int)Math.Round(scenario.UnderInsertQueryRate), rateWorkers: null, warmup, duration, "under-insert", nodeExporter);
+            ramp = await RampAsync(recording, workload, database, LoadShape.Rate, (int)Math.Round(scenario.UnderInsertQueryRate), rateWorkers: null, warmup, duration, "under-insert", nodeExporter);
         }
         finally
         {
@@ -504,12 +505,12 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         ServerMetricsUnavailable = window?.Unavailable
     };
 
-    private async Task<BenchmarkRunner.RampResult> RampAsync(IYcsbTransport transport, IWorkload workload, string url, string database, LoadShape shape, int value,
+    private async Task<BenchmarkRunner.RampResult> RampAsync(IYcsbTransport transport, IWorkload workload, string database, LoadShape shape, int value,
         int? rateWorkers, TimeSpan warmup, TimeSpan duration, string name, NodeExporterClient? nodeExporter)
     {
         var opts = new RunOptions
         {
-            Url = url,
+            Url = transport.RecordedEndpoint,
             Database = database,
             Seed = SeedMixer.Derive(scenario.Seed, name),
             Warmup = warmup,

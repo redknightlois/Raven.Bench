@@ -26,6 +26,7 @@ public sealed class FreshnessRecordingTransport(IYcsbTransport inner, FreshnessT
 {
     public string ProductName => inner.ProductName;
     public bool ReportsWireBytes => inner.ReportsWireBytes;
+    public string RecordedEndpoint => inner.RecordedEndpoint;
 
     public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
     {
@@ -118,9 +119,9 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             foreach (var shape in AggregateShapes.All)
             {
                 var workload = new AggregateQueryWorkload(() => Operation(shape));
-                var closed = await RampAsync(transport, workload, url, database, LoadShape.Closed, scenario.Concurrency, null, warmup, duration, $"{shape}-closed", nodeExporter);
+                var closed = await RampAsync(transport, workload, database, LoadShape.Closed, scenario.Concurrency, null, warmup, duration, $"{shape}-closed", nodeExporter);
                 var rate = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
-                var fixedRate = await RampAsync(transport, workload, url, database, LoadShape.Rate, rate, scenario.Concurrency, warmup, duration, $"{shape}-rate", nodeExporter);
+                var fixedRate = await RampAsync(transport, workload, database, LoadShape.Rate, rate, scenario.Concurrency, warmup, duration, $"{shape}-rate", nodeExporter);
                 var steps = closed.Steps.Concat(fixedRate.Steps).ToList();
                 var op = Operation(shape);
                 queryRuns.Add((shape, closed, fixedRate, new AggregateQueryInfo(shape, isRavenDb ? op.IndexName : null, op.TopN, Describe(op.Filter), QueryPolicy,
@@ -131,9 +132,9 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             // under-write: a quiet step and an under-write step at the same fixed query rate.
             var queryRate = (int)Math.Round(scenario.UnderWriteQueryRate);
             var countWorkload = new AggregateQueryWorkload(() => Operation(AggregateShapes.CountByCategory));
-            var quiet = await RampAsync(transport, countWorkload, url, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write-quiet", nodeExporter);
+            var quiet = await RampAsync(transport, countWorkload, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write-quiet", nodeExporter);
             var tracker = new FreshnessTracker(tracked.Key, tracked.Value);
-            var (underWrite, writer, probe) = await UnderWriteAsync(transport, dataSet, digest.CategoryCounts, tracker, countWorkload, queryRate, url, database, warmup, duration, nodeExporter, ct);
+            var (underWrite, writer, probe) = await UnderWriteAsync(transport, dataSet, digest.CategoryCounts, tracker, countWorkload, queryRate, database, warmup, duration, nodeExporter, ct);
             var underWriteSteps = quiet.Steps.Concat(underWrite.Steps).ToList();
             var freshness = tracker.Complete();
             var underWriteInfo = new AggregateUnderWriteInfo(scenario.UnderWriteQueryRate, QueryPolicy, quiet.Steps[^1].Throughput, quiet.Steps[^1].Raw.P99,
@@ -146,7 +147,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
                 : new DurabilityParity { Setting = "writeConcern", Value = "j=true" };
             AggregateRunResult Result(string run, List<StepResult> steps, List<HistogramArtifact>? histograms, Func<AggregateRunInfo, AggregateRunInfo> fill) => new(run, new BenchmarkSummary
             {
-                Options = new RunOptions { Url = url, Database = database, Seed = scenario.Seed, Warmup = warmup, Duration = duration },
+                Options = new RunOptions { Url = transport.RecordedEndpoint, Database = database, Seed = scenario.Seed, Warmup = warmup, Duration = duration },
                 Steps = steps,
                 Verdict = steps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)) ? "client-bound" : "measured",
                 ClientCompression = "n/a",
@@ -272,7 +273,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
     /// after the k-th acknowledged probe write is the baseline plus k.
     /// </summary>
     private async Task<(BenchmarkRunner.RampResult Ramp, HeldWriteRate Writer, HeldWriteRate Probe)> UnderWriteAsync(IYcsbTransport transport, AggregateDataSet dataSet,
-        IReadOnlyDictionary<string, long> categoryCounts, FreshnessTracker tracker, IWorkload workload, int queryRate, string url, string database, TimeSpan warmup, TimeSpan duration,
+        IReadOnlyDictionary<string, long> categoryCounts, FreshnessTracker tracker, IWorkload workload, int queryRate, string database, TimeSpan warmup, TimeSpan duration,
         NodeExporterClient? nodeExporter, CancellationToken ct)
     {
         // Each writer owns about as many documents as its share of the step's updates.
@@ -298,7 +299,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             return true;
         }, tracker.Acknowledged, stop.Token), CancellationToken.None);
 
-        var ramp = await AlongsideAsync(RampAsync(new FreshnessRecordingTransport(transport, tracker), workload, url, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write", nodeExporter),
+        var ramp = await AlongsideAsync(RampAsync(new FreshnessRecordingTransport(transport, tracker), workload, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write", nodeExporter),
             stop, writer, probe);
         return (ramp, await writer, await probe);
     }
@@ -418,12 +419,12 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         }
     }
 
-    private async Task<BenchmarkRunner.RampResult> RampAsync(IYcsbTransport transport, IWorkload workload, string url, string database, LoadShape shape, int value,
+    private async Task<BenchmarkRunner.RampResult> RampAsync(IYcsbTransport transport, IWorkload workload, string database, LoadShape shape, int value,
         int? rateWorkers, TimeSpan warmup, TimeSpan duration, string name, NodeExporterClient? nodeExporter)
     {
         var opts = new RunOptions
         {
-            Url = url,
+            Url = transport.RecordedEndpoint,
             Database = database,
             Seed = SeedMixer.Derive(scenario.Seed, name),
             Warmup = warmup,

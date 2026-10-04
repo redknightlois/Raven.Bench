@@ -144,6 +144,8 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - SNMP metrics included when `--snmp-enabled` (gauge metrics: CPU, memory, load; rate metrics: IO ops/sec, requests/sec). A step's SNMP rates cover the whole step window, and each counter rate starts from a sample taken inside the window. The run totals (`TotalSnmpIo*`) integrate only time inside the steps' measurement windows, and each total equals its average multiplied by that integrated time.
   - Steps with an `InvalidReason` never become the knee or the best step; a knee stopped by a client-bound step gives a client-limited verdict. A ramp that ends without a knee reports its last step as degraded when that step is in the danger zone or has errors.
   - Knee panel and a one-line Verdict.
+- Credentials
+  - The recorded endpoint (`Options.Url`) of every run, YCSB, vector and aggregate, is the transport's redacted endpoint: a password in a URL or in a keyword connection string is replaced by `***`.
 - JSON summary
   - Use `--out results.json` to write a structured `BenchmarkSummary` with options, steps, knee, verdict, HTTP version, compression, and calibration points.
   - SNMP metrics (all gauges and computed rates) included if enabled.

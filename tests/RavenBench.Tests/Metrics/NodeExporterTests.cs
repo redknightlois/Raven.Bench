@@ -176,6 +176,7 @@ public class NodeExporterTests
     {
         public string ProductName => "stub";
         public bool ReportsWireBytes => false;
+        public string RecordedEndpoint => "stub";
         public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) =>
             Task.FromResult(new TransportResult(0, 0, resultCount: ids.Count) { NeighborIds = ids });
         public Task PutAsync<T>(string id, T document) => throw new NotSupportedException();

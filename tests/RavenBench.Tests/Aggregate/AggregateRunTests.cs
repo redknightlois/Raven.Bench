@@ -364,6 +364,7 @@ public class AggregateRunTests
         private long _n;
         public string ProductName => "fake";
         public bool ReportsWireBytes => false;
+        public string RecordedEndpoint => "stub";
 
         public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) =>
             Task.FromResult(new TransportResult(0, 0, indexName: "idx", resultCount: 1, isStale: Interlocked.Increment(ref _n) % 3 == 0) { Groups = [new AggregateGroup("c1", 1)] });

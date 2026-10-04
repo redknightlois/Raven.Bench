@@ -193,6 +193,7 @@ public class RawHttpTransportTests
     {
         public string ProductName => "Stub";
         public bool ReportsWireBytes => true;
+        public string RecordedEndpoint => "stub";
         public abstract Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct);
         public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
         public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;
