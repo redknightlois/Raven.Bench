@@ -143,23 +143,49 @@ public class AggregateRunTests
     public async Task Writers_Hold_The_Rate_Up_To_Their_Count_Over_The_Latency()
     {
         const int writers = 8;
-        const double latencyMs = 20;
-        async Task<HeldWriteRate> Run(double rate)
+        int inFlight = 0, peak = 0, calls = 0;
+        var allBusy = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stop = new CancellationTokenSource();
+        async Task<bool> Write(int _, CancellationToken __)
         {
-            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-            return await PacedWriter.RunAsync(rate, writers, async (_, _) => { await Task.Delay(TimeSpan.FromMilliseconds(latencyMs), CancellationToken.None); return true; }, _ => { }, stop.Token);
+            Interlocked.Increment(ref calls);
+            var now = Interlocked.Increment(ref inFlight);
+            InterlockedMax(ref peak, now);
+            if (now == writers)
+                allBusy.TrySetResult();
+            await release.Task;
+            Interlocked.Decrement(ref inFlight);
+            return true;
         }
 
-        var capped = await Run(10_000);
-        var ceiling = writers * 1000 / latencyMs;
-        capped.HeldPerSecond.Should().BeLessThanOrEqualTo(ceiling * 1.05).And.BeGreaterThan(ceiling / 4, "timer resolution stretches each delay, but eight writers overlap");
+        // Every slot is already due, so only the writer count bounds the writes in flight.
+        var run = PacedWriter.RunAsync(double.MaxValue, writers, Write, _ => { }, stop.Token);
+        await allBusy.Task;
+        stop.Cancel();
+        release.SetResult();
+        var capped = await run;
+
+        peak.Should().Be(writers);
+        calls.Should().Be(writers, "a stopped writer sends nothing after its write in flight");
+        capped.Acknowledged.Should().Be(writers);
+        capped.Writers.Should().Be(writers);
         capped.HeldRequested.Should().BeFalse();
         capped.Shortfall.Should().Contain($"{writers} writer(s)");
 
-        var held = await Run(ceiling / 4);
-        held.HeldRequested.Should().BeTrue();
-        held.Shortfall.Should().BeNull();
-        held.Writers.Should().Be(writers);
+        // The held rate is bounded by the writer count over the mean write latency.
+        const double latencyMs = 20;
+        var ceiling = writers * 1000 / latencyMs;
+        var atCeiling = HeldWriteRate.Of(ceiling * 2, writers, acknowledged: (long)ceiling, seconds: 1, "the run ended", Enumerable.Repeat(latencyMs, (int)ceiling).ToArray());
+        atCeiling.HeldRequested.Should().BeFalse();
+        atCeiling.Shortfall.Should().Contain($"hold at most {ceiling:F0} updates/s");
+        HeldWriteRate.Of(ceiling / 4, writers, acknowledged: (long)(ceiling / 4), seconds: 1, "the run ended", [latencyMs]).Shortfall.Should().BeNull();
+    }
+
+    private static void InterlockedMax(ref int target, int value)
+    {
+        int seen;
+        while ((seen = Volatile.Read(ref target)) < value && Interlocked.CompareExchange(ref target, value, seen) != seen) { }
     }
 
     [Fact]

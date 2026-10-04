@@ -14,6 +14,7 @@ namespace RavenBench.Tests;
 public class OperationStreamReproducibilityTests
 {
     private const int DocumentSize = 1024;
+    private const int ClosedLoopDraws = 200;
 
     [Fact]
     public void Same_Seed_Draws_The_Same_Operation_Stream()
@@ -88,13 +89,13 @@ public class OperationStreamReproducibilityTests
     {
         // INVARIANT: one producer thread draws every operation from one shared source, so the
         // sequence is the same at any concurrency; only which worker executes an operation changes.
+        // Each run stops on a draw count, never on elapsed time.
         var low = await DrawClosedLoop(concurrency: 1, seed: 42);
         var high = await DrawClosedLoop(concurrency: 8, seed: 42);
 
-        low.Should().NotBeEmpty();
-        high.Should().NotBeEmpty();
-        var (shorter, longer) = low.Count <= high.Count ? (low, high) : (high, low);
-        longer.Take(shorter.Count).Should().Equal(shorter);
+        low.Should().HaveCount(ClosedLoopDraws);
+        high.Should().HaveCount(ClosedLoopDraws);
+        high.Should().Equal(low);
     }
 
     [Fact]
@@ -112,9 +113,10 @@ public class OperationStreamReproducibilityTests
 
     private static async Task<IReadOnlyList<(string Kind, string Id, string? Field, string? Value)>> DrawClosedLoop(int concurrency, int seed)
     {
-        var recording = new RecordingWorkload(NewMixedWorkload(WorkloadMix.FromWeights(40, 30, 30), seed));
+        var recording = new RecordingWorkload(NewMixedWorkload(WorkloadMix.FromWeights(40, 30, 30), seed), ClosedLoopDraws);
         var generator = new ClosedLoopLoadGenerator(new TestTransport(baseLatencyMs: 0), recording, concurrency, new Random(seed));
-        await generator.ExecuteMeasurementAsync(TimeSpan.FromMilliseconds(250), CancellationToken.None);
+        // A window that cannot close first; the exhaustion stop ends the run.
+        await generator.ExecuteMeasurementAsync(TimeSpan.FromHours(1), CancellationToken.None);
         return recording.Drawn;
     }
 
@@ -129,11 +131,19 @@ public class OperationStreamReproducibilityTests
     private sealed class RecordingWorkload : IWorkload
     {
         private readonly IWorkload _inner;
+        private readonly int _limit;
         private readonly List<(string Kind, string Id, string? Field, string? Value)> _drawn = new();
 
-        public RecordingWorkload(IWorkload inner) => _inner = inner;
+        public RecordingWorkload(IWorkload inner, int limit)
+        {
+            _inner = inner;
+            _limit = limit;
+        }
 
         public IReadOnlyList<(string Kind, string Id, string? Field, string? Value)> Drawn => _drawn;
+
+        // The generator reads this under the same lock as each draw.
+        public bool IsExhausted => _drawn.Count >= _limit;
 
         public OperationBase NextOperation(Random rng)
         {
