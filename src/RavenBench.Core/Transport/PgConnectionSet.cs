@@ -10,14 +10,12 @@ namespace RavenBench.Core.Transport;
 /// </summary>
 internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposable
 {
-    private readonly PgConnectOptions _options;
-    private readonly Func<PgConnection, Task<TSlot>> _prepare;
+    private readonly Func<Task<TSlot>> _openSlot;
     private readonly Channel<TSlot> _slots;
 
-    private PgConnectionSet(PgConnectOptions options, int size, Func<PgConnection, Task<TSlot>> prepare)
+    private PgConnectionSet(int size, Func<Task<TSlot>> openSlot)
     {
-        _options = options;
-        _prepare = prepare;
+        _openSlot = openSlot;
         _slots = Channel.CreateBounded<TSlot>(size);
     }
 
@@ -38,13 +36,29 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
     }
 
     /// <summary>Opens <paramref name="size"/> connections; a failure closes the ones already open.</summary>
-    public static async Task<PgConnectionSet<TSlot>> OpenAsync(PgConnectOptions options, int size, Func<PgConnection, Task<TSlot>> prepare)
+    public static Task<PgConnectionSet<TSlot>> OpenAsync(PgConnectOptions options, int size, Func<PgConnection, Task<TSlot>> prepare) =>
+        OpenAsync(size, async () =>
+        {
+            var connection = await ConnectAsync(options).ConfigureAwait(false);
+            try
+            {
+                return await prepare(connection).ConfigureAwait(false);
+            }
+            catch
+            {
+                await connection.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+        });
+
+    /// <summary>Opens <paramref name="size"/> slots through <paramref name="openSlot"/>, which owns the slot it returns or disposes what it opened when it throws.</summary>
+    internal static async Task<PgConnectionSet<TSlot>> OpenAsync(int size, Func<Task<TSlot>> openSlot)
     {
-        var set = new PgConnectionSet<TSlot>(options, size, prepare);
+        var set = new PgConnectionSet<TSlot>(size, openSlot);
         try
         {
             for (int i = 0; i < size; i++)
-                set._slots.Writer.TryWrite(await set.OpenSlotAsync().ConfigureAwait(false));
+                set._slots.Writer.TryWrite(await openSlot().ConfigureAwait(false));
             return set;
         }
         catch
@@ -66,7 +80,7 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
         try
         {
             var result = await body(slot).ConfigureAwait(false);
-            _slots.Writer.TryWrite(slot);
+            await ReturnAsync(slot).ConfigureAwait(false);
             return result;
         }
         catch
@@ -83,18 +97,11 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
             await slot.DisposeAsync().ConfigureAwait(false);
     }
 
-    private async Task<TSlot> OpenSlotAsync()
+    // A completed set takes no slot back, so the slot's connection is closed here.
+    private async ValueTask ReturnAsync(TSlot slot)
     {
-        var connection = await ConnectAsync(_options).ConfigureAwait(false);
-        try
-        {
-            return await _prepare(connection).ConfigureAwait(false);
-        }
-        catch
-        {
-            await connection.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
+        if (_slots.Writer.TryWrite(slot) == false)
+            await slot.DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task ReplaceAsync(TSlot slot)
@@ -104,9 +111,7 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
         try { await slot.DisposeAsync().ConfigureAwait(false); } catch (Exception) { }
         try
         {
-            var replacement = await OpenSlotAsync().ConfigureAwait(false);
-            if (_slots.Writer.TryWrite(replacement) == false)
-                await replacement.DisposeAsync().ConfigureAwait(false);
+            await ReturnAsync(await _openSlot().ConfigureAwait(false)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

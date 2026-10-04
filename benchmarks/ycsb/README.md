@@ -288,5 +288,6 @@ curl -X DELETE 'http://localhost:8081/admin/databases?name=ycsb_ravendb_20260922
    container port accepts a connection before the server behind it can serve a request.
 5. Extend the dispatch error message so the unknown-target error names the new target.
 
-The MongoDB and DocumentDB targets share one transport. The PostgreSQL target uses
-`Apex.PgClient`; Npgsql is not used in the measured path.
+The MongoDB and DocumentDB targets share one transport. On the PostgreSQL target,
+`--transport raw` measures through `Apex.PgClient`, and `--transport client` and
+`--transport client-entity` measure through Npgsql.

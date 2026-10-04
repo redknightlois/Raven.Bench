@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Apex.PgClient;
 using Apex.SqlClient;
 using RavenBench.Core.Workload;
@@ -384,12 +385,24 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
         ISqlPreparedStatement Insert,
         ISqlPreparedStatement Update) : IAsyncDisposable
     {
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync() => DisposeAllAsync(Read, Insert, Update, Connection);
+    }
+
+    /// <summary>Disposes every item in order even when one throws, then rethrows the first failure.</summary>
+    internal static async ValueTask DisposeAllAsync(params IAsyncDisposable[] items)
+    {
+        ExceptionDispatchInfo? first = null;
+        foreach (var item in items)
         {
-            await Read.DisposeAsync().ConfigureAwait(false);
-            await Insert.DisposeAsync().ConfigureAwait(false);
-            await Update.DisposeAsync().ConfigureAwait(false);
-            await Connection.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await item.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                first ??= ExceptionDispatchInfo.Capture(ex);
+            }
         }
+        first?.Throw();
     }
 }
