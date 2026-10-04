@@ -435,7 +435,7 @@ public class BenchmarkRunner(RunOptions opts)
                 stepResult.NormalizedPMax = pMax;
             }
 
-            var artifact = HistogramExporter.BuildHistogramArtifact(snapshot, stepResult.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
+            var artifact = HistogramExporter.BuildHistogramArtifact(snapshot, steps.Count, stepResult.Concurrency, opts.LatencyHistogramsDir, opts.LatencyHistogramsFormat);
             if (artifact != null)
             {
                 histogramArtifacts.Add(artifact);
