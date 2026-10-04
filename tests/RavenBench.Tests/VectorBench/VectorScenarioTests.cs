@@ -8,6 +8,7 @@ using RavenBench.Core.Diagnostics;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Vector;
 using RavenBench.Core.Workload;
+using RavenBench.Dataset.Vectors;
 using RavenBench.VectorBench;
 using Xunit;
 
@@ -172,6 +173,28 @@ public class VectorScenarioTests
             .Should().Throw<VectorScenarioException>().WithMessage("*elastic*");
         FluentActions.Invoking(() => VectorRunner.ResolveSet("nope"))
             .Should().Throw<VectorScenarioException>().WithMessage("*nope*");
+    }
+
+    [Theory]
+    [InlineData("sphere-100k")]
+    [InlineData("sphere-1m")]
+    [InlineData("sphere-10m")]
+    [InlineData("sphere-full")]
+    [InlineData("clinical-words-100")]
+    [InlineData("clinical-words-600")]
+    public void Every_Accepted_Set_Is_Pinned_Or_Refused_With_How_To_Pin_It(string name)
+    {
+        IVectorDataset set;
+        try
+        {
+            set = VectorRunner.ResolveSet(name);
+        }
+        catch (VectorScenarioException e)
+        {
+            e.Message.Should().Contain("SHA-256");
+            return;
+        }
+        set.Files.Should().OnlyContain(f => f.Sha256 != null);
     }
 
     [Fact]

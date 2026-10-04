@@ -1,3 +1,4 @@
+using RavenBench.Core.Vector;
 using RavenBench.Core.Reporting;
 using RavenBench.Core;
 using RavenBench.Core.Workload;
@@ -123,6 +124,12 @@ public sealed class VectorResourceException(string message) : Exception(message)
 public static class VectorResourceCheck
 {
     public const int FootprintFactor = 2;
+
+    /// <summary>The benchmark host's memory and disk describe the database only when the endpoint is local.</summary>
+    public static bool AppliesTo(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            ? DockerDatabaseContainerLocator.IsLocalEndpoint(uri)
+            : throw new VectorScenarioException($"--url '{url}' is not an absolute URL.");
 
     public static void Require(long baseCount, int dimensions, string dataDirectory) =>
         Require(baseCount, dimensions, AvailableMemoryBytes(), new DriveInfo(Path.GetFullPath(dataDirectory)).AvailableFreeSpace);

@@ -173,4 +173,12 @@ public class VectorRunMathTests
         VectorRunMath.StripPrefix("Vectors/7", "vectors/").Should().Be("7");
         FluentActions.Invoking(() => VectorRunMath.StripPrefix("7", "vectors/")).Should().Throw<InvalidDataException>();
     }
+
+    [Fact]
+    public void ResourceCheck_Applies_Only_To_A_Local_Endpoint()
+    {
+        VectorResourceCheck.AppliesTo("http://127.0.0.1:8081").Should().BeTrue();
+        VectorResourceCheck.AppliesTo("postgresql://bench@localhost:5432/bench").Should().BeTrue();
+        VectorResourceCheck.AppliesTo("http://remote-db.example.invalid:8081").Should().BeFalse();
+    }
 }

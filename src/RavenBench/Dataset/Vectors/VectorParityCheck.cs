@@ -10,10 +10,12 @@ namespace RavenBench.Dataset.Vectors;
 
 /// <summary>
 /// One product under the vector parity check: how it loads the sample and how it runs an exact search.
-/// Returned ids are the sample's own base ids.
+/// Returned ids are the sample's own base ids. <see cref="PreexistingAsync"/> describes data the product held before
+/// the check, or returns null when it held none; the check loads and cleans up only a product that held none.
 /// </summary>
 public sealed record VectorParityProduct(
     string Name,
+    Func<CancellationToken, Task<string?>> PreexistingAsync,
     Func<IReadOnlyList<BaseVector>, CancellationToken, Task> LoadAsync,
     Func<float[], int, CancellationToken, Task<IReadOnlyList<string>>> ExactSearchAsync,
     Func<Task> CleanupAsync);
@@ -86,6 +88,9 @@ public sealed class VectorParityCheck
         string[][] truth, IReadOnlyDictionary<string, float[]> byId, CancellationToken ct)
     {
         var mismatches = new List<VectorParityMismatch>();
+        if (await product.PreexistingAsync(ct) is { } preexisting)
+            return new VectorParityResult(product.Name, 0, mismatches, $"{preexisting}; the check needs a target without it and leaves it in place.");
+
         string? failure = null;
         try
         {
@@ -151,12 +156,14 @@ public sealed class VectorParityCheck
     /// </summary>
     public static VectorParityProduct PgVector(PgVectorTransport transport) => new(
         PgVectorTransport.Target,
-        async (sample, ct) =>
+        async _ =>
         {
             await transport.EnsureDatabaseExistsAsync(transport.DatabaseName);
             var existing = await transport.GetDocumentCountAsync("");
-            if (existing != 0)
-                throw new InvalidOperationException($"Table '{PgVectorTransport.TableName}' already holds {existing} rows; the check needs a database without a vector load.");
+            return existing == 0 ? null : $"Table '{PgVectorTransport.TableName}' already holds {existing} rows";
+        },
+        async (sample, ct) =>
+        {
             var result = await transport.ExecuteAsync(new BulkInsertOperation<VectorRow>
             {
                 Documents = sample.Select(v => new DocumentToWrite<VectorRow> { Id = v.Id, Document = new VectorRow(v.Vector, null) }).ToList()
@@ -178,6 +185,11 @@ public sealed class VectorParityCheck
         RawHttpTransport? transport = null;
         return new VectorParityProduct(
             "ravendb",
+            async ct =>
+            {
+                using var store = HttpHelper.Create(url, database, HttpVersion.Version11);
+                return await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(database), ct) == null ? null : $"Database '{database}' already exists";
+            },
             async (sample, ct) =>
             {
                 using var store = HttpHelper.Create(url, database, HttpVersion.Version11);
