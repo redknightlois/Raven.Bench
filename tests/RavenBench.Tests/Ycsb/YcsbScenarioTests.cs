@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using FluentAssertions;
 using RavenBench.Core.Diagnostics;
 using RavenBench.Core.Ycsb;
@@ -196,5 +197,33 @@ public class YcsbScenarioTests
         single.Should().Throw<YcsbScenarioException>().WithMessage("*'Distribution'*");
         list.Should().Throw<YcsbScenarioException>().WithMessage("*'Distributions'*");
         RavenBench.Core.Workload.KeyDistributions.TryParse(distribution, out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(2000.0, 2000.0)]
+    [InlineData(2000.0, 2000.0001)]
+    public void Validate_Rejects_Rates_That_Share_A_Result_Name(double first, double second)
+    {
+        var scenario = Valid with { Rates = new[] { first, second } };
+
+        scenario.Invoking(s => s.Validate()).Should().Throw<YcsbScenarioException>().WithMessage("*'Rates'*");
+    }
+
+    [Fact]
+    public void Validate_Rejects_Distributions_That_Share_A_Result_Name()
+    {
+        var scenario = Valid with { Distributions = new[] { "uniform", "Uniform" } };
+
+        scenario.Invoking(s => s.Validate()).Should().Throw<YcsbScenarioException>().WithMessage("*'Distributions'*");
+    }
+
+    [Fact]
+    public void Every_Planned_Run_Of_A_Valid_Scenario_Has_Its_Own_Result_Name()
+    {
+        var scenario = Valid with { Rates = new[] { 1000.0, 2000.0, 2000.5 }, Distributions = new[] { "uniform", "zipfian", "latest" }, Repetitions = 2 };
+
+        var names = YcsbRunPlan.Build(scenario).Select(r => r.ResultName).ToList();
+
+        names.Should().OnlyHaveUniqueItems();
     }
 }

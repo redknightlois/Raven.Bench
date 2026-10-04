@@ -83,6 +83,23 @@ public class VectorScenarioTests
         resolved.Should().Be(file);
     }
 
+    [Theory]
+    [InlineData("--seed", "{0}")]
+    [InlineData("--seed={0}", null)]
+    [InlineData("--seed:{0}", null)]
+    public void Every_Option_Spelling_Counts_As_Explicit(string option, string? value)
+    {
+        var file = VectorScenario.Load(ShippedScenario);
+        var seed = file.Seed + 1;
+        var seedText = seed.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string[] args = value is null ? ["vector", option.Replace("{0}", seedText)] : ["vector", option, seedText];
+
+        var (resolved, overrides) = VectorScenarioResolver.Resolve(file, new VectorSettings { Seed = seed }, args);
+
+        resolved.Seed.Should().Be(seed);
+        overrides.Should().Contain("--seed", seedText);
+    }
+
     [Fact]
     public void The_Cross_Check_Figure_Is_In_The_Pinned_Evidence()
     {

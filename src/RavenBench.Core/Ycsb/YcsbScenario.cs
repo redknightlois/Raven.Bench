@@ -121,6 +121,9 @@ public sealed record YcsbScenario
                 RequireDistribution(nameof(Distributions), distribution);
         }
 
+        RequireDistinctNames(nameof(Rates), ResolvedRates, YcsbRunIdentity.RateName);
+        RequireDistinctNames(nameof(Distributions), ResolvedDistributions, YcsbRunIdentity.DistributionName);
+
         if (Repetitions is < 1)
             throw new YcsbScenarioException($"Scenario key 'Repetitions' is '{Repetitions}'; a row repeats at least once.");
     }
@@ -129,6 +132,14 @@ public sealed record YcsbScenario
     {
         if (KeyDistributions.TryParse(distribution, out _) == false)
             throw new YcsbScenarioException($"Scenario key '{key}' holds '{distribution}'; valid distributions are {KeyDistributions.ValidNames}.");
+    }
+
+    // Two entries that a result name cannot tell apart would make two runs write one result file.
+    private static void RequireDistinctNames<T>(string key, IEnumerable<T> values, Func<T, string> resultName)
+    {
+        var duplicate = values.GroupBy(resultName).FirstOrDefault(g => g.Count() > 1);
+        if (duplicate != null)
+            throw new YcsbScenarioException($"Scenario key '{key}' holds {string.Join(" and ", duplicate.Select(v => $"'{v}'"))}, which share the result name '{duplicate.Key}'; name each entry once.");
     }
 
     private static readonly JsonSerializerOptions ReadOptions = new()
