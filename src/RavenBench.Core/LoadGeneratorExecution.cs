@@ -12,7 +12,7 @@ namespace RavenBench.Core;
 public static class LoadGeneratorExecution
 {
     /// <summary>The operations the latency figures hold: every completed operation, failed and timed-out ones included. Cancelled operations add no sample.</summary>
-    public const string LatencySamples = "succeeded, failed and timed-out operations; cancelled excluded";
+    public const string LatencySamples = "succeeded, failed and timed-out operations, one sample each with no synthetic coordinated-omission backfill; cancelled excluded; a rate step also holds one sample per arrival due but never issued, from its due time to the stop";
 
     /// <summary>
     /// The one rate definition for the step throughput and the rolling rate: documents carried by succeeded operations, per second.
@@ -35,14 +35,12 @@ public static class LoadGeneratorExecution
     /// (a <see cref="Stopwatch.GetTimestamp"/> value). Callers pass the moment the request was *due*:
     /// for closed-loop that is the instant the worker dequeues it; for rate-based load it is the token's
     /// scheduled time, so queue wait under saturation is included rather than coordinately omitted.
-    /// When <paramref name="expectedIntervalMicros"/> &gt; 0, HDRHistogram backfills omitted samples.
     /// </summary>
     public static async Task<WorkItemResult> ExecuteOperationAsync(
         IYcsbTransport transport,
         OperationBase operation,
         LatencyRecorder latencyRecorder,
         long startTimestamp,
-        long expectedIntervalMicros,
         CancellationToken cancellationToken)
     {
         bool isError = false;
@@ -89,10 +87,7 @@ public static class LoadGeneratorExecution
         var latencyMicros = Math.Max(1, (long)Math.Round((end - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency));
         try
         {
-            if (expectedIntervalMicros > 0)
-                latencyRecorder.RecordWithExpectedInterval(latencyMicros, expectedIntervalMicros);
-            else
-                latencyRecorder.Record(latencyMicros);
+            latencyRecorder.Record(latencyMicros);
         }
         catch (InvalidOperationException)
         {

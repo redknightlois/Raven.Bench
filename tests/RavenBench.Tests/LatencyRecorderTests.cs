@@ -156,32 +156,6 @@ public class LatencyRecorderTests
     }
 
     [Fact]
-    public void Coordinated_Omission_Correction_Backfills_Samples()
-    {
-        // INVARIANT: When a response exceeds expected interval, synthetic samples should be added
-        // INVARIANT: Corrected count should be greater than actual observed count
-        var recorder = new LatencyRecorder(recordLatencies: true);
-
-        // Simulate normal responses at 100µs
-        for (int i = 0; i < 10; i++)
-        {
-            recorder.RecordWithExpectedInterval(100, 100);
-        }
-
-        // Inject a stall: 1500µs response when expecting 100µs interval
-        // HDRHistogram should backfill ~14 synthetic samples (1500/100 - 1)
-        recorder.RecordWithExpectedInterval(1500, 100);
-
-        var snapshot = recorder.Snapshot();
-
-        // Total count should include synthetic samples from coordinated omission correction
-        // Original: 11 actual samples
-        // Corrected: ~11 + 14 = ~25 samples (with some variance due to HDR bucketing)
-        snapshot.TotalCount.Should().BeGreaterThan(11);
-        snapshot.MaxMicros.Should().Be(1500);
-    }
-
-    [Fact]
     public void A_Minutes_Late_Value_Records_And_Beyond_An_Hour_Throws()
     {
         var recorder = new LatencyRecorder(recordLatencies: true);

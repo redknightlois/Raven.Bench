@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
-using HdrHistogram;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Transport;
 using RavenBench.Core.Workload;
@@ -20,7 +19,6 @@ namespace RavenBench.Core
         private readonly int _concurrency;
         private readonly int _workers;
         private readonly Random _rng;
-        private long _baselineLatencyMicros;
 
         public int Concurrency => _concurrency;
         public double? TargetThroughput => null; // Closed-loop doesn't target specific throughput
@@ -53,20 +51,11 @@ namespace RavenBench.Core
             return (latencyRecorder, metrics);
         }
 
-        public void SetBaselineLatency(long baselineLatencyMicros)
-        {
-            _baselineLatencyMicros = baselineLatencyMicros;
-        }
-
         private async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteAsync(
             TimeSpan duration, bool isWarmup, CancellationToken cancellationToken)
         {
             var latencyRecorder = new LatencyRecorder(isWarmup == false);
             var counters = new LoadGeneratorCounters();
-            // The warmup recorder is written by every worker thread, so its histogram must be thread-safe.
-            Recorder? warmupRecorder = isWarmup
-                ? new Recorder(1, LatencyRecorder.MaxTrackableMicros, 3, (instanceId, low, high, digits) => new LongConcurrentHistogram(low, high, digits))
-                : null;
 
             var stopwatch = Stopwatch.StartNew();
             var endTime = stopwatch.Elapsed + duration;
@@ -98,12 +87,9 @@ namespace RavenBench.Core
                             operation,
                             latencyRecorder,
                             Stopwatch.GetTimestamp(),
-                            _baselineLatencyMicros,
                             cancellationToken);
 
                         counters.Record(result);
-                        if (warmupRecorder != null && result.IsError == false && result.Cancelled == false)
-                            warmupRecorder.RecordValue(Math.Min(result.LatencyMicros, LatencyRecorder.MaxTrackableMicros));
                     }
                 }, cancellationToken);
             }
@@ -113,28 +99,7 @@ namespace RavenBench.Core
             var actualDuration = stopwatch.Elapsed;
             var metrics = LoadGeneratorExecution.BuildMetrics(counters, actualDuration, scheduledCount, isWarmup);
 
-            if (isWarmup)
-                UpdateBaselineFromWarmup(warmupRecorder);
-
             return (latencyRecorder, metrics);
-        }
-
-        private void UpdateBaselineFromWarmup(Recorder? warmupRecorder)
-        {
-            // A calibrated baseline (unloaded service time) is the correct coordinated-omission interval;
-            // never override it with the warmup floor, which is already inflated by queueing at this concurrency.
-            if (_baselineLatencyMicros > 0 || warmupRecorder == null)
-                return;
-
-            var histogram = warmupRecorder.GetIntervalHistogram();
-            if (histogram == null || histogram.TotalCount == 0)
-                return;
-
-            var floor = histogram.GetValueAtPercentile(1.0);
-            if (floor <= 0)
-                return;
-
-            Interlocked.Exchange(ref _baselineLatencyMicros, (long)floor);
         }
     }
 }

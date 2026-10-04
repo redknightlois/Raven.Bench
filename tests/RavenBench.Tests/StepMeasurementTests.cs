@@ -168,7 +168,6 @@ public class StepMeasurementTests
 
         public int Concurrency => 2;
         public double? TargetThroughput => null;
-        public void SetBaselineLatency(long baselineLatencyMicros) { }
         public Task ExecuteWarmupAsync(TimeSpan duration, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public async Task<(LatencyRecorder latencyRecorder, LoadGeneratorMetrics metrics)> ExecuteMeasurementAsync(

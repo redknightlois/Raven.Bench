@@ -115,7 +115,7 @@ public sealed class RateLoadGeneratorTests
     [Theory]
     [InlineData(1)]
     [InlineData(4)]
-    public async Task SaturatedRunKeepsEveryScheduledArrivalAndIsMarkedClientBound(int pipelineDepth)
+    public async Task SaturatedRunKeepsEveryScheduledArrivalAndIsNotClientBound(int pipelineDepth)
     {
         var transport = new TestTransport(baseLatencyMs: 50);
         var generator = new RateLoadGenerator(transport, new ConstantWorkload(), targetRps: 2000, maxConcurrency: 2, new Random(42), pipelineDepth);
@@ -126,7 +126,8 @@ public sealed class RateLoadGeneratorTests
         metrics.ScheduledOperations.Should().BeGreaterOrEqualTo((long)(2000 * 0.6));
         metrics.ScheduledOperations.Should().BeGreaterThan(metrics.OperationsCompleted * 5);
         var p50Ms = latency.Snapshot().GetPercentile(50) / 1000.0;
-        RavenBench.Core.Metrics.SendLateness.MarkingFor(metrics.SendLateness, p50Ms).Should().StartWith("client-bound");
+        // The producer released every arrival on time; the wait for a busy worker is the server's, not the load host's.
+        RavenBench.Core.Metrics.SendLateness.MarkingFor(metrics.SendLateness, p50Ms).Should().BeNull();
     }
 
     [Fact]

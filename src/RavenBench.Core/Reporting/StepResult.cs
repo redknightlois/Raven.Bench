@@ -38,12 +38,10 @@ public sealed class StepResult
     public double NormalizedP9999 { get; set; }
     public double NormalizedPMax { get; set; }
 
-    // Number of actual operations observed (before coordinated omission correction)
-    // This includes all completed operations (both successes and errors) that were recorded in the histogram
+    // Number of completed operations (successes and errors) recorded in the histogram
     public long SampleCount { get; init; }
 
-    // Total histogram count including synthetic samples from coordinated omission correction
-    // This will be >= SampleCount when corrections are applied
+    // Total histogram count; equal to SampleCount because no synthetic sample is recorded
     public long CorrectedCount { get; set; }
 
     // Number of operations scheduled (may exceed completed if queueing occurs)
