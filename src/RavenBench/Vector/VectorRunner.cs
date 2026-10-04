@@ -188,115 +188,105 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             await target.LoadAsync(Labelled(set.ReadBaseAsync(files, selection, ct), split), ct);
             return split.LoadedCount;
         }, ct);
-        var peakMemory = loadStep.Peak;
-        var loadInfo = new VectorLoadInfo(loadStep.Step.MeasuredDuration!.Value.TotalSeconds, peakMemory.MemoryMB, peakMemory.Source, peakMemory.Unavailable, await target.StoredSizeAsync());
-
-        var productName = target.Transport.ProductName;
-        var serverVersion = await target.Transport.GetServerVersionAsync();
-        var productSettings = await target.ReportedSettingsAsync(ct);
-        var container = IsContainerized(targetName) && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Port > 0 && DockerDatabaseContainerLocator.IsLocalEndpoint(uri)
-            ? new DockerDatabaseContainerLocator().Locate(uri.Port)
-            : null;
-        var fingerprint = new MachineFingerprintCollector(new NativeMachineFingerprintSource()).Collect(RepositoryRootLocator.Find(), container);
-
-        // recall
-        var curve = new List<VectorEffortPoint>();
-        var recallSteps = new List<StepResult>();
-        foreach (var (label, value) in efforts.All)
+        return await RunCleanup.AfterAsync<List<VectorRunResult>>(settings.KeepData ? null : target.CleanupAsync, "Vector", async () =>
         {
-            var (step, ids, latencies) = await SequentialAsync(target, queries.Queries, k, target.Effort(value), filter: null, nodeExporter, ct);
-            var recall = ids.Select((r, q) => VectorRunMath.Recall(r, quietTruth[q], k)).Average();
-            curve.Add(new VectorEffortPoint(label, efforts.Knob, value, recall, step.Throughput, recallSteps.Count, ids.Sum(r => (long)r.Count), ids.Count(r => r.Count < k))
-                { QueryP99Ms = VectorRunMath.P99(latencies) });
-            recallSteps.Add(step);
-            Console.WriteLine($"[Vector] recall@{k} at {efforts.Knob}={value} ({label}): {recall:P2}, {step.Throughput:F0} q/s");
-        }
-        var selected = VectorRunMath.SelectLowest(curve, scenario.RecallThreshold);
-        var recallInfo = new VectorRecallInfo(k, scenario.RecallThreshold, curve, selected, selected is null
-            ? $"no setting reached recall@{k} {scenario.RecallThreshold}"
-            : $"{efforts.Knob}={selected.Value} is the lowest setting that reached recall@{k} {scenario.RecallThreshold}");
-        var inForce = selected ?? curve.MaxBy(p => p.Value)!;
-        var effortStatement = selected is null
-            ? $"no setting reached recall@{k} {scenario.RecallThreshold}; readers, filtered and under-insert run at the high setting, {efforts.Knob}={inForce.Value}"
-            : $"readers, filtered and under-insert run at {efforts.Knob}={inForce.Value}, the lowest setting that reached recall@{k} {scenario.RecallThreshold}";
-        var effort = target.Effort(inForce.Value);
+            var peakMemory = loadStep.Peak;
+            var loadInfo = new VectorLoadInfo(loadStep.Step.MeasuredDuration!.Value.TotalSeconds, peakMemory.MemoryMB, peakMemory.Source, peakMemory.Unavailable, await target.StoredSizeAsync());
 
-        var common = (Target: targetName, Product: productName, Version: serverVersion, Container: container, Settings: productSettings, Dataset: datasetInfo, Fingerprint: fingerprint, Durability: target.Durability);
-        VectorRunResult Result(string run, List<StepResult> steps, List<HistogramArtifact>? histograms, Func<VectorRunInfo, VectorRunInfo> fill)
-        {
-            var opts = new RunOptions { Url = target.Transport.RecordedEndpoint, Database = database, Seed = scenario.Seed, Warmup = warmup, Duration = duration };
-            var info = fill(new VectorRunInfo
-            {
-                Run = run,
-                ResolvedScenario = scenario,
-                Overrides = overrides,
-                Target = common.Target,
-                ProductName = common.Product,
-                ServerVersion = common.Version,
-                ImageReference = common.Container?.ImageReference,
-                ImageDigest = common.Container?.ImageDigest,
-                Durability = common.Durability,
-                ProductSettings = common.Settings,
-                VectorStorage = target.VectorStorage,
-                RowLabel = $"{common.Target} {target.VectorStorage}",
-                Dataset = common.Dataset,
-                ServerColumns = ServerColumnAvailability.FromSteps(common.Product, steps),
-                EffortInForce = run is "readers" or "filtered" or "under-insert" ? inForce : null,
-                EffortStatement = run is "readers" or "filtered" or "under-insert" ? effortStatement : null
-            });
-            return new VectorRunResult(run, new BenchmarkSummary
-            {
-                Options = opts,
-                Steps = steps,
-                Verdict = steps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)) ? "client-bound" : "measured",
-                ClientCompression = "n/a",
-                EffectiveHttpVersion = "n/a",
-                HistogramArtifacts = histograms is { Count: > 0 } ? histograms : null,
-                MachineFingerprint = common.Fingerprint,
-                Vector = info
-            });
-        }
+            var productName = target.Transport.ProductName;
+            var serverVersion = await target.Transport.GetServerVersionAsync();
+            var productSettings = await target.ReportedSettingsAsync(ct);
+            var container = IsContainerized(targetName) && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Port > 0 && DockerDatabaseContainerLocator.IsLocalEndpoint(uri)
+                ? new DockerDatabaseContainerLocator().Locate(uri.Port)
+                : null;
+            var fingerprint = new MachineFingerprintCollector(new NativeMachineFingerprintSource()).Collect(RepositoryRootLocator.Find(), container);
 
-        if (constrained is not null)
-        {
-            try
+            // recall
+            var curve = new List<VectorEffortPoint>();
+            var recallSteps = new List<StepResult>();
+            foreach (var (label, value) in efforts.All)
             {
+                var (step, ids, latencies) = await SequentialAsync(target, queries.Queries, k, target.Effort(value), filter: null, nodeExporter, ct);
+                var recall = ids.Select((r, q) => VectorRunMath.Recall(r, quietTruth[q], k)).Average();
+                curve.Add(new VectorEffortPoint(label, efforts.Knob, value, recall, step.Throughput, recallSteps.Count, ids.Sum(r => (long)r.Count), ids.Count(r => r.Count < k))
+                    { QueryP99Ms = VectorRunMath.P99(latencies) });
+                recallSteps.Add(step);
+                Console.WriteLine($"[Vector] recall@{k} at {efforts.Knob}={value} ({label}): {recall:P2}, {step.Throughput:F0} q/s");
+            }
+            var selected = VectorRunMath.SelectLowest(curve, scenario.RecallThreshold);
+            var recallInfo = new VectorRecallInfo(k, scenario.RecallThreshold, curve, selected, selected is null
+                ? $"no setting reached recall@{k} {scenario.RecallThreshold}"
+                : $"{efforts.Knob}={selected.Value} is the lowest setting that reached recall@{k} {scenario.RecallThreshold}");
+            var inForce = selected ?? curve.MaxBy(p => p.Value)!;
+            var effortStatement = selected is null
+                ? $"no setting reached recall@{k} {scenario.RecallThreshold}; readers, filtered and under-insert run at the high setting, {efforts.Knob}={inForce.Value}"
+                : $"readers, filtered and under-insert run at {efforts.Knob}={inForce.Value}, the lowest setting that reached recall@{k} {scenario.RecallThreshold}";
+            var effort = target.Effort(inForce.Value);
+
+            var common = (Target: targetName, Product: productName, Version: serverVersion, Container: container, Settings: productSettings, Dataset: datasetInfo, Fingerprint: fingerprint, Durability: target.Durability);
+            VectorRunResult Result(string run, List<StepResult> steps, List<HistogramArtifact>? histograms, Func<VectorRunInfo, VectorRunInfo> fill)
+            {
+                var opts = new RunOptions { Url = target.Transport.RecordedEndpoint, Database = database, Seed = scenario.Seed, Warmup = warmup, Duration = duration };
+                var info = fill(new VectorRunInfo
+                {
+                    Run = run,
+                    ResolvedScenario = scenario,
+                    Overrides = overrides,
+                    Target = common.Target,
+                    ProductName = common.Product,
+                    ServerVersion = common.Version,
+                    ImageReference = common.Container?.ImageReference,
+                    ImageDigest = common.Container?.ImageDigest,
+                    Durability = common.Durability,
+                    ProductSettings = common.Settings,
+                    VectorStorage = target.VectorStorage,
+                    RowLabel = $"{common.Target} {target.VectorStorage}",
+                    Dataset = common.Dataset,
+                    ServerColumns = ServerColumnAvailability.FromSteps(common.Product, steps),
+                    EffortInForce = run is "readers" or "filtered" or "under-insert" ? inForce : null,
+                    EffortStatement = run is "readers" or "filtered" or "under-insert" ? effortStatement : null
+                });
+                return new VectorRunResult(run, new BenchmarkSummary
+                {
+                    Options = opts,
+                    Steps = steps,
+                    Verdict = steps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)) ? "client-bound" : "measured",
+                    ClientCompression = "n/a",
+                    EffectiveHttpVersion = "n/a",
+                    HistogramArtifacts = histograms is { Count: > 0 } ? histograms : null,
+                    MachineFingerprint = common.Fingerprint,
+                    Vector = info
+                });
+            }
+
+            if (constrained is not null)
                 return [Result("constrained", [loadStep.Step, .. recallSteps], null, i => i with { Load = loadInfo, Recall = recallInfo, Constrained = constrained })];
-            }
-            finally
-            {
-                if (settings.KeepData == false)
-                    await target.CleanupAsync();
-            }
-        }
 
-        // readers: the closed loop finds the sustained rate, then the fixed-rate runner runs at it.
-        var readersWorkload = new VectorQueryWorkload(queries.Queries, target, k, effort);
-        var closed = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
-        var sustained = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
-        var fixedRate = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Rate, sustained, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
-        var readerSteps = closed.Steps.Concat(fixedRate.Steps).ToList();
-        var readersInfo = new VectorReadersInfo(scenario.Readers, closed.Steps[^1].Throughput, sustained, readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)));
+            // readers: the closed loop finds the sustained rate, then the fixed-rate runner runs at it.
+            var readersWorkload = new VectorQueryWorkload(queries.Queries, target, k, effort);
+            var closed = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
+            var sustained = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
+            var fixedRate = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Rate, sustained, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
+            var readerSteps = closed.Steps.Concat(fixedRate.Steps).ToList();
+            var readersInfo = new VectorReadersInfo(scenario.Readers, closed.Steps[^1].Throughput, sustained, readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)));
 
-        // filtered
-        var filter = new VectorFilter(target.FilterField, VectorSplit.LabelIn);
-        var (filteredStep, filteredIds, _) = await SequentialAsync(target, queries.Queries, k, effort, filter, nodeExporter, ct);
-        var rowCounts = filteredIds.Select(r => r.Count).ToList();
-        var filteredInfo = new VectorFilteredInfo(scenario.FilterSelectivity, split.LabelledCount,
-            "drawn with the scenario seed over the loaded base; no set here ships labels",
-            rowCounts, rowCounts.Count(c => c < k),
-            filteredIds.Select((r, q) => VectorRunMath.Recall(r, filteredTruth[q], k)).Average(),
-            $"truth is the exact top {k} within the label; a query that returned fewer than {k} rows keeps its count and scores its missing rows as misses"
-            + (productSettings.TryGetValue("hnsw.iterative_scan", out var iterative) ? $"; hnsw.iterative_scan={iterative}, hnsw.max_scan_tuples={productSettings["hnsw.max_scan_tuples"]} as the server reports them" : ""));
+            // filtered
+            var filter = new VectorFilter(target.FilterField, VectorSplit.LabelIn);
+            var (filteredStep, filteredIds, _) = await SequentialAsync(target, queries.Queries, k, effort, filter, nodeExporter, ct);
+            var rowCounts = filteredIds.Select(r => r.Count).ToList();
+            var filteredInfo = new VectorFilteredInfo(scenario.FilterSelectivity, split.LabelledCount,
+                "drawn with the scenario seed over the loaded base; no set here ships labels",
+                rowCounts, rowCounts.Count(c => c < k),
+                filteredIds.Select((r, q) => VectorRunMath.Recall(r, filteredTruth[q], k)).Average(),
+                $"truth is the exact top {k} within the label; a query that returned fewer than {k} rows keeps its count and scores its missing rows as misses"
+                + (productSettings.TryGetValue("hnsw.iterative_scan", out var iterative) ? $"; hnsw.iterative_scan={iterative}, hnsw.max_scan_tuples={productSettings["hnsw.max_scan_tuples"]} as the server reports them" : ""));
 
-        // under-insert
-        var (underInsertRamp, underInsertInfo) = await UnderInsertAsync(target, queries.Queries, quietTopK, slice, set.Metric, effort, inForce.Recall, database, warmup, duration, nodeExporter, ct);
+            // under-insert
+            var (underInsertRamp, underInsertInfo) = await UnderInsertAsync(target, queries.Queries, quietTopK, slice, set.Metric, effort, inForce.Recall, database, warmup, duration, nodeExporter, ct);
 
-        // cross-check: last, because it replaces the index the other runs measured.
-        var crossCheck = await CrossCheckAsync(target, set, queries, slice, split.LoadedCount, productSettings, datasetInfo.TruthSource, nodeExporter, ct);
+            // cross-check: last, because it replaces the index the other runs measured.
+            var crossCheck = await CrossCheckAsync(target, set, queries, slice, split.LoadedCount, productSettings, datasetInfo.TruthSource, nodeExporter, ct);
 
-        try
-        {
             return
             [
                 Result("load", [loadStep.Step], null, i => i with { Load = loadInfo }),
@@ -305,12 +295,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
                 Result("filtered", [filteredStep], null, i => i with { Filtered = filteredInfo }),
                 Result("under-insert", underInsertRamp.Steps, underInsertRamp.HistogramArtifacts, i => i with { UnderInsert = underInsertInfo })
             ];
-        }
-        finally
-        {
-            if (settings.KeepData == false)
-                await target.CleanupAsync();
-        }
+        });
     }
 
     /// <summary>

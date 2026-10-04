@@ -255,6 +255,25 @@ public class AggregateRunTests
         act.Should().Throw<InvalidOperationException>().WithMessage($"*needs {supply + 5}*has {supply}*5 short*");
     }
 
+    private sealed class RunFailed : Exception;
+
+    private sealed class CleanupFailed : Exception;
+
+    [Fact]
+    public async Task A_Cleanup_Failure_After_A_Run_Failure_Never_Replaces_The_Run_Failure()
+    {
+        int cleanups = 0;
+
+        var act = () => RunCleanup.AfterAsync<int>(() =>
+        {
+            cleanups++;
+            throw new CleanupFailed();
+        }, "Aggregate", () => throw new RunFailed());
+
+        await act.Should().ThrowAsync<RunFailed>();
+        cleanups.Should().Be(1);
+    }
+
     [Fact]
     public async Task A_Ramp_Fault_Awaits_The_Writers_And_Propagates_Over_A_Writer_Fault()
     {
