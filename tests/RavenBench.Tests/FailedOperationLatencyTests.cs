@@ -78,6 +78,7 @@ public sealed class FailedOperationLatencyTests
     {
         public string ProductName => "Stub";
         public bool ReportsWireBytes => true;
+        public string RecordedEndpoint => "stub";
         public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) => Task.FromResult(outcome());
         public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
         public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;

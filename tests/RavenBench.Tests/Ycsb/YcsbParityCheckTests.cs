@@ -157,6 +157,7 @@ public class YcsbParityCheckTests
 
         public string ProductName => "InMemory";
         public bool ReportsWireBytes => false;
+        public string RecordedEndpoint => "stub";
 
         public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
         {
@@ -206,6 +207,7 @@ public class YcsbParityCheckTests
     {
         public string ProductName => "Unreachable";
         public bool ReportsWireBytes => false;
+        public string RecordedEndpoint => "stub";
 
         public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) =>
             throw new InvalidOperationException("the endpoint refused the connection");

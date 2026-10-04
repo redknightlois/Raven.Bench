@@ -50,6 +50,7 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
 
     // The client library abstracts the socket, so byte counts are estimated, not measured on the wire.
     public bool ReportsWireBytes => false;
+    public string RecordedEndpoint { get; }
 
 
     /// <param name="mapEntities">
@@ -60,6 +61,7 @@ public sealed class RavenClientTransport : ITransport, IReportsStorageSize
     public RavenClientTransport(string url, string database, CompressionMode compression, Version httpVersion, bool mapEntities = false)
     {
         _db = database;
+        RecordedEndpoint = ConnectionStringRedaction.Redact(url);
         _compression = compression;
         _httpVersion = httpVersion;
         _mapEntities = mapEntities;

@@ -93,6 +93,7 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
             throw new ArgumentOutOfRangeException(nameof(dimensions), dimensions, "The vector dimensions must be positive.");
         Kind = ElasticsearchIndexKind.Named(kind);
         Index = index;
+        RecordedEndpoint = ConnectionStringRedaction.Redact(url);
         _metric = metric;
         _dimensions = dimensions;
         Build = Kind.IsHnsw ? build : null;
@@ -106,6 +107,7 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
     public string Index { get; }
     public string ProductName => Product;
     public bool ReportsWireBytes => false;
+    public string RecordedEndpoint { get; }
     public string StorageSizeMetricName => "_stats primaries.store.size_in_bytes";
 
     public static string Similarity(VectorMetric metric) => metric switch

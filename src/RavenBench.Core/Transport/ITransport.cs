@@ -109,6 +109,9 @@ public interface IYcsbTransport : IDisposable
     /// </summary>
     bool ReportsWireBytes { get; }
 
+    /// <summary>The endpoint the transport addresses, with any password replaced, safe to write into a result file.</summary>
+    string RecordedEndpoint { get; }
+
     Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct);
 
     /// <summary>

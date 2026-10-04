@@ -102,6 +102,7 @@ public sealed class LoadGeneratorCoordinatedOmissionTests
         public string ProductName => "Stub";
 
         public bool ReportsWireBytes => true;
+        public string RecordedEndpoint => "stub";
 
         public async Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
         {
