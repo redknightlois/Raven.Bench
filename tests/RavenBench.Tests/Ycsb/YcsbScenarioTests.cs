@@ -178,4 +178,23 @@ public class YcsbScenarioTests
         File.WriteAllText(path, content);
         return path;
     }
+
+    private static YcsbScenario Valid => new()
+    {
+        Seed = 7, Target = "ravendb", DocumentCount = 1000, DocumentSize = "2KB", Concurrency = "8..32x2",
+        Distribution = "zipfian", Warmup = "5s", Duration = "15s"
+    };
+
+    [Theory]
+    [InlineData("7")]
+    [InlineData("bogus")]
+    public void Validate_Rejects_A_Distribution_The_Runner_Cannot_Run_In_Either_Key(string distribution)
+    {
+        var single = () => (Valid with { Distribution = distribution }).Validate();
+        var list = () => (Valid with { Distributions = new[] { "uniform", distribution } }).Validate();
+
+        single.Should().Throw<YcsbScenarioException>().WithMessage("*'Distribution'*");
+        list.Should().Throw<YcsbScenarioException>().WithMessage("*'Distributions'*");
+        RavenBench.Core.Workload.KeyDistributions.TryParse(distribution, out _).Should().BeFalse();
+    }
 }

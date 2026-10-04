@@ -203,16 +203,10 @@ internal static class CliParsing
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
-    internal static KeyDistributionKind ParseDistribution(string distribution)
-    {
-        return distribution.Trim().ToLowerInvariant() switch
-        {
-            "uniform" => KeyDistributionKind.Uniform,
-            "zipfian" => KeyDistributionKind.Zipfian,
-            "latest" => KeyDistributionKind.Latest,
-            _ => throw new ArgumentException($"Invalid distribution: {distribution}. Valid options: uniform, zipfian, latest")
-        };
-    }
+    internal static KeyDistributionKind ParseDistribution(string distribution) =>
+        KeyDistributions.TryParse(distribution, out var kind)
+            ? kind
+            : throw new ArgumentException($"Invalid distribution: {distribution}. Valid options: {KeyDistributions.ValidNames}");
 
     internal static CompressionMode ParseCompression(string compression)
     {

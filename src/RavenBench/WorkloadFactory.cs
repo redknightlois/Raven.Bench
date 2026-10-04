@@ -10,16 +10,7 @@ internal static class WorkloadFactory
         if (opts.Profile == WorkloadProfile.Unspecified)
             throw new InvalidOperationException("Workload profile is required. Specify --profile query-by-id|stackoverflow-random-reads|stackoverflow-text-search|query-users-by-name|vector-search|vector-search-exact|patch|attachments.");
 
-        IKeyDistribution CreateDistribution()
-        {
-            return opts.Distribution switch
-            {
-                KeyDistributionKind.Uniform => new UniformDistribution(),
-                KeyDistributionKind.Zipfian => new ZipfianDistribution(),
-                KeyDistributionKind.Latest => new LatestDistribution(),
-                _ => throw new ArgumentOutOfRangeException(nameof(opts.Distribution), opts.Distribution, null)
-            };
-        }
+        IKeyDistribution CreateDistribution() => KeyDistributions.Create(opts.Distribution);
 
         return opts.Profile switch
         {

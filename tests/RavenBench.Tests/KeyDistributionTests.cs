@@ -126,6 +126,17 @@ public class KeyDistributionTests
         }
     }
 
+    [Fact]
+    public void Every_Distribution_Name_Parses_And_Builds_Through_One_Rule()
+    {
+        foreach (var kind in Enum.GetValues<RavenBench.Core.KeyDistributionKind>())
+        {
+            KeyDistributions.TryParse(kind.ToString().ToUpperInvariant(), out var parsed).Should().BeTrue();
+            parsed.Should().Be(kind);
+            KeyDistributions.Create(kind).NextKey(new Random(1), 10).Should().BeInRange(1, 10);
+        }
+    }
+
     private static int[] Draw(IKeyDistribution distribution, int seed)
     {
         var rng = new Random(seed);

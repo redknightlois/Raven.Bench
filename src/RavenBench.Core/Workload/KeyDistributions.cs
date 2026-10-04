@@ -5,6 +5,32 @@ public interface IKeyDistribution
     int NextKey(Random rng, int maxKeyInclusive);
 }
 
+/// <summary>The one rule that names a key distribution and builds it; the CLI, the ycsb scenario and every runner use it.</summary>
+public static class KeyDistributions
+{
+    public const string ValidNames = "uniform, zipfian, latest";
+
+    /// <summary>Parses a distribution name, ignoring case and surrounding whitespace. A number is not a name.</summary>
+    public static bool TryParse(string? name, out KeyDistributionKind kind)
+    {
+        switch (name?.Trim().ToLowerInvariant())
+        {
+            case "uniform": kind = KeyDistributionKind.Uniform; return true;
+            case "zipfian": kind = KeyDistributionKind.Zipfian; return true;
+            case "latest": kind = KeyDistributionKind.Latest; return true;
+            default: kind = default; return false;
+        }
+    }
+
+    public static IKeyDistribution Create(KeyDistributionKind kind) => kind switch
+    {
+        KeyDistributionKind.Uniform => new UniformDistribution(),
+        KeyDistributionKind.Zipfian => new ZipfianDistribution(),
+        KeyDistributionKind.Latest => new LatestDistribution(),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
+    };
+}
+
 /// <summary>
 /// Uniform distribution where all keys have equal probability of selection.
 /// </summary>
