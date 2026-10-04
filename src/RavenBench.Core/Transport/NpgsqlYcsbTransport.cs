@@ -63,12 +63,12 @@ public sealed class NpgsqlYcsbTransport : IYcsbTransport, IReportsStorageSize, I
     /// <inheritdoc />
     public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct) => op switch
     {
-        ReadOperation read => PostgresYcsbTransport.GuardedAsync(() => ReadAsync(read.Id, ct), ct),
-        InsertOperation<string> insert => PostgresYcsbTransport.GuardedAsync(() => InsertAsync(insert.Id, ToStoredJson(insert.Payload), ct), ct),
-        InsertOperation<YcsbRecord> insert => PostgresYcsbTransport.GuardedAsync(() => InsertAsync(insert.Id, ToStoredJson(insert.Payload), ct), ct),
-        UpdateFieldOperation update => PostgresYcsbTransport.GuardedAsync(() => UpdateFieldAsync(update, ct), ct),
-        BulkInsertOperation<string> bulk => PostgresYcsbTransport.GuardedAsync(() => BulkInsertAsync(bulk.Documents.Select(d => (d.Id, ToStoredJson(d.Document))), ct), ct),
-        BulkInsertOperation<YcsbRecord> bulk => PostgresYcsbTransport.GuardedAsync(() => BulkInsertAsync(bulk.Documents.Select(d => (d.Id, ToStoredJson(d.Document))), ct), ct),
+        ReadOperation read => TransportResult.GuardedAsync(() => ReadAsync(read.Id, ct), ct),
+        InsertOperation<string> insert => TransportResult.GuardedAsync(() => InsertAsync(insert.Id, ToStoredJson(insert.Payload), ct), ct),
+        InsertOperation<YcsbRecord> insert => TransportResult.GuardedAsync(() => InsertAsync(insert.Id, ToStoredJson(insert.Payload), ct), ct),
+        UpdateFieldOperation update => TransportResult.GuardedAsync(() => UpdateFieldAsync(update, ct), ct),
+        BulkInsertOperation<string> bulk => TransportResult.GuardedAsync(() => BulkInsertAsync(bulk.Documents.Select(d => (d.Id, ToStoredJson(d.Document))), ct), ct),
+        BulkInsertOperation<YcsbRecord> bulk => TransportResult.GuardedAsync(() => BulkInsertAsync(bulk.Documents.Select(d => (d.Id, ToStoredJson(d.Document))), ct), ct),
         _ => throw new NotSupportedException($"{nameof(NpgsqlYcsbTransport)} cannot execute operation type {op.GetType().Name}.")
     };
 

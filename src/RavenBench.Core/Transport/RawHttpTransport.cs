@@ -564,7 +564,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                 };
             }).ConfigureAwait(false);
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
             if (ct.IsCancellationRequested)
                 return TransportResult.CancelledResult;
@@ -797,7 +797,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         {
             return await QueryAggregateCoreAsync(op, ct).ConfigureAwait(false);
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
             if (ct.IsCancellationRequested)
                 return TransportResult.CancelledResult;
