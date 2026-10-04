@@ -102,7 +102,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
 
             var productName = transport.ProductName;
             var serverVersion = await transport.GetServerVersionAsync();
-            var container = targetName != RavendbTarget && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Port > 0
+            var container = targetName != RavendbTarget && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Port > 0 && DockerDatabaseContainerLocator.IsLocalEndpoint(uri)
                 ? new DockerDatabaseContainerLocator().Locate(uri.Port)
                 : null;
             var fingerprint = new MachineFingerprintCollector(new NativeMachineFingerprintSource()).Collect(RepositoryRootLocator.Find(), container);

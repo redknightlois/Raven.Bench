@@ -321,4 +321,25 @@ public class YcsbRunnerTargetTests
             File.Delete(path);
         }
     }
+
+    [Theory]
+    [InlineData("http://203.0.113.7:8080", 0)]
+    [InlineData("http://db.example.invalid:8080", 0)]
+    [InlineData("http://127.0.0.1:8080", 1)]
+    [InlineData("http://localhost:8080", 1)]
+    [InlineData("http://[::1]:8080", 1)]
+    public void Only_A_Local_Endpoint_Records_The_Local_Docker_Container(string url, int expectedLookups)
+    {
+        var lookups = 0;
+        var local = new DatabaseContainerInfo { ImageReference = "ravendb/ravendb:7.0", ImageDigest = "sha256:local" };
+
+        var recorded = YcsbRunner.ResolveDatabaseContainer(YcsbRunner.Ravendb7Target, url, port =>
+        {
+            lookups++;
+            return local;
+        });
+
+        lookups.Should().Be(expectedLookups);
+        (recorded != null).Should().Be(expectedLookups > 0);
+    }
 }
