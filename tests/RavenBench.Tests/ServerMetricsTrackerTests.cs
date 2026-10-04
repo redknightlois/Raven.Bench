@@ -358,4 +358,60 @@ public class ServerMetricsTrackerTests
         history.Should().HaveCount(2);
         history[1].ServerSnmpRequestsPerSec.Should().BeApproximately(100, 1e-9);
     }
+
+    [Fact]
+    public async Task The_First_Snmp_Rate_Of_A_Window_Never_Uses_A_Sample_From_An_Earlier_Window()
+    {
+        var (tracker, gate) = SnmpTracker(Snmp(0, 0, 0), Snmp(1, 100, 0), Snmp(2, 200, 0), Snmp(100, 5000, 0), Snmp(101, 5100, 0));
+        using var _ = tracker;
+
+        tracker.Start();
+        (await gate.NextAsync()).SetResult(new ServerMetrics());
+        (await gate.NextAsync()).SetResult(new ServerMetrics());
+        var stalePoll = await gate.NextAsync();
+        tracker.Stop();
+        tracker.Start();
+        // Answered after the restart, so its SNMP sample belongs to the earlier window.
+        stalePoll.SetResult(new ServerMetrics());
+        (await gate.NextAsync()).SetResult(new ServerMetrics());
+        (await gate.NextAsync()).SetResult(new ServerMetrics());
+        await gate.NextAsync();
+
+        var history = tracker.GetHistory();
+        history.Should().HaveCount(4);
+        history[2].ServerSnmpRequestsPerSec.Should().BeNull("the first sample of a window has no baseline in the window");
+        history[3].ServerSnmpRequestsPerSec.Should().BeApproximately(100, 1e-9);
+    }
+
+    [Fact]
+    public async Task Step_Snmp_Rates_Cover_The_Whole_Window_Not_The_Last_Poll_Interval()
+    {
+        var (tracker, gate) = SnmpTracker(Snmp(0, 0, 100), Snmp(1, 100, 100), Snmp(3, 1100, 400));
+        using var _ = tracker;
+
+        tracker.Start();
+        for (var i = 0; i < 3; i++)
+            (await gate.NextAsync()).SetResult(new ServerMetrics());
+        await gate.NextAsync();
+
+        tracker.GetHistory()[^1].ServerSnmpRequestsPerSec.Should().BeApproximately(500, 1e-9, "the history holds the last interval");
+        tracker.Current.ServerSnmpRequestsPerSec.Should().BeApproximately(1100 / 3.0, 1e-9);
+        tracker.Current.SnmpIoReadOpsPerSec.Should().BeApproximately((100 * 1 + 400 * 2) / 3.0, 1e-9);
+    }
+
+    [Fact]
+    public void Each_Start_Opens_A_Measurement_Window_That_Stop_Closes()
+    {
+        var (tracker, _) = GatedTracker();
+        using var __ = tracker;
+
+        tracker.Start();
+        tracker.Stop();
+        tracker.Start();
+
+        var windows = tracker.GetWindows();
+        windows.Should().HaveCount(2);
+        windows[0].End.Should().BeOnOrAfter(windows[0].Start).And.BeOnOrBefore(windows[1].Start);
+        windows[1].End.Should().Be(DateTime.MaxValue, "the second window is still open");
+    }
 }

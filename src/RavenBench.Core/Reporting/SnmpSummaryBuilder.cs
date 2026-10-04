@@ -6,10 +6,13 @@ namespace RavenBench.Core.Reporting;
 
 public static class SnmpSummaryBuilder
 {
-    public static (List<SnmpTimeSeries>?, SnmpAggregations?) Build(List<ServerMetrics>? history)
+    /// <param name="windows">The measurement windows; the totals and averages integrate only time inside them.</param>
+    public static (List<SnmpTimeSeries>?, SnmpAggregations?) Build(List<ServerMetrics>? history, IReadOnlyList<MeasurementWindow>? windows)
     {
         if (history == null || history.Count == 0)
             return (null, null);
+        if (windows == null)
+            throw new ArgumentNullException(nameof(windows), "An SNMP history needs the measurement windows it was polled in.");
 
         var timeSeries = new List<SnmpTimeSeries>(history.Count);
         foreach (var sample in history)
@@ -31,10 +34,10 @@ public static class SnmpSummaryBuilder
             });
         }
 
-        var (totalReadOps, averageReadOps) = IntegrateAndAverage(history, h => h.SnmpIoReadOpsPerSec);
-        var (totalWriteOps, averageWriteOps) = IntegrateAndAverage(history, h => h.SnmpIoWriteOpsPerSec);
-        var (totalReadBytes, averageReadBytes) = IntegrateAndAverage(history, h => h.SnmpIoReadBytesPerSec);
-        var (totalWriteBytes, averageWriteBytes) = IntegrateAndAverage(history, h => h.SnmpIoWriteBytesPerSec);
+        var (totalReadOps, averageReadOps) = IntegrateAndAverage(history, windows, h => h.SnmpIoReadOpsPerSec);
+        var (totalWriteOps, averageWriteOps) = IntegrateAndAverage(history, windows, h => h.SnmpIoWriteOpsPerSec);
+        var (totalReadBytes, averageReadBytes) = IntegrateAndAverage(history, windows, h => h.SnmpIoReadBytesPerSec);
+        var (totalWriteBytes, averageWriteBytes) = IntegrateAndAverage(history, windows, h => h.SnmpIoWriteBytesPerSec);
 
         var aggregations = new SnmpAggregations
         {
@@ -51,33 +54,33 @@ public static class SnmpSummaryBuilder
         return (timeSeries, aggregations);
     }
 
-    private static (double? Total, double? Average) IntegrateAndAverage(List<ServerMetrics> history, Func<ServerMetrics, double?> selector)
+    // Each sample's rate holds over the interval since the previous sample; only the part of that interval inside a window counts.
+    // The average is the total over the integrated seconds, so total = average × integrated window time.
+    private static (double? Total, double? Average) IntegrateAndAverage(List<ServerMetrics> history, IReadOnlyList<MeasurementWindow> windows, Func<ServerMetrics, double?> selector)
     {
         double total = 0;
-        double sum = 0;
-        int count = 0;
-        bool integrated = false;
+        double seconds = 0;
 
-        for (int i = 0; i < history.Count; i++)
+        for (int i = 1; i < history.Count; i++)
         {
-            var value = selector(history[i]);
-            if (value == null)
+            if (selector(history[i]) is not { } value)
                 continue;
 
-            sum += value.Value;
-            count++;
-
-            if (i == 0)
-                continue;
-
-            double elapsedSeconds = (history[i].Timestamp - history[i - 1].Timestamp).TotalSeconds;
-            if (elapsedSeconds > 0)
+            var from = history[i - 1].Timestamp;
+            var to = history[i].Timestamp;
+            foreach (var window in windows)
             {
-                total += value.Value * elapsedSeconds;
-                integrated = true;
+                var overlap = (Min(to, window.End) - Max(from, window.Start)).TotalSeconds;
+                if (overlap <= 0)
+                    continue;
+                total += value * overlap;
+                seconds += overlap;
             }
         }
 
-        return (integrated ? total : null, count > 0 ? sum / count : null);
+        return seconds > 0 ? (total, total / seconds) : (null, null);
     }
+
+    private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
+    private static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
 }
