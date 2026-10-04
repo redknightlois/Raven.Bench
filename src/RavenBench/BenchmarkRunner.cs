@@ -320,6 +320,7 @@ public class BenchmarkRunner(RunOptions opts)
             TransportPath = transport.TransportPath,
             StartupCalibration = startupCalibration,
             ServerMetricsHistory = serverMetricsHistory.Count > 0 ? serverMetricsHistory : null,
+            MeasurementWindows = serverTracker.GetWindows(),
             HistogramArtifacts = histogramArtifacts.Count > 0 ? histogramArtifacts : null,
             VectorMetadata = vectorMetadata,
             EffectiveDatabase = effectiveDatabase

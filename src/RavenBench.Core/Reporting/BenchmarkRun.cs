@@ -15,6 +15,9 @@ public sealed class BenchmarkRun
     public string? TransportPath { get; init; }
     public StartupCalibration? StartupCalibration { get; init; }
     public List<ServerMetrics>? ServerMetricsHistory { get; init; }
+
+    /// <summary>The measurement windows the server metrics history was polled in.</summary>
+    public List<MeasurementWindow>? MeasurementWindows { get; init; }
     public List<HistogramArtifact>? HistogramArtifacts { get; init; }
 
     /// <summary>

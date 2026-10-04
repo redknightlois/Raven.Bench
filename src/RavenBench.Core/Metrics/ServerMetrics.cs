@@ -53,6 +53,9 @@ public sealed record ServerMetrics
     public string? ErrorMessage { get; init; }
 }
 
+/// <summary>One measurement window of the tracker, on the clock the SNMP sample timestamps use.</summary>
+public readonly record struct MeasurementWindow(DateTime Start, DateTime End);
+
 /// <summary>
 /// Polls server-side metrics from RavenDB endpoints during benchmark execution.
 /// Each Start opens a new window: the server CPU figure averages over the samples taken since that Start only.
@@ -65,9 +68,11 @@ public sealed class ServerMetricsTracker : IDisposable
     private readonly object _lock = new();
     private readonly SnmpCounterCache _counterCache = new();
     private readonly List<ServerMetrics> _metricsHistory = new();
+    private readonly List<MeasurementWindow> _windows = new();
 
     private ServerMetrics _currentMetrics = new();
     private ServerMetrics? _windowStart;
+    private SnmpWindow _snmpWindow = new();
     private bool _isRunning;
     private bool _pollInFlight;
     private int _window;
@@ -86,7 +91,11 @@ public sealed class ServerMetricsTracker : IDisposable
         {
             _isRunning = true;
             _window++;
+            _windows.Add(new MeasurementWindow(DateTime.UtcNow, DateTime.MaxValue));
             _windowStart = null;
+            _snmpWindow = new SnmpWindow();
+            // The first counter rate of a window must not use a sample taken before the window opened.
+            _counterCache.Reset();
             _currentMetrics = new ServerMetrics();
             // A poll still in flight from an earlier window reschedules the loop when it ends.
             if (_pollInFlight == false)
@@ -98,6 +107,8 @@ public sealed class ServerMetricsTracker : IDisposable
     {
         lock (_lock)
         {
+            if (_isRunning)
+                _windows[^1] = _windows[^1] with { End = DateTime.UtcNow };
             _isRunning = false;
             _timer.Change(Timeout.Infinite, Timeout.Infinite);
         }
@@ -146,50 +157,50 @@ public sealed class ServerMetricsTracker : IDisposable
         {
             var metrics = await _transport.GetServerMetricsAsync();
 
-            if (_options.Snmp.Enabled)
-            {
-                var snmpSample = await _transport.GetSnmpMetricsAsync(_options.Snmp, _options.Database);
-                var snmpRates = _counterCache.ComputeRates(snmpSample);
-
-                metrics = metrics with
-                {
-                    MachineCpu = snmpSample.MachineCpu,
-                    ProcessCpu = snmpSample.ProcessCpu,
-                    ManagedMemoryMb = snmpSample.ManagedMemoryMb,
-                    UnmanagedMemoryMb = snmpSample.UnmanagedMemoryMb,
-                    DirtyMemoryMb = snmpSample.DirtyMemoryMb,
-                    Load1Min = snmpSample.Load1Min,
-                    Load5Min = snmpSample.Load5Min,
-                    Load15Min = snmpSample.Load15Min,
-
-                    // Counter-derived rates are null until a baseline sample exists.
-                    SnmpIoReadOpsPerSec = snmpRates?.IoReadOpsPerSec,
-                    SnmpIoWriteOpsPerSec = snmpRates?.IoWriteOpsPerSec,
-                    SnmpIoReadBytesPerSec = snmpRates?.IoReadBytesPerSec,
-                    SnmpIoWriteBytesPerSec = snmpRates?.IoWriteBytesPerSec,
-                    ServerSnmpRequestsPerSec = snmpRates?.ServerRequestsPerSec,
-                    SnmpErrorsPerSec = snmpRates?.ErrorsPerSec,
-                };
-            }
+            // An admin poll that fails comes back invalid; the SNMP sample is kept regardless.
+            var snmpSample = _options.Snmp.Enabled ? await _transport.GetSnmpMetricsAsync(_options.Snmp, _options.Database) : null;
 
             lock (_lock)
             {
                 if (_isRunning == false || window != _window)
                     return;
 
+                if (snmpSample is { IsEmpty: false })
+                {
+                    // Under the lock and after the window check, so a sample from an earlier window never becomes a baseline.
+                    var snmpRates = _counterCache.ComputeRates(snmpSample);
+                    metrics = metrics with
+                    {
+                        MachineCpu = snmpSample.MachineCpu,
+                        ProcessCpu = snmpSample.ProcessCpu,
+                        ManagedMemoryMb = snmpSample.ManagedMemoryMb,
+                        UnmanagedMemoryMb = snmpSample.UnmanagedMemoryMb,
+                        DirtyMemoryMb = snmpSample.DirtyMemoryMb,
+                        Load1Min = snmpSample.Load1Min,
+                        Load5Min = snmpSample.Load5Min,
+                        Load15Min = snmpSample.Load15Min,
+
+                        // Per poll interval; null until a baseline sample exists in this window.
+                        SnmpIoReadOpsPerSec = snmpRates?.IoReadOpsPerSec,
+                        SnmpIoWriteOpsPerSec = snmpRates?.IoWriteOpsPerSec,
+                        SnmpIoReadBytesPerSec = snmpRates?.IoReadBytesPerSec,
+                        SnmpIoWriteBytesPerSec = snmpRates?.IoWriteBytesPerSec,
+                        ServerSnmpRequestsPerSec = snmpRates?.ServerRequestsPerSec,
+                        SnmpErrorsPerSec = snmpRates?.ErrorsPerSec,
+                    };
+                    _metricsHistory.Add(metrics with { Timestamp = snmpSample.Timestamp });
+                    _snmpWindow.Add(snmpSample, snmpRates);
+                }
+
                 if (metrics.ServerProcessorTime.HasValue)
                     _windowStart ??= metrics;
-                _currentMetrics = metrics with
+                _currentMetrics = _snmpWindow.Apply(metrics) with
                 {
                     CpuUsagePercent = _windowStart == null ? null : CpuPercent(_windowStart, metrics),
                     CpuBasis = metrics.ServerCores is { } cores
                         ? $"step average over {cores} server-reported cores"
                         : "unknown: the server did not report its core count"
                 };
-
-                // An admin poll that fails comes back invalid; its SNMP sample is kept regardless.
-                if (_options.Snmp.Enabled)
-                    _metricsHistory.Add(metrics);
             }
         }
         catch
@@ -210,11 +221,79 @@ public sealed class ServerMetricsTracker : IDisposable
         }
     }
 
+    /// <summary>Every measurement window opened so far; a window still open ends at <see cref="DateTime.MaxValue"/>.</summary>
+    public List<MeasurementWindow> GetWindows()
+    {
+        lock (_lock)
+        {
+            return new List<MeasurementWindow>(_windows);
+        }
+    }
+
     public List<ServerMetrics> GetHistory()
     {
         lock (_lock)
         {
             return new List<ServerMetrics>(_metricsHistory);
+        }
+    }
+
+    /// <summary>
+    /// The SNMP rates over one measurement window: requests from the counter delta between the window's first
+    /// and last samples, and each IO and error rate time-weighted over the window's poll intervals.
+    /// </summary>
+    private sealed class SnmpWindow
+    {
+        private SnmpSample? _first;
+        private SnmpSample? _last;
+        private TimeWeighted _readOps, _writeOps, _readBytes, _writeBytes, _errors;
+
+        public void Add(SnmpSample sample, SnmpRates? rates)
+        {
+            if (_last != null && rates != null)
+            {
+                var seconds = (sample.Timestamp - _last.Timestamp).TotalSeconds;
+                _readOps.Add(rates.IoReadOpsPerSec, seconds);
+                _writeOps.Add(rates.IoWriteOpsPerSec, seconds);
+                _readBytes.Add(rates.IoReadBytesPerSec, seconds);
+                _writeBytes.Add(rates.IoWriteBytesPerSec, seconds);
+                _errors.Add(rates.ErrorsPerSec, seconds);
+            }
+            _first ??= sample;
+            _last = sample;
+        }
+
+        public ServerMetrics Apply(ServerMetrics metrics) => metrics with
+        {
+            SnmpIoReadOpsPerSec = _readOps.Mean,
+            SnmpIoWriteOpsPerSec = _writeOps.Mean,
+            SnmpIoReadBytesPerSec = _readBytes.Mean,
+            SnmpIoWriteBytesPerSec = _writeBytes.Mean,
+            ServerSnmpRequestsPerSec = RequestsPerSec(),
+            SnmpErrorsPerSec = _errors.Mean,
+        };
+
+        private double? RequestsPerSec()
+        {
+            if (_first?.TotalRequests is not { } start || _last?.TotalRequests is not { } end)
+                return null;
+            var seconds = (_last.Timestamp - _first.Timestamp).TotalSeconds;
+            return seconds > 0 && end >= start ? (end - start) / seconds : null;
+        }
+
+        private struct TimeWeighted
+        {
+            private double _sum, _seconds;
+
+            public void Add(double? value, double seconds)
+            {
+                if (value is not { } v || seconds <= 0)
+                    return;
+                _sum += v * seconds;
+                _seconds += seconds;
+            }
+
+            public readonly double? Mean => _seconds > 0 ? _sum / _seconds : null;
         }
     }
 
