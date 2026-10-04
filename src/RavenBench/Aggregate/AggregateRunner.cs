@@ -86,7 +86,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             : new MongoYcsbTransport(url, database, targetName);
         bool createdDatabase = isRavenDb && await CreateRavenDatabaseAsync(url, database, ct);
 
-        try
+        return await RunCleanup.AfterAsync(settings.KeepData ? null : () => CleanupAsync(transport, url, database, createdDatabase), "Aggregate", async () =>
         {
             // build
             using var digest = new AggregateSetDigest(dataSet.Spec);
@@ -176,12 +176,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
                 results.Add(Result(shape, closed.Steps.Concat(fixedRate.Steps).ToList(), closed.HistogramArtifacts.Concat(fixedRate.HistogramArtifacts).ToList(), i => i with { Query = info }));
             results.Add(Result("under-write", underWriteSteps, quiet.HistogramArtifacts.Concat(underWrite.HistogramArtifacts).ToList(), i => i with { UnderWrite = underWriteInfo }));
             return results;
-        }
-        finally
-        {
-            if (settings.KeepData == false)
-                await CleanupAsync(transport, url, database, createdDatabase);
-        }
+        });
     }
 
     private async Task<(StepResult Step, AggregateBuildInfo Info)> BuildAsync(IYcsbTransport transport, AggregateDataSet dataSet, AggregateSetDigest digest,
