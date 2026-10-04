@@ -32,6 +32,8 @@ public sealed class HistogramArtifact
         100.0
     };
 
+    // Index of the step in the run's step list.
+    public required int StepIndex { get; init; }
     public required int Concurrency { get; init; }
     public required long TotalCount { get; init; }
     public required long MaxValueInMicroseconds { get; init; }

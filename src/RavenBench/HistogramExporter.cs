@@ -1,4 +1,5 @@
 using System.Globalization;
+using HdrHistogram;
 using RavenBench.Core;
 using RavenBench.Core.Metrics;
 using RavenBench.Core.Reporting;
@@ -9,10 +10,12 @@ internal static class HistogramExporter
 {
     /// <summary>
     /// Build histogram data for JSON. Always creates the full percentile distribution.
-    /// Optionally writes hlog/csv files if outputPrefix is specified.
+    /// Optionally writes hlog/csv files if outputPrefix is specified. The file names carry the step index, so no two
+    /// steps of a run share a path; the .hlog file is an HdrHistogram interval log that <see cref="HistogramLogReader"/> reads.
     /// </summary>
     internal static HistogramArtifact? BuildHistogramArtifact(
         HistogramSnapshot snapshot,
+        int stepIndex,
         int concurrency,
         string? outputPrefix,
         HistogramExportFormat format)
@@ -34,25 +37,13 @@ internal static class HistogramExporter
 
             if (format == HistogramExportFormat.Hlog || format == HistogramExportFormat.Both)
             {
-                hlogPath = $"{outputPrefix}-step-c{concurrency:D4}.hlog";
+                hlogPath = $"{StepPath(outputPrefix, stepIndex, concurrency)}.hlog";
 
                 try
                 {
                     using var fs = File.Create(hlogPath);
-                    using var writer = new StreamWriter(fs);
-
-                    writer.WriteLine("# HdrHistogram Percentile Distribution");
-                    writer.WriteLine($"# Concurrency: {concurrency}");
-                    writer.WriteLine($"# TotalCount: {histogram.TotalCount}");
-                    writer.WriteLine($"# MaxValueMicros: {snapshot.MaxMicros}");
-                    writer.WriteLine("# Percentile,LatencyMicros,LatencyMs");
-
-                    foreach (var p in HistogramArtifact.StandardPercentiles)
-                    {
-                        var valueMicros = histogram.GetValueAtPercentile(p);
-                        var valueMs = valueMicros / 1000.0;
-                        writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{p:F3},{valueMicros},{valueMs:F3}"));
-                    }
+                    using var writer = new HistogramLogWriter(fs);
+                    writer.Write(DateTime.UtcNow, histogram);
                 }
                 catch (Exception ex)
                 {
@@ -63,7 +54,7 @@ internal static class HistogramExporter
 
             if (format == HistogramExportFormat.Csv || format == HistogramExportFormat.Both)
             {
-                csvPath = $"{outputPrefix}-step-c{concurrency:D4}.csv";
+                csvPath = $"{StepPath(outputPrefix, stepIndex, concurrency)}.csv";
 
                 try
                 {
@@ -110,6 +101,7 @@ internal static class HistogramExporter
 
         return new HistogramArtifact
         {
+            StepIndex = stepIndex,
             Concurrency = concurrency,
             TotalCount = histogram.TotalCount,
             MaxValueInMicroseconds = snapshot.MaxMicros,
@@ -122,4 +114,7 @@ internal static class HistogramExporter
             CsvPath = csvPath
         };
     }
+
+    private static string StepPath(string outputPrefix, int stepIndex, int concurrency) =>
+        string.Create(CultureInfo.InvariantCulture, $"{outputPrefix}-step{stepIndex + 1:D3}-c{concurrency:D4}");
 }

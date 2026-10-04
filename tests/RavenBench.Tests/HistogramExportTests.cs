@@ -250,6 +250,7 @@ public class HistogramExportTests : EmbeddedRavenTestBase, IDisposable
         // Make sure the artifact has everything we need for downstream analysis
         var artifact = new HistogramArtifact
         {
+            StepIndex = 0,
             Concurrency = 16,
             TotalCount = 1000,
             MaxValueInMicroseconds = 50000,
