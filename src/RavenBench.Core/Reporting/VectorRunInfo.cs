@@ -32,8 +32,8 @@ public sealed record VectorLoadInfo(
 /// <summary>The recall curve and the setting the threshold selected.</summary>
 public sealed record VectorRecallInfo(int K, double Threshold, IReadOnlyList<VectorEffortPoint> Curve, VectorEffortPoint? Selected, string Statement);
 
-/// <summary>The readers run: the closed loop found a sustained rate, and the fixed-rate step ran at it.</summary>
-public sealed record VectorReadersInfo(int Readers, double ClosedLoopRate, double FixedRate, bool ClientBound);
+/// <summary>The readers run: the closed loop found the ceiling, and the fixed-rate step ran at <see cref="FixedRateFraction"/> of it.</summary>
+public sealed record VectorReadersInfo(int Readers, double ClosedLoopRate, double FixedRate, double FixedRateFraction, bool ClientBound);
 
 /// <summary>The filtered run: how the labels were drawn, and the rows every query returned.</summary>
 public sealed record VectorFilteredInfo(

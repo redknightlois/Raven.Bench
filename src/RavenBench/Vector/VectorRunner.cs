@@ -89,6 +89,10 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
     public static readonly IReadOnlyList<string> Runs = ["load", "recall", "readers", "filtered", "under-insert"];
 
+    /// <summary>The readers run after its closed loop: the fixed-rate step targets <see cref="FixedRate.Fraction"/> of the closed-loop ceiling.</summary>
+    internal static VectorReadersInfo ReadersInfo(int readers, double closedThroughput) =>
+        new(readers, closedThroughput, FixedRate.For("readers", closedThroughput), FixedRate.Fraction, ClientBound: false);
+
     /// <summary>The set the name selects. The vector runner takes no operator pin, so a set with an unpinned file is refused here.</summary>
     public static IVectorDataset ResolveSet(string name)
     {
@@ -274,13 +278,13 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             if (constrained is not null)
                 return [Result("constrained", [loadStep.Step, .. recallSteps], null, i => i with { Load = loadInfo, Recall = recallInfo, Constrained = constrained })];
 
-            // readers: the closed loop finds the sustained rate, then the fixed-rate runner runs at it.
+            // readers: the closed loop finds the ceiling, then the fixed-rate runner runs at the named fraction of it.
             var readersWorkload = new VectorQueryWorkload(queries.Queries, target, k, effort);
             var closed = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
-            var sustained = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
-            var fixedRate = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Rate, sustained, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
+            var readersInfo = ReadersInfo(scenario.Readers, closed.Steps[^1].Throughput);
+            var fixedRate = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Rate, (int)readersInfo.FixedRate, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
             var readerSteps = closed.Steps.Concat(fixedRate.Steps).ToList();
-            var readersInfo = new VectorReadersInfo(scenario.Readers, closed.Steps[^1].Throughput, sustained, readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)));
+            readersInfo = readersInfo with { ClientBound = readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)) };
 
             // filtered
             var filter = new VectorFilter(target.FilterField, VectorSplit.LabelIn);

@@ -255,6 +255,28 @@ public class AggregateRunTests
         act.Should().Throw<InvalidOperationException>().WithMessage($"*needs {supply + 5}*has {supply}*5 short*");
     }
 
+    [Theory]
+    [InlineData(2.0)]
+    [InlineData(10.0)]
+    [InlineData(1234.56)]
+    public void The_Fixed_Rate_Targets_A_Named_Fraction_Below_The_Closed_Loop_Throughput(double closed)
+    {
+        FixedRate.Fraction.Should().BeGreaterThan(0).And.BeLessThan(1);
+
+        var rate = FixedRate.For(AggregateShapes.CountByCategory, closed);
+
+        rate.Should().BeGreaterThan(0);
+        ((double)rate).Should().BeLessThan(closed).And.BeLessThanOrEqualTo(closed * FixedRate.Fraction);
+    }
+
+    [Fact]
+    public void A_Closed_Loop_Too_Slow_For_A_Whole_Rate_Below_It_Fails_Fast()
+    {
+        var act = () => FixedRate.For(AggregateShapes.CountByCategory, 1.0);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*count-by-category*");
+    }
+
     private sealed class RunFailed : Exception;
 
     private sealed class CleanupFailed : Exception;
@@ -542,7 +564,8 @@ public class AggregateRunnerLiveTests
         foreach (var query in results.Skip(1).Take(3).Select(r => r.Summary))
         {
             var info = query.Aggregate!.Query!;
-            info.FixedRate.Should().Be(Math.Max(1, (int)Math.Floor(info.ClosedLoopRate)));
+            info.FixedRate.Should().BeLessThan((int)Math.Ceiling(info.ClosedLoopRate));
+            info.FixedRateFraction.Should().Be(FixedRate.Fraction);
             query.Steps[^1].TargetThroughput.Should().Be(info.FixedRate);
             // Workers drain every scheduled request before a step ends, so a slow server delays answers but does not remove them.
             info.StepAnswers.Should().OnlyContain(a => a.Answers > 0);
