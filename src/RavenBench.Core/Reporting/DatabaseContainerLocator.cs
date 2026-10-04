@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.NetworkInformation;
 using System.Text.Json;
 using RavenBench.Core.Diagnostics;
 
@@ -40,6 +42,17 @@ public sealed class DatabaseContainerLocatorException : Exception
 /// </summary>
 public sealed class DockerDatabaseContainerLocator
 {
+    /// <summary>
+    /// True when the endpoint names this machine: a loopback host, the machine's own host name, or
+    /// an address of one of its interfaces. Only such an endpoint can be served by a container the
+    /// local daemon publishes; any other host name is not resolved and counts as remote.
+    /// </summary>
+    public static bool IsLocalEndpoint(Uri endpoint) =>
+        endpoint.IsLoopback
+        || string.Equals(endpoint.IdnHost, Dns.GetHostName(), StringComparison.OrdinalIgnoreCase)
+        || (IPAddress.TryParse(endpoint.IdnHost, out var address)
+            && NetworkInterface.GetAllNetworkInterfaces().SelectMany(n => n.GetIPProperties().UnicastAddresses).Any(u => u.Address.Equals(address)));
+
     public DatabaseContainerInfo? Locate(int hostPort) =>
         Find(hostPort) is { } found ? new DatabaseContainerInfo { ImageReference = found.Image, ImageDigest = ReadRepoDigest(found.Id) } : null;
 

@@ -194,7 +194,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         var productName = target.Transport.ProductName;
         var serverVersion = await target.Transport.GetServerVersionAsync();
         var productSettings = await target.ReportedSettingsAsync(ct);
-        var container = IsContainerized(targetName) && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Port > 0
+        var container = IsContainerized(targetName) && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Port > 0 && DockerDatabaseContainerLocator.IsLocalEndpoint(uri)
             ? new DockerDatabaseContainerLocator().Locate(uri.Port)
             : null;
         var fingerprint = new MachineFingerprintCollector(new NativeMachineFingerprintSource()).Collect(RepositoryRootLocator.Find(), container);

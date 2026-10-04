@@ -386,26 +386,26 @@ public sealed class YcsbRunner
     /// <summary>
     /// The container that serves the target, for the five containerized targets, so the result
     /// records the image that actually ran. The external RavenDB target did not run in a container
-    /// the benchmark used, so it has none. A client with no usable Docker records none either.
+    /// the benchmark used, so it has none. The local Docker daemon is matched by port alone, so an
+    /// endpoint on another host records none: a local container that publishes the same port is not
+    /// the server the run addressed. A client with no usable Docker records none either.
     /// </summary>
-    private DatabaseContainerInfo? ResolveDatabaseContainer(string recordedUrl)
+    private DatabaseContainerInfo? ResolveDatabaseContainer(string recordedUrl) =>
+        ResolveDatabaseContainer(_scenario.Target, recordedUrl, _containerLocator.Locate);
+
+    internal static DatabaseContainerInfo? ResolveDatabaseContainer(string target, string recordedUrl, Func<int, DatabaseContainerInfo?> locate)
     {
-        if (IsContainerizedTarget(_scenario.Target) == false)
+        if (IsContainerizedTarget(target) == false)
             return null;
 
-        return _containerLocator.Locate(ResolveHostPort(recordedUrl));
-    }
+        // The container is matched by the port the caller's endpoint names. Without a port the
+        // container that serves the endpoint cannot be identified, so the run fails rather than
+        // guessing a default that may belong to another server.
+        if (Uri.TryCreate(recordedUrl, UriKind.Absolute, out var uri) == false || uri.Port <= 0)
+            throw new YcsbScenarioException(
+                $"The '{target}' endpoint does not carry a port, so the container that serves it cannot be identified. Name the port in --url.");
 
-    // The container is matched by the port the caller's endpoint names. Without a port the
-    // container that serves the endpoint cannot be identified, so the run fails rather than
-    // guessing a default that may belong to another server.
-    private int ResolveHostPort(string recordedUrl)
-    {
-        if (Uri.TryCreate(recordedUrl, UriKind.Absolute, out var uri) && uri.Port > 0)
-            return uri.Port;
-
-        throw new YcsbScenarioException(
-            $"The '{_scenario.Target}' endpoint does not carry a port, so the container that serves it cannot be identified. Name the port in --url.");
+        return DockerDatabaseContainerLocator.IsLocalEndpoint(uri) ? locate(uri.Port) : null;
     }
 
     /// <summary>
