@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using Raven.Client.ServerWide;
@@ -114,19 +115,19 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
                 _ => AggregateShapes.Create(shape, scenario.RegionTopN)
             };
 
-            // count-by-category, sum-by-region, filtered-group: the closed loop finds the ceiling, the fixed-rate runner runs at it.
+            // count-by-category, sum-by-region, filtered-group: the closed loop finds the ceiling, the fixed-rate runner runs below it.
             var queryRuns = new List<(string Shape, BenchmarkRunner.RampResult Closed, BenchmarkRunner.RampResult Fixed, AggregateQueryInfo Info)>();
             foreach (var shape in AggregateShapes.All)
             {
                 var workload = new AggregateQueryWorkload(() => Operation(shape));
                 var closed = await RampAsync(transport, workload, database, LoadShape.Closed, scenario.Concurrency, null, warmup, duration, $"{shape}-closed", nodeExporter);
-                var rate = Math.Max(1, (int)Math.Floor(closed.Steps[^1].Throughput));
+                var rate = FixedRate.For(shape, closed.Steps[^1].Throughput);
                 var fixedRate = await RampAsync(transport, workload, database, LoadShape.Rate, rate, scenario.Concurrency, warmup, duration, $"{shape}-rate", nodeExporter);
                 var steps = closed.Steps.Concat(fixedRate.Steps).ToList();
                 var op = Operation(shape);
                 queryRuns.Add((shape, closed, fixedRate, new AggregateQueryInfo(shape, isRavenDb ? op.IndexName : null, op.TopN, Describe(op.Filter), QueryPolicy,
-                    closed.Steps[^1].Throughput, rate, steps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)), Answers(steps))));
-                Console.WriteLine($"[Aggregate] {shape}: closed loop {closed.Steps[^1].Throughput:F0} q/s, fixed rate {rate} q/s p99 {fixedRate.Steps[^1].Raw.P99:F2} ms");
+                    closed.Steps[^1].Throughput, rate, FixedRate.Fraction, steps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)), Answers(steps))));
+                Console.WriteLine($"[Aggregate] {shape}: closed loop {closed.Steps[^1].Throughput:F0} q/s, fixed rate {rate} q/s ({FixedRate.Fraction:P0} of it) p99 {fixedRate.Steps[^1].Raw.P99:F2} ms");
             }
 
             // under-write: a quiet step and an under-write step at the same fixed query rate.
