@@ -137,17 +137,35 @@ public class AggregateUnitTests
         var expected = new[] { "ravendb", "mongodb" }
             .SelectMany(p => AggregateShapes.All.Select(s => $"{assembly.GetName().Name}.Aggregate.Indexes.{p}.{s}.json"));
 
-        names.Should().BeEquivalentTo(expected);
+        names.Should().OnlyHaveUniqueItems().And.BeSubsetOf(expected);
+        names.Should().Contain(AggregateShapes.All.Select(s => $"{assembly.GetName().Name}.Aggregate.Indexes.ravendb.{s}.json"));
     }
 
     [Fact]
-    public void Every_Shape_Has_One_RavenDb_Index_File_And_A_MongoDb_Index_File()
+    public void Every_Shape_Has_One_RavenDb_Index_File_And_Every_MongoDb_Index_File_Belongs_To_A_Shape()
     {
         var ravenNames = AggregateShapes.RavenDbIndexes().Select(i => i.GetProperty("Name").GetString()).ToList();
         var shapeNames = AggregateShapes.All.Select(s => AggregateShapes.Create(s, 1, "c1").IndexName).ToList();
 
         ravenNames.Should().BeEquivalentTo(shapeNames);
-        AggregateShapes.MongoIndexes().Should().HaveCount(AggregateShapes.All.Count);
+        AggregateShapes.MongoIndexes().Should().HaveCount(AggregateShapes.All.Count(s => AggregateShapes.MongoIndexFor(s) is not null));
+    }
+
+    [Fact]
+    public void A_MongoDb_Index_Exists_Only_When_Its_Shape_Pipeline_Starts_On_The_Index_Leading_Key()
+    {
+        // INVARIANT: the planner uses an index for an aggregate only through a leading $match or $sort
+        // on the index's leading key; a pipeline that starts with $group scans the collection.
+        foreach (var shape in AggregateShapes.All)
+        {
+            if (AggregateShapes.MongoIndexFor(shape) is not { } index)
+                continue;
+            var leadingKey = index.GetProperty("key").EnumerateObject().First().Name;
+            var first = MongoYcsbTransport.AggregatePipeline(AggregateShapes.Create(shape, 1, "c1"))[0];
+
+            first.Names.First().Should().BeOneOf(new[] { "$match", "$sort" }, $"the {shape} index leads on {leadingKey}");
+            first[0].AsBsonDocument.Names.First().Should().Be(leadingKey, $"the {shape} pipeline must start on its index's leading key");
+        }
     }
 
     [Fact]

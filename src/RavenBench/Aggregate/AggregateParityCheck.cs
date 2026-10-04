@@ -1,7 +1,4 @@
 using System.Net;
-using Raven.Client.Documents.Operations;
-using Raven.Client.Documents.Operations.Indexes;
-using Raven.Client.Documents.Queries;
 using Raven.Client.ServerWide;
 using Raven.Client.ServerWide.Operations;
 using RavenBench.Core;
@@ -170,26 +167,57 @@ public sealed class AggregateParityCheck
     }
 
     /// <summary>
+    /// A product whose load and cleanup follow the footprint rule: before the load the check records the sample ids and
+    /// the aggregate indexes that do not exist yet, and the cleanup removes exactly those, then releases the product.
+    /// Documents and indexes that existed before the check stay.
+    /// </summary>
+    internal static AggregateParityProduct Product(string name, string endpoint, IAggregateStore store,
+        Func<IReadOnlyList<AggregateDocument>, CancellationToken, Task> load,
+        Func<GroupedAggregateOperation, CancellationToken, Task<TransportResult>> query,
+        Func<Task> release)
+    {
+        AggregateFootprint? footprint = null;
+        return new AggregateParityProduct(name, endpoint,
+            async (sample, ct) =>
+            {
+                footprint = await AggregateFootprint.BeforeLoadAsync(store, sample.Select(d => d.Id).ToList(), ct);
+                await load(sample, ct);
+            },
+            query,
+            async () =>
+            {
+                try
+                {
+                    if (footprint is not null)
+                        await footprint.RemoveAsync(CancellationToken.None);
+                }
+                finally
+                {
+                    await release();
+                }
+            });
+    }
+
+    /// <summary>
     /// RavenDB over raw HTTP. The sample goes into the named database, which the check creates when
     /// it is missing; the check waits for the map-reduce indexes to report non-stale, and afterwards
-    /// deletes the database it created, or the indexes and the sample documents it wrote.
+    /// deletes the database it created, or else the indexes and the sample documents it wrote.
     /// </summary>
     public static AggregateParityProduct RavenDb(string url, string database)
     {
         var transport = new RawHttpTransport(url, database, CompressionMode.Identity, HttpVersion.Version11);
+        var store = HttpHelper.Create(url, database, HttpVersion.Version11);
         bool created = false;
-        return new AggregateParityProduct(
+        return Product(
             YcsbRunner.RavendbTarget,
             transport.RecordedEndpoint,
+            new RavenAggregateStore(store),
             async (sample, ct) =>
             {
-                using (var store = HttpHelper.Create(url, database, HttpVersion.Version11))
+                if (await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(database), ct) is null)
                 {
-                    if (await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(database), ct) is null)
-                    {
-                        await store.Maintenance.Server.SendAsync(new CreateDatabaseOperation(new DatabaseRecord(database)), ct);
-                        created = true;
-                    }
+                    await store.Maintenance.Server.SendAsync(new CreateDatabaseOperation(new DatabaseRecord(database)), ct);
+                    created = true;
                 }
                 await LoadInBatchesAsync(transport, sample, ct);
                 await transport.EnsureAggregateIndexesAsync(ct);
@@ -199,33 +227,30 @@ public sealed class AggregateParityCheck
             async () =>
             {
                 transport.Dispose();
-                using var store = HttpHelper.Create(url, database, HttpVersion.Version11);
-                if (created)
+                using (store)
                 {
-                    await store.Maintenance.Server.SendAsync(new DeleteDatabasesOperation(database, hardDelete: true));
-                    return;
+                    if (created)
+                        await store.Maintenance.Server.SendAsync(new DeleteDatabasesOperation(database, hardDelete: true));
                 }
-                foreach (var index in AggregateShapes.RavenDbIndexes())
-                    await store.Maintenance.SendAsync(new DeleteIndexOperation(index.GetProperty("Name").GetString()!));
-                var delete = await store.Operations.SendAsync(new DeleteByQueryOperation(new IndexQuery { Query = $"from '{AggregateDocument.RavenDbCollection}'" }));
-                await delete.WaitForCompletionAsync(NonStaleTimeout);
             });
     }
 
     /// <summary>
     /// MongoDB under either target: the collection is created, the target's indexes are created
-    /// (none for the plain target), the sample is inserted, and the collection is dropped afterwards.
+    /// (none for the plain target), the sample is inserted, and afterwards the sample documents and the
+    /// indexes the check created are removed.
     /// </summary>
-    public static AggregateParityProduct Mongo(MongoYcsbTransport transport) => new(
+    public static AggregateParityProduct Mongo(MongoYcsbTransport transport) => Product(
         transport.Target,
         transport.RecordedEndpoint,
+        transport,
         async (sample, ct) =>
         {
             await transport.EnsureAggregateIndexesAsync(ct);
             await LoadInBatchesAsync(transport, sample, ct);
         },
         transport.ExecuteAsync,
-        () => transport.DropAggregateCollectionAsync(CancellationToken.None));
+        () => Task.CompletedTask);
 
     internal static async Task LoadInBatchesAsync(IYcsbTransport transport, IEnumerable<AggregateDocument> sample, CancellationToken ct)
     {

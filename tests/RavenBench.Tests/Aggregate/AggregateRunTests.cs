@@ -236,10 +236,11 @@ public class AggregateRunTests
             category[op.Id] = op.Category;
             bulkIds.Add(op.Id);
         }
-        foreach (var probe in UnderWriteSplit.ProbeSources(documents, tracked, 100).Take(100))
+        var originalCategory = documents.ToDictionary(d => d.Id, d => d.Category);
+        foreach (var probe in UnderWriteSplit.ProbeSources(documents, tracked, 100))
         {
-            probe.Category.Should().NotBe(tracked);
-            bulkIds.Should().NotContain(probe.Id, "the probe and the bulk writers never share a document");
+            originalCategory[probe].Should().NotBe(tracked);
+            bulkIds.Should().NotContain(probe, "the probe and the bulk writers never share a document");
         }
     }
 
@@ -253,6 +254,72 @@ public class AggregateRunTests
         var act = () => UnderWriteSplit.ProbeSources(documents, tracked, supply + 5);
 
         act.Should().Throw<InvalidOperationException>().WithMessage($"*needs {supply + 5}*has {supply}*5 short*");
+    }
+
+    [Fact]
+    public async Task A_Probe_Out_Of_Documents_Stops_Without_An_Error_And_Says_How_Many_It_Sent()
+    {
+        var (_, _, tracked) = SmallSet();
+        IReadOnlyList<string> ids = ["a/1", "a/2", "a/3"];
+        var sent = new List<AggregateUpdateOperation>();
+        var write = UnderWriteSplit.ProbeWrite(ids, tracked, seed: 1, (op, _) =>
+        {
+            sent.Add(op);
+            return Task.CompletedTask;
+        });
+
+        // Every slot is already due and nothing stops the writer, so only exhaustion ends it.
+        var probe = await PacedWriter.RunAsync(double.MaxValue, 1, write, _ => { }, CancellationToken.None);
+
+        sent.Select(op => op.Id).Should().Equal(ids);
+        sent.Should().OnlyContain(op => op.Category == tracked);
+        probe.Acknowledged.Should().Be(ids.Count);
+        probe.StopReason.Should().Contain("no document");
+    }
+
+    [Theory]
+    [InlineData(100L, 100L, true)]
+    [InlineData(103L, 100L, false)]
+    public async Task The_Freshness_Baseline_Is_The_Server_Answer_And_A_Different_Answer_Fails_Fast(long served, long generated, bool accepted)
+    {
+        using var transport = new FixedAnswerTransport([new AggregateGroup("c01", served)]);
+
+        var act = () => AggregateRunner.ServerBaselineAsync(transport, "c01", generated, CancellationToken.None);
+
+        if (accepted)
+            (await act()).Should().Be(served);
+        else
+            await act.Should().ThrowAsync<InvalidDataException>().WithMessage("*did not load*");
+        transport.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_Freshness_Baseline_Where_Another_Group_Leads_Fails_Fast()
+    {
+        using var transport = new FixedAnswerTransport([new AggregateGroup("c99", 500)]);
+
+        await FluentActions.Awaiting(() => AggregateRunner.ServerBaselineAsync(transport, "c01", 100, CancellationToken.None))
+            .Should().ThrowAsync<InvalidDataException>();
+    }
+
+    private sealed class FixedAnswerTransport(IReadOnlyList<AggregateGroup> groups) : IYcsbTransport
+    {
+        public int Calls;
+        public string ProductName => "fake";
+        public bool ReportsWireBytes => false;
+        public string RecordedEndpoint => "stub";
+
+        public Task<TransportResult> ExecuteAsync(OperationBase op, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Calls);
+            return Task.FromResult(new TransportResult(0, 0, indexName: "idx", resultCount: groups.Count, isStale: false) { Groups = groups });
+        }
+
+        public Task PutAsync<T>(string id, T document) => Task.CompletedTask;
+        public Task EnsureDatabaseExistsAsync(string databaseName) => Task.CompletedTask;
+        public Task<long> GetDocumentCountAsync(string idPrefix) => Task.FromResult(0L);
+        public Task<string> GetServerVersionAsync() => Task.FromResult("0");
+        public void Dispose() { }
     }
 
     [Theory]
@@ -275,6 +342,19 @@ public class AggregateRunTests
         var act = () => FixedRate.For(AggregateShapes.CountByCategory, 1.0);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*count-by-category*");
+    }
+
+    [Fact]
+    public void The_Probe_Source_Holds_Only_The_Ids_The_Step_Can_Issue()
+    {
+        var (documents, _, tracked) = SmallSet();
+        const int probes = 10;
+        var category = documents.ToDictionary(d => d.Id, d => d.Category);
+
+        var sources = UnderWriteSplit.ProbeSources(documents, tracked, probes);
+
+        sources.Should().HaveCount(probes, "the source holds no more documents than the step can probe");
+        sources.Should().OnlyHaveUniqueItems().And.OnlyContain(id => category[id] != tracked);
     }
 
     private sealed class RunFailed : Exception;
@@ -334,7 +414,7 @@ public class AggregateRunTests
         var (documents, counts, tracked) = SmallSet();
         const int writers = 8;
         var bulk = UnderWriteSplit.BulkWriters(documents, counts, tracked, writers, documentsPerWriter: 50, seed: 1);
-        using var probeSources = ((IEnumerable<AggregateDocument>)UnderWriteSplit.ProbeSources(documents, tracked, 400)).GetEnumerator();
+        using var probeSources = UnderWriteSplit.ProbeSources(documents, tracked, 400).GetEnumerator();
         var store = new ConcurrentDictionary<string, string>(documents.ToDictionary(d => d.Id, d => d.Category));
         long Count(string group) => store.Values.Count(c => c == group);
         var baseline = counts[tracked];
@@ -361,7 +441,7 @@ public class AggregateRunTests
             maxProbesInFlight = Math.Max(maxProbesInFlight, inFlight);
             probeSources.MoveNext().Should().BeTrue();
             await Task.Yield();
-            store[probeSources.Current.Id] = tracked;
+            store[probeSources.Current] = tracked;
             Interlocked.Decrement(ref probesInFlight);
             return true;
         }, _ =>

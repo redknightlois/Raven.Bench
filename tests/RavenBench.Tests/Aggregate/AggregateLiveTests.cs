@@ -148,6 +148,6 @@ public class AggregateLiveTests
         var failed = report.Pairs.Where(p => p.Agreed == false).ToList();
         failed.Should().NotBeEmpty();
         failed.Should().OnlyContain(p => p.Product == MongoYcsbTransport.MongoDbIndexedTarget && p.FirstDifference!.StartsWith($"{MongoYcsbTransport.MongoDbIndexedTarget} {p.Shape} position "));
-        (await edited.ListAggregateIndexNamesAsync(CancellationToken.None)).Should().BeEmpty("the check dropped what it wrote");
+        (await edited.ListAggregateIndexNamesAsync(CancellationToken.None)).Should().NotContain(edited.AggregateIndexNames, "the check removed the indexes it created");
     }
 }

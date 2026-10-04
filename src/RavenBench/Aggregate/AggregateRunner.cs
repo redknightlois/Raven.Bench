@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using Raven.Client.Documents;
 using Raven.Client.ServerWide;
 using Raven.Client.ServerWide.Operations;
 using RavenBench.Cli;
@@ -85,10 +86,15 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         using IYcsbTransport transport = isRavenDb
             ? new RawHttpTransport(url, database, CompressionMode.Identity, HttpVersion.Version11)
             : new MongoYcsbTransport(url, database, targetName);
-        bool createdDatabase = isRavenDb && await CreateRavenDatabaseAsync(url, database, ct);
+        using var ravenStore = isRavenDb ? HttpHelper.Create(url, database, HttpVersion.Version11) : null;
+        IAggregateStore store = ravenStore is null ? (MongoYcsbTransport)transport : new RavenAggregateStore(ravenStore);
+        bool createdDatabase = ravenStore is not null && await CreateRavenDatabaseAsync(ravenStore, database, ct);
+        AggregateFootprint? footprint = null;
 
-        return await RunCleanup.AfterAsync(settings.KeepData ? null : () => CleanupAsync(transport, url, database, createdDatabase), "Aggregate", async () =>
+        return await RunCleanup.AfterAsync(settings.KeepData ? null : () => CleanupAsync(ravenStore, database, createdDatabase, footprint), "Aggregate", async () =>
         {
+            footprint = await AggregateFootprint.BeforeLoadAsync(store, dataSet.Generate().Select(d => d.Id), ct);
+
             // build
             using var digest = new AggregateSetDigest(dataSet.Spec);
             var (buildStep, build) = await BuildAsync(transport, dataSet, digest, nodeExporter, nodeExporterFailure, nonStaleTimeout, ct);
@@ -134,14 +140,14 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             var queryRate = (int)Math.Round(scenario.UnderWriteQueryRate);
             var countWorkload = new AggregateQueryWorkload(() => Operation(AggregateShapes.CountByCategory));
             var quiet = await RampAsync(transport, countWorkload, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write-quiet", nodeExporter);
-            var tracker = new FreshnessTracker(tracked.Key, tracked.Value);
+            var tracker = new FreshnessTracker(tracked.Key, await ServerBaselineAsync(transport, tracked.Key, tracked.Value, ct));
             var (underWrite, writer, probe) = await UnderWriteAsync(transport, dataSet, digest.CategoryCounts, tracker, countWorkload, queryRate, database, warmup, duration, nodeExporter, ct);
             var underWriteSteps = quiet.Steps.Concat(underWrite.Steps).ToList();
             var freshness = tracker.Complete();
             var underWriteInfo = new AggregateUnderWriteInfo(scenario.UnderWriteQueryRate, QueryPolicy, quiet.Steps[^1].Throughput, quiet.Steps[^1].Raw.P99,
                 underWrite.Steps[^1].Throughput, underWrite.Steps[^1].Raw.P99, writer, WriteLatencyDefinition, freshness,
                 underWriteSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)), Answers(underWriteSteps), probe);
-            Console.WriteLine($"[Aggregate] under-write: bulk writers held {writer.HeldPerSecond:F0} of {writer.RequestedPerSecond:F0} updates/s{(writer.Shortfall is null ? "" : $" ({writer.Shortfall})")}; probe held {probe.HeldPerSecond:F0} of {probe.RequestedPerSecond:F0} updates/s; freshness observed {freshness.Observed}, unobserved {freshness.Unobserved}, p50 {freshness.Distribution.P50:F1} ms, p99 {freshness.Distribution.P99:F1} ms");
+            Console.WriteLine($"[Aggregate] under-write: bulk writers held {writer.HeldPerSecond:F0} of {writer.RequestedPerSecond:F0} updates/s{(writer.Shortfall is null ? "" : $" ({writer.Shortfall})")}; probe held {probe.HeldPerSecond:F0} of {probe.RequestedPerSecond:F0} updates/s over {probe.Acknowledged} probe writes, stopped because {probe.StopReason}; freshness observed {freshness.Observed}, unobserved {freshness.Unobserved}, p50 {freshness.Distribution.P50:F1} ms, p99 {freshness.Distribution.P99:F1} ms");
 
             var durability = isRavenDb
                 ? new DurabilityParity { Setting = "durability", Value = "ravendb-default" }
@@ -275,10 +281,9 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         // Each writer owns about as many documents as its share of the step's updates.
         var documentsPerWriter = (long)Math.Ceiling(scenario.WriteRate * (warmup + duration).TotalSeconds / scenario.Writers);
         var bulkWriters = UnderWriteSplit.BulkWriters(dataSet.Generate(), categoryCounts, tracker.TrackedGroup, scenario.Writers, documentsPerWriter, SeedMixer.Derive(scenario.Seed, "under-write-bulk"));
-        // A step at the query rate needs one probe document per tick; the step may run past its window, so the probe keeps every document.
+        // A step at the query rate needs one probe document per tick; a step that runs past its window stops the probe when they are used up.
         var probeSources = UnderWriteSplit.ProbeSources(dataSet.Generate(), tracker.TrackedGroup, (long)Math.Ceiling(queryRate * (warmup + duration).TotalSeconds));
-        var probed = 0;
-        var probeAmounts = new Random(SeedMixer.Derive(scenario.Seed, "under-write"));
+        var probeWrite = UnderWriteSplit.ProbeWrite(probeSources, tracker.TrackedGroup, SeedMixer.Derive(scenario.Seed, "under-write"), (op, token) => UpdateAsync(transport, op, token));
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var writer = Task.Run(() => PacedWriter.RunAsync(scenario.WriteRate, scenario.Writers, async (w, token) =>
@@ -286,14 +291,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             await UpdateAsync(transport, bulkWriters[w].Next(), token);
             return true;
         }, _ => { }, stop.Token), CancellationToken.None);
-        var probe = Task.Run(() => PacedWriter.RunAsync(queryRate, 1, async (_, token) =>
-        {
-            if (probed == probeSources.Length)
-                throw new InvalidOperationException($"No document outside the tracked group '{tracker.TrackedGroup}' is left for the probe; raise documentCount or shorten the step.");
-            var op = new AggregateUpdateOperation { Id = probeSources[probed++].Id, Category = tracker.TrackedGroup, Amount = probeAmounts.NextInt64(1, AggregateDataSet.MaxAmount + 1) };
-            await UpdateAsync(transport, op, token);
-            return true;
-        }, tracker.Acknowledged, stop.Token), CancellationToken.None);
+        var probe = Task.Run(() => PacedWriter.RunAsync(queryRate, 1, probeWrite, tracker.Acknowledged, stop.Token), CancellationToken.None);
 
         var ramp = await AlongsideAsync(RampAsync(new FreshnessRecordingTransport(transport, tracker), workload, database, LoadShape.Rate, queryRate, scenario.Concurrency, warmup, duration, "under-write", nodeExporter),
             stop, writer, probe);
@@ -329,6 +327,21 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         }
     }
 
+    /// <summary>The freshness baseline: the server's count for the tracked group before the first probe write.</summary>
+    /// <exception cref="InvalidDataException">The answer is stale, or its tracked count is not the generated count, so the collection holds documents this run did not load.</exception>
+    internal static async Task<long> ServerBaselineAsync(IYcsbTransport transport, string trackedGroup, long generated, CancellationToken ct)
+    {
+        var result = await transport.ExecuteAsync(AggregateShapes.Create(AggregateShapes.CountByCategory, 1), ct);
+        if (result.IsSuccess == false)
+            throw new InvalidOperationException($"The freshness baseline query failed: {result.ErrorDetails}");
+        if (result.IsStale == true)
+            throw new InvalidDataException("The freshness baseline answer is stale; the server has not indexed the loaded set.");
+        var served = (result.Groups ?? []).Where(g => AggregateOrdering.KeyComparer.Equals(g.Key, trackedGroup)).Select(g => (long?)g.Value).FirstOrDefault();
+        if (served != generated)
+            throw new InvalidDataException($"The server's first group is not the tracked group '{trackedGroup}' with the {generated} generated documents (served: {served?.ToString(CultureInfo.InvariantCulture) ?? "absent"}); the collection holds documents this run did not load.");
+        return generated;
+    }
+
     private static async Task UpdateAsync(IYcsbTransport transport, AggregateUpdateOperation op, CancellationToken token)
     {
         var result = await transport.ExecuteAsync(op, token);
@@ -361,9 +374,8 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
         File.WriteAllText(path, JsonSerializer.Serialize(summary));
     }
 
-    private static async Task<bool> CreateRavenDatabaseAsync(string url, string database, CancellationToken ct)
+    private static async Task<bool> CreateRavenDatabaseAsync(IDocumentStore store, string database, CancellationToken ct)
     {
-        using var store = HttpHelper.Create(url, database, HttpVersion.Version11);
         if (await store.Maintenance.Server.SendAsync(new GetDatabaseRecordOperation(database), ct) is not null)
             return false;
         await store.Maintenance.Server.SendAsync(new CreateDatabaseOperation(new DatabaseRecord(database)), ct);
@@ -373,17 +385,16 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
     /// <summary>A busy server confirms a committed delete later than the client default wait.</summary>
     private static readonly TimeSpan DeleteConfirmationWait = TimeSpan.FromMinutes(2);
 
-    private static async Task CleanupAsync(IYcsbTransport transport, string url, string database, bool createdDatabase)
+    /// <summary>Removes what the run created: the database when the run created it, else the documents it loaded and the indexes it created.</summary>
+    private static async Task CleanupAsync(IDocumentStore? ravenStore, string database, bool createdDatabase, AggregateFootprint? footprint)
     {
-        if (transport is MongoYcsbTransport mongo)
+        if (createdDatabase)
         {
-            await mongo.DropAggregateCollectionAsync(CancellationToken.None);
+            await ravenStore!.Maintenance.Server.SendAsync(new DeleteDatabasesOperation(database, hardDelete: true, timeToWaitForConfirmation: DeleteConfirmationWait));
             return;
         }
-        if (createdDatabase == false)
-            return;
-        using var store = HttpHelper.Create(url, database, HttpVersion.Version11);
-        await store.Maintenance.Server.SendAsync(new DeleteDatabasesOperation(database, hardDelete: true, timeToWaitForConfirmation: DeleteConfirmationWait));
+        if (footprint is not null)
+            await footprint.RemoveAsync(CancellationToken.None);
     }
 
     /// <summary>An endpoint that does not answer leaves the server figures unavailable with its reason, rather than failing the run.</summary>

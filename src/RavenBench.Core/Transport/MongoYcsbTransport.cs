@@ -15,7 +15,7 @@ namespace RavenBench.Core.Transport;
 /// alone, because neither product exposes SNMP, a license type or a RavenDB calibration endpoint,
 /// and the driver hides the socket, so byte counts are not wire-accurate.
 /// </summary>
-public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, IInspectsStoredDocuments
+public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, IInspectsStoredDocuments, IAggregateStore
 {
     /// <summary>Scenario target name for MongoDB Community.</summary>
     public const string MongoDbTarget = "mongodb";
@@ -334,7 +334,7 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
     /// then <c>$sort</c> by value descending and key ascending in binary order, and <c>$limit</c>.
     /// Binary string order is the shared ordinal tie break, so the server cut is the shared cut.
     /// </summary>
-    private static BsonDocument[] AggregatePipeline(GroupedAggregateOperation op)
+    internal static BsonDocument[] AggregatePipeline(GroupedAggregateOperation op)
     {
         op.Validate();
         var stages = new List<BsonDocument>(5);
@@ -380,6 +380,33 @@ public sealed class MongoYcsbTransport : IYcsbTransport, IReportsStorageSize, II
         using var cursor = await _aggregates.Indexes.ListAsync(ct).ConfigureAwait(false);
         return (await cursor.ToListAsync(ct).ConfigureAwait(false)).Select(i => i["name"].AsString).ToList();
     }
+
+    public IReadOnlyList<string> AggregateIndexNames => Target == MongoDbIndexedTarget
+        ? AggregateShapes.MongoIndexes().Select(spec => spec.GetProperty("name").GetString()!).ToList()
+        : [];
+
+    public async Task<IReadOnlyCollection<string>> ExistingIdsAsync(IReadOnlyList<string> ids, CancellationToken ct)
+    {
+        var found = await _aggregates.Find(Builders<BsonDocument>.Filter.In("_id", ids)).Project(Builders<BsonDocument>.Projection.Include("_id")).ToListAsync(ct).ConfigureAwait(false);
+        return found.Select(d => d["_id"].AsString).ToList();
+    }
+
+    /// <summary>The names of every index on the aggregate collection; a missing collection has none.</summary>
+    public async Task<IReadOnlyCollection<string>> IndexNamesAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await ListAggregateIndexNamesAsync(ct).ConfigureAwait(false);
+        }
+        catch (MongoCommandException ex) when (ex.CodeName == "NamespaceNotFound" || ex.Code == 26)
+        {
+            return [];
+        }
+    }
+
+    public Task DeleteAsync(IReadOnlyList<string> ids, CancellationToken ct) => _aggregates.DeleteManyAsync(Builders<BsonDocument>.Filter.In("_id", ids), ct);
+
+    public Task DeleteIndexAsync(string name, CancellationToken ct) => _aggregates.Indexes.DropOneAsync(name, ct);
 
     /// <summary>Drops the aggregate collection and its indexes; dropping a missing collection succeeds.</summary>
     public Task DropAggregateCollectionAsync(CancellationToken ct) => _database.DropCollectionAsync(AggregateDocument.MongoCollection, ct);
