@@ -57,9 +57,9 @@ public static class StackOverflowUsersWorkloadHelper
         int sampleSize = WorkloadMetadataCache.DefaultSampleSize)
     {
         return WorkloadMetadataCache.DiscoverOrLoadAsync(
-            serverUrl, databaseName, MetadataDocId,
+            serverUrl, databaseName, WorkloadMetadataCache.DocumentId(MetadataDocId, seed, sampleSize, maxUserId),
             cached => cached.SampleNames.Length > 0,
-            cached => Console.WriteLine($"[Workload] Using cached Users metadata: {cached.SampleNames.Length} sampled names"),
+            cached => Console.WriteLine($"[Workload] Using cached Users metadata sampled with seed {seed}: {cached.SampleNames.Length} sampled names"),
             async store =>
             {
                 Console.WriteLine("[Workload] Discovering Users names and reputation histogram by sampling database...");

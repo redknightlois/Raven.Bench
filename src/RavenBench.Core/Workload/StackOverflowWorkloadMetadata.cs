@@ -59,11 +59,11 @@ public static class StackOverflowWorkloadHelper
         int sampleSize = WorkloadMetadataCache.DefaultSampleSize)
     {
         return WorkloadMetadataCache.DiscoverOrLoadAsync(
-            serverUrl, databaseName, MetadataDocId,
+            serverUrl, databaseName, WorkloadMetadataCache.DocumentId(MetadataDocId, seed, sampleSize, maxQuestionId, maxUserId),
             cached => cached.QuestionIds.Length > 0 && cached.UserIds.Length > 0 &&
                 cached.TitlePrefixes.Length > 0 && (cached.SearchTermsRare.Length > 0 || cached.SearchTermsCommon.Length > 0) &&
                 cached.Tags.Length > 0,
-            cached => Console.WriteLine($"[Workload] Using cached StackOverflow metadata: {cached.QuestionIds.Length} questions, {cached.UserIds.Length} users, {cached.TitlePrefixes.Length} prefixes, {cached.SearchTermsRare.Length + cached.SearchTermsCommon.Length} search terms, {cached.Tags.Length} tags"),
+            cached => Console.WriteLine($"[Workload] Using cached StackOverflow metadata sampled with seed {seed}: {cached.QuestionIds.Length} questions, {cached.UserIds.Length} users, {cached.TitlePrefixes.Length} prefixes, {cached.SearchTermsRare.Length + cached.SearchTermsCommon.Length} search terms, {cached.Tags.Length} tags"),
             async store =>
             {
                 Console.WriteLine("[Workload] Discovering StackOverflow document IDs and text search terms by sampling database...");
