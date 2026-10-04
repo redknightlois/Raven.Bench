@@ -13,6 +13,10 @@ internal static class DatasetImportCoordinator
     internal static async Task<string> ImportDatasetAsync(RunOptions opts)
     {
         Console.WriteLine($"[Raven.Bench] Dataset import requested: {opts.Dataset}");
+        var known = Dataset.KnownDatasets.GetByName(opts.Dataset ?? "")
+            ?? throw new ArgumentException($"Unknown dataset: {opts.Dataset}. Supported: stackoverflow, clinicalwords100d, clinicalwords300d, clinicalwords600d, sphere, or a published vector set.");
+        if (opts.DatasetSize < 0)
+            throw new ArgumentOutOfRangeException(nameof(opts.DatasetSize), opts.DatasetSize, "--dataset-size must be 0 (the full dataset) or a positive post dump count.");
 
         using var datasetManager = new Dataset.DatasetManager(opts.DatasetCacheDir);
 
@@ -44,7 +48,7 @@ internal static class DatasetImportCoordinator
             }
         }
 
-        Dataset.DatasetInfo? dataset;
+        Dataset.DatasetInfo dataset;
         if (datasetSize > 0)
         {
             Console.WriteLine($"[Raven.Bench] Importing partial dataset with {datasetSize} post dump files to '{targetDatabase}'");
@@ -53,12 +57,7 @@ internal static class DatasetImportCoordinator
         else
         {
             Console.WriteLine($"[Raven.Bench] Importing full dataset to '{targetDatabase}'");
-            dataset = Dataset.KnownDatasets.GetByName(opts.Dataset!);
-        }
-
-        if (dataset == null)
-        {
-            throw new ArgumentException($"Unknown dataset: {opts.Dataset}. Supported: stackoverflow, clinicalwords100d, clinicalwords300d, clinicalwords600d");
+            dataset = known;
         }
 
         await datasetManager.ImportDatasetAsync(dataset, opts.Url, targetDatabase, opts.HttpVersion);
