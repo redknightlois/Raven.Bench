@@ -18,11 +18,11 @@ public sealed class DatasetManager : IDisposable
     private readonly string _cacheDir;
     private readonly HttpClient _httpClient;
 
-    public DatasetManager(string? cacheDir = null)
+    public DatasetManager(string? cacheDir = null, HttpMessageHandler? handler = null)
     {
         _cacheDir = cacheDir ?? Path.Combine(Path.GetTempPath(), "RavenBench", "datasets");
         Directory.CreateDirectory(_cacheDir);
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromHours(2) };
+        _httpClient = new HttpClient(handler ?? new HttpClientHandler()) { Timeout = TimeSpan.FromHours(2) };
     }
 
     public void Dispose()
@@ -31,7 +31,8 @@ public sealed class DatasetManager : IDisposable
     }
 
     /// <summary>
-    /// Downloads a dataset file if not already cached.
+    /// Downloads a dataset file if not already cached. When the file pins a SHA-256, the cached file and a fresh download
+    /// are both verified against it, and a mismatch throws <see cref="Vectors.DatasetChecksumException"/>.
     /// </summary>
     public async Task<string> DownloadAsync(DatasetFile file, IProgress<double>? progress = null, CancellationToken ct = default)
     {
@@ -39,6 +40,8 @@ public sealed class DatasetManager : IDisposable
 
         if (File.Exists(localPath))
         {
+            if (file.Sha256 != null)
+                await Vectors.PinnedFiles.VerifyAsync("dataset cache", file.FileName, file.Sha256, localPath, ct);
             Console.WriteLine($"[Dataset] Using cached {file.FileName}");
             return localPath;
         }
@@ -53,7 +56,8 @@ public sealed class DatasetManager : IDisposable
         var downloadedBytes = 0L;
 
         await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        var tempPath = localPath + ".downloading";
+        // Unique per writer, so two downloads never write one temporary file.
+        var tempPath = $"{localPath}.{Guid.NewGuid():N}.downloading";
         await using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, useAsync: true))
         {
             var buffer = new byte[8192];
@@ -75,7 +79,19 @@ public sealed class DatasetManager : IDisposable
             }
         }
 
-        File.Move(tempPath, localPath);
+        if (file.Sha256 != null)
+        {
+            try
+            {
+                await Vectors.PinnedFiles.VerifyAsync("dataset download", file.FileName, file.Sha256, tempPath, ct);
+            }
+            catch
+            {
+                File.Delete(tempPath);
+                throw;
+            }
+        }
+        File.Move(tempPath, localPath, overwrite: true);
         Console.WriteLine($"[Dataset] Download complete: {file.FileName}");
         return localPath;
     }
