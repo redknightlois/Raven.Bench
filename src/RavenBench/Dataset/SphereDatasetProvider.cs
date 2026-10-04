@@ -165,8 +165,7 @@ public sealed class SphereDatasetProvider : HeldOutVectorDataset
         }
 
 
-        // The expected count includes the held-out query record itself.
-        var documentsExist = await HeldOutManifest.EnsureMatchesAsync(store, files, selection, TargetDocCount - selection.Count + 1);
+        var documentsExist = await HeldOutManifest.EnsureMatchesAsync(store, files, selection, CollectionName, TargetDocCount - selection.Count);
 
         var importSw = Stopwatch.StartNew();
         long totalImported = 0;
@@ -187,41 +186,41 @@ public sealed class SphereDatasetProvider : HeldOutVectorDataset
 
             long position = 0;
             var rateSw = Stopwatch.StartNew();
-            string? lastSha = null;
 
-            using (var bulkInsert = store.BulkInsert())
+            async IAsyncEnumerable<(SphereJsonLine Line, long Next)> Passages()
             {
                 await foreach (var line in StreamJsonLinesAsync(file, ct))
                 {
                     if (position >= TargetDocCount)
-                        break;
+                        yield break;
                     var linePosition = position++;
                     if (linePosition < skipLines || heldOut.Contains(linePosition))
                         continue;
+                    yield return (line, position);
+                }
+            }
 
-                    var doc = new Passage(line.Raw, line.Sha, line.Title, line.Url);
+            await ImportInSegmentsAsync(Passages(), CheckpointInterval, () => store.BulkInsert(),
+                async (bulkInsert, item) =>
+                {
+                    var line = item.Line;
                     var docId = DocumentIdPrefix + BaseId(line);
-                    await bulkInsert.StoreAsync(doc, docId);
+                    await bulkInsert.StoreAsync(new Passage(line.Raw, line.Sha, line.Title, line.Url), docId);
 
                     // Store vector as binary attachment (768D × 4 bytes = 3072 bytes)
                     var vectorBytes = new byte[line.Vector.Length * sizeof(float)];
                     Buffer.BlockCopy(line.Vector, 0, vectorBytes, 0, vectorBytes.Length);
                     using var vectorStream = new MemoryStream(vectorBytes);
                     bulkInsert.AttachmentsFor(docId).Store("vector", vectorStream);
-                    totalImported++;
-                    lastSha = line.Sha;
 
-                    if (totalImported % ProgressInterval == 0)
+                    if (++totalImported % ProgressInterval == 0)
                     {
                         var docsPerSec = totalImported / rateSw.Elapsed.TotalSeconds;
                         var pct = (double)position / TargetDocCount * 100;
                         Console.Write($"\r[Sphere] Imported {totalImported:N0} ({pct:F1}%, {docsPerSec:N0} docs/sec)");
                     }
-
-                    if (totalImported % CheckpointInterval == 0)
-                        await StoreCheckpointAsync(store, position, lastSha);
-                }
-            }
+                },
+                item => StoreCheckpointAsync(store, item.Next, item.Line.Sha));
 
             Console.WriteLine($"\n[Sphere] Import complete: {totalImported:N0} documents in {importSw.Elapsed}");
 
@@ -365,6 +364,36 @@ public sealed class SphereDatasetProvider : HeldOutVectorDataset
 
         await VectorIndexHelper.CreateAndWaitForIndexAsync(store, index, "[Sphere]");
         Console.WriteLine($"[Sphere] Index '{index.Name}' is ready");
+    }
+
+    /// <summary>
+    /// Writes the items through a writer opened per segment of <paramref name="segmentSize"/> items. Each segment's writer
+    /// is disposed, which commits a bulk insert, before the checkpoint of its last item is stored.
+    /// </summary>
+    internal static async Task ImportInSegmentsAsync<T, TWriter>(IAsyncEnumerable<T> items, int segmentSize, Func<TWriter> open, Func<TWriter, T, Task> write, Func<T, Task> checkpoint)
+        where TWriter : class, IAsyncDisposable
+    {
+        long written = 0;
+        TWriter? writer = open();
+        try
+        {
+            await foreach (var item in items)
+            {
+                await write(writer!, item);
+                if (++written % segmentSize != 0)
+                    continue;
+                var segment = writer!;
+                writer = null;
+                await segment.DisposeAsync();
+                await checkpoint(item);
+                writer = open();
+            }
+        }
+        finally
+        {
+            if (writer != null)
+                await writer.DisposeAsync();
+        }
     }
 
     // --- Checkpoint management ---

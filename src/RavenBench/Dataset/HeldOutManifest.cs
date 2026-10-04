@@ -22,10 +22,11 @@ internal static class HeldOutManifest
     }
 
     /// <summary>
-    /// True when the database already holds at least <paramref name="expectedDocuments"/> documents loaded under
-    /// this record. Throws when it holds documents loaded under another record or under none at all.
+    /// True when <paramref name="collection"/> already holds at least <paramref name="expectedDocuments"/> documents
+    /// loaded under this record; the record and any checkpoint live outside that collection and never count.
+    /// Throws when the database holds documents loaded under another record or under none at all.
     /// </summary>
-    public static async Task<bool> EnsureMatchesAsync(IDocumentStore store, VerifiedFiles files, QuerySelection? selection, long expectedDocuments)
+    public static async Task<bool> EnsureMatchesAsync(IDocumentStore store, VerifiedFiles files, QuerySelection? selection, string collection, long expectedDocuments)
     {
         var stats = await store.Maintenance.SendAsync(new GetStatisticsOperation());
         using var session = store.OpenAsyncSession();
@@ -43,7 +44,8 @@ internal static class HeldOutManifest
             throw new InvalidOperationException(
                 $"Database '{store.Database}' was loaded from set '{manifest.Set}' ({manifest.Files}) holding out {manifest.Count ?? 0} queries with seed {manifest.Seed}; this run loads '{files.SetName}' ({files.Fingerprint}) holding out {selection?.Count ?? 0} with seed {selection?.Seed}. Drop it or use the same set and selection.");
 
-        return stats.CountOfDocuments >= expectedDocuments;
+        var collections = await store.Maintenance.SendAsync(new GetCollectionStatisticsOperation());
+        return collections.Collections.GetValueOrDefault(collection) >= expectedDocuments;
     }
 
     /// <summary>
@@ -52,7 +54,7 @@ internal static class HeldOutManifest
     /// </summary>
     public static async Task EnsureLoadedAsync(IDocumentStore store, VerifiedFiles files, QuerySelection? selection)
     {
-        if (await EnsureMatchesAsync(store, files, selection, expectedDocuments: 0) == false)
+        if (await EnsureMatchesAsync(store, files, selection, collection: "", expectedDocuments: 0) == false)
             throw new InvalidOperationException($"Database '{store.Database}' holds no load of set '{files.SetName}' ({files.Fingerprint}); load it before measuring recall.");
     }
 
