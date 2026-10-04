@@ -1,8 +1,14 @@
 using System;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using RavenBench.Core;
 using RavenBench.Core.Transport;
+using RavenBench.Core.Workload;
 using Xunit;
 
 namespace RavenBench.Tests.Transport;
@@ -24,5 +30,66 @@ public class TransportOutcomeTests
         live.IsSuccess.Should().BeFalse();
         cancelled.Cancelled.Should().BeTrue();
         cancelled.IsSuccess.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:1", CompressionMode.Identity, "1.1")]
+    [InlineData("https://127.0.0.1:1", CompressionMode.Identity, "1.1")]
+    [InlineData("http://127.0.0.1:1", CompressionMode.Zstd, "1.1")]
+    [InlineData("http://127.0.0.1:1", CompressionMode.Identity, "2")]
+    [InlineData("http://127.0.0.1:1", CompressionMode.Gzip, "1.1")]
+    public void Only_The_Socket_Path_Reports_Wire_Bytes(string url, CompressionMode compression, string httpVersion)
+    {
+        using var transport = new RawHttpTransport(url, "db", compression, HttpHelper.ParseHttpVersion(httpVersion));
+
+        transport.ReportsWireBytes.Should().Be(transport.TransportPath == RawHttpTransport.SocketPath);
+    }
+
+    [Fact]
+    public async Task Every_Pipelined_Sibling_Is_Cancelled_When_The_Run_Token_Cancels()
+    {
+        const int depth = 4;
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            using var transport = new RawHttpTransport($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}", "db",
+                CompressionMode.Identity, HttpVersion.Version11, pipelineDepth: depth);
+            using var cts = new CancellationTokenSource();
+            var allSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var serverDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server = Task.Run(async () =>
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                var stream = client.GetStream();
+                var seen = new StringBuilder();
+                var buffer = new byte[4096];
+                while (seen.ToString().Split("\r\n\r\n").Length - 1 < depth)
+                {
+                    var n = await stream.ReadAsync(buffer);
+                    if (n == 0)
+                        break;
+                    seen.Append(Encoding.ASCII.GetString(buffer, 0, n));
+                }
+                allSent.SetResult();
+                // Never answers: the client connection stays open until the test ends.
+                await serverDone.Task;
+            });
+
+            var requests = Enumerable.Range(0, depth).Select(i => transport.ExecuteAsync(new ReadOperation { Id = $"d/{i}" }, cts.Token)).ToArray();
+            await allSent.Task;
+            cts.Cancel();
+            var results = await Task.WhenAll(requests);
+            serverDone.SetResult();
+            await server;
+
+            results.Should().OnlyContain(r => r.Cancelled, "a sibling cancelled on a shared connection is still a cancellation, not an error");
+            transport.OpenedSocketConnections.Should().Be(1);
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 }

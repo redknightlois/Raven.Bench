@@ -70,8 +70,8 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     /// <summary>Requests one connection carries before it reads their responses; 1 sends the next request only after the previous response.</summary>
     public int PipelineDepth { get; }
 
-    // Wire-accurate only without transparent decompression; gzip/brotli/deflate are measured post-inflate.
-    public bool ReportsWireBytes => _compression is CompressionMode.Identity or CompressionMode.Zstd;
+    // Only the socket path counts status line, headers and framing; HttpClient exposes the body alone.
+    public bool ReportsWireBytes => _socketPool != null;
 
     /// <summary>A vector search returns only each hit's id and metadata, not the stored document.</summary>
     public bool VectorSearchIdsOnly { get; init; }
@@ -386,7 +386,8 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
                 response = await exchange.Response.ConfigureAwait(false);
             }
 
-            if (response.Cancelled)
+            // A sibling's cancellation fails the shared connection, so every request that sees a cancelled run token is cancelled.
+            if (response.Cancelled || (response.Failure != null && ct.IsCancellationRequested))
             {
                 // The response is still due on this connection, so it cannot carry another request within its depth.
                 connection.Fail("A request on this connection was cancelled.");
