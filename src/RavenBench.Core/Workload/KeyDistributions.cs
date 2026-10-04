@@ -45,17 +45,26 @@ public sealed class UniformDistribution : IKeyDistribution
 }
 
 /// <summary>
-/// Bounded Zipfian distribution (Gray et al., YCSB-style); key 1 is the hottest.
+/// Bounded Zipfian distribution (Gray et al., YCSB-style) over popularity ranks, with each rank
+/// mapped to a key by a fixed permutation of 1..n. The hottest keys are therefore spread over the
+/// keyspace instead of packed onto ids 1, 2, 3, and the k-th hottest key keeps the k-th rank's frequency.
 /// </summary>
 public sealed class ZipfianDistribution : IKeyDistribution
 {
+    // A prime above int.MaxValue is coprime to every keyspace size, so rank * Spread mod n is a bijection of 1..n.
+    private const long Spread = 2_654_435_761;
+
     private readonly double _theta;
     private readonly double _zeta2;
     private readonly object _sync = new();
 
-    // Zeta cache extends incrementally as the keyspace grows: O(1) amortized per sample.
+    // Zeta of the last keyspace size, moved term by term to the next size in either direction,
+    // so a keyspace that changes by a few keys costs a few terms.
     private long _zetaN;
     private double _zetan;
+
+    /// <summary>Zeta terms added or removed so far.</summary>
+    internal long ZetaTermsComputed { get; private set; }
 
     public ZipfianDistribution(double theta = 0.99)
     {
@@ -67,6 +76,11 @@ public sealed class ZipfianDistribution : IKeyDistribution
     {
         if (maxKeyInclusive <= 1) return 1;
         int n = Math.Min(maxKeyInclusive, int.MaxValue - 1);
+        return (int)(NextRank(rng, n) * Spread % n) + 1;
+    }
+
+    private long NextRank(Random rng, int n)
+    {
         double zetan = GetZetan(n);
 
         double alpha = 1.0 / (1.0 - _theta);
@@ -77,23 +91,22 @@ public sealed class ZipfianDistribution : IKeyDistribution
         if (uz < 1.0) return 1;
         if (uz < _zeta2) return 2;
 
-        int key = 1 + (int)(n * Math.Pow(eta * u - eta + 1.0, alpha));
-        return Math.Clamp(key, 1, n);
+        int rank = 1 + (int)(n * Math.Pow(eta * u - eta + 1.0, alpha));
+        return Math.Clamp(rank, 1, n);
     }
 
     private double GetZetan(long n)
     {
         lock (_sync)
         {
-            if (n < _zetaN)
-            {
-                _zetaN = 0;
-                _zetan = 0.0;
-            }
+            // Re-summing from zero is cheaper than walking down more terms than the new size holds.
+            if (_zetaN - n > n)
+                (_zetaN, _zetan) = (0, 0.0);
 
-            for (long i = _zetaN + 1; i <= n; i++)
-                _zetan += 1.0 / Math.Pow(i, _theta);
-            _zetaN = n;
+            for (; _zetaN < n; _zetaN++, ZetaTermsComputed++)
+                _zetan += 1.0 / Math.Pow(_zetaN + 1, _theta);
+            for (; _zetaN > n; _zetaN--, ZetaTermsComputed++)
+                _zetan -= 1.0 / Math.Pow(_zetaN, _theta);
             return _zetan;
         }
     }
