@@ -143,7 +143,7 @@ public sealed class YcsbRunner
             {
                 YcsbRunKind.Load => new BulkWriteWorkload(docSizeBytes, opts.BulkBatchSize, runSeed, _scenario.DocumentCount, startingKey: 0, payload: payloadKind),
                 YcsbRunKind.InsertStream => new WriteWorkload(docSizeBytes, runSeed, startingKey: nextInsertKey, payload: payloadKind),
-                _ => new MixedProfileWorkload(YcsbRunKinds.MixFor(identity.Kind), ToKeyDistribution(distributionKind), docSizeBytes, runSeed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind)
+                _ => new MixedProfileWorkload(YcsbRunKinds.MixFor(identity.Kind), KeyDistributions.Create(distributionKind), docSizeBytes, runSeed, initialKeyspace: _scenario.DocumentCount, payload: payloadKind)
             };
 
             var executor = new BenchmarkExecutor(opts, transport, workload, cpuTracker, serverTracker, identity.ResultName, nodeExporter);
@@ -498,12 +498,4 @@ public sealed class YcsbRunner
 
     private static string RequiredString(string? value, string optionName) =>
         string.IsNullOrWhiteSpace(value) ? throw new ArgumentException($"{optionName} is required") : value;
-
-    private static IKeyDistribution ToKeyDistribution(KeyDistributionKind kind) => kind switch
-    {
-        KeyDistributionKind.Uniform => new UniformDistribution(),
-        KeyDistributionKind.Zipfian => new ZipfianDistribution(),
-        KeyDistributionKind.Latest => new LatestDistribution(),
-        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
-    };
 }

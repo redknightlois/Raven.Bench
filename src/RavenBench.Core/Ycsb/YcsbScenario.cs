@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RavenBench.Core.Workload;
 
 namespace RavenBench.Core.Ycsb;
 
@@ -109,20 +110,25 @@ public sealed record YcsbScenario
             }
         }
 
+        RequireDistribution(nameof(Distribution), Distribution);
+
         if (Distributions != null)
         {
             if (Distributions.Length == 0)
                 throw new YcsbScenarioException("Scenario key 'Distributions' is empty; name at least one distribution or leave the key out.");
 
             foreach (var distribution in Distributions)
-            {
-                if (Enum.TryParse<KeyDistributionKind>(distribution, ignoreCase: true, out _) == false)
-                    throw new YcsbScenarioException($"Scenario key 'Distributions' holds '{distribution}'; valid distributions are uniform, zipfian and latest.");
-            }
+                RequireDistribution(nameof(Distributions), distribution);
         }
 
         if (Repetitions is < 1)
             throw new YcsbScenarioException($"Scenario key 'Repetitions' is '{Repetitions}'; a row repeats at least once.");
+    }
+
+    private static void RequireDistribution(string key, string distribution)
+    {
+        if (KeyDistributions.TryParse(distribution, out _) == false)
+            throw new YcsbScenarioException($"Scenario key '{key}' holds '{distribution}'; valid distributions are {KeyDistributions.ValidNames}.");
     }
 
     private static readonly JsonSerializerOptions ReadOptions = new()
