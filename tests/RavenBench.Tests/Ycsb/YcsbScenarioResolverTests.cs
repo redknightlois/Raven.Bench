@@ -130,6 +130,19 @@ public class YcsbScenarioResolverTests
     }
 
     [Fact]
+    public void An_Explicit_Distribution_Replaces_The_Files_Distributions()
+    {
+        var scenario = Scenario with { Distributions = new[] { "uniform", "latest" } };
+        var settings = new YcsbSettings { Url = "http://localhost:8081", Database = "ycsb", Scenario = "scenario.json", Distribution = "zipfian" };
+
+        var resolved = YcsbScenarioResolver.Resolve(scenario, settings, new[] { "ycsb", "--distribution", "zipfian" });
+
+        resolved.ResolvedDistributions.Should().Equal("zipfian");
+        resolved.Distributions.Should().BeNull("a distribution override replaces both spellings the file may carry");
+        YcsbRunPlan.Build(resolved).Should().OnlyContain(run => run.Distribution == "zipfian");
+    }
+
+    [Fact]
     public void An_Empty_Rates_Override_Means_No_Fixed_Rate_Run()
     {
         var scenario = Scenario with { Rate = 700 };

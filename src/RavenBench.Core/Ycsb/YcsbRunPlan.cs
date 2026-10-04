@@ -28,18 +28,13 @@ public sealed record YcsbRunIdentity
     /// The name that tells this run's result file and histogram artifacts from every other run's
     /// of the same invocation. It carries the whole identity, because the run kind alone repeats.
     /// </summary>
-    public string ResultName
-    {
-        get
-        {
-            // A rate run is named by its rate, which already says the shape.
-            var shape = Rate.HasValue
-                ? "rate" + Rate.Value.ToString("0.###", CultureInfo.InvariantCulture)
-                : ShapeName;
+    public string ResultName =>
+        $"{Kind.ToResultName()}-{(Rate.HasValue ? RateName(Rate.Value) : ShapeName)}-{DistributionName(Distribution)}-rep{Repetition}";
 
-            return $"{Kind.ToResultName()}-{shape}-{Distribution.ToLowerInvariant()}-rep{Repetition}";
-        }
-    }
+    /// <summary>A rate run is named by its rate, which already says the shape.</summary>
+    internal static string RateName(double rate) => "rate" + rate.ToString("0.###", CultureInfo.InvariantCulture);
+
+    internal static string DistributionName(string distribution) => distribution.ToLowerInvariant();
 }
 
 /// <summary>

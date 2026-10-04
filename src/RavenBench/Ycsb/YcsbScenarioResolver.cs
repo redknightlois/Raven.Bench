@@ -18,6 +18,9 @@ internal static class YcsbScenarioResolver
 
     public static YcsbScenario Resolve(YcsbScenario scenario, YcsbSettings settings, string[] commandLineArgs)
     {
+        var distributions = settings.Distributions == null ? null : SplitList(settings.Distributions);
+        var distributionIsExplicit = IsExplicit(commandLineArgs, "--distribution");
+
         var resolved = scenario with
         {
             Seed = IsExplicit(commandLineArgs, "--seed") ? settings.Seed : scenario.Seed,
@@ -25,14 +28,16 @@ internal static class YcsbScenarioResolver
             DocumentCount = settings.DocumentCount ?? scenario.DocumentCount,
             DocumentSize = IsExplicit(commandLineArgs, "--doc-size") ? settings.DocSize : scenario.DocumentSize,
             Concurrency = settings.Step ?? scenario.Concurrency,
-            Distribution = IsExplicit(commandLineArgs, "--distribution") ? settings.Distribution : scenario.Distribution,
+            // A distributions override, or else a distribution override, replaces both spellings the
+            // file may carry, so the resolved scenario never names a distribution no run uses.
+            Distribution = distributions?.FirstOrDefault() ?? (distributionIsExplicit ? settings.Distribution : scenario.Distribution),
             Warmup = IsExplicit(commandLineArgs, "--warmup") ? settings.Warmup : scenario.Warmup,
             Duration = IsExplicit(commandLineArgs, "--duration") ? settings.Duration : scenario.Duration,
             // A rates override replaces both spellings the file may carry, so the resolved scenario
             // never names Rate and Rates at once.
             Rate = settings.Rates == null ? scenario.Rate : null,
             Rates = settings.Rates == null ? scenario.Rates : ParseRates(settings.Rates),
-            Distributions = settings.Distributions == null ? scenario.Distributions : SplitList(settings.Distributions),
+            Distributions = distributions ?? (distributionIsExplicit ? null : scenario.Distributions),
             Repetitions = settings.Repetitions ?? scenario.Repetitions
         };
 
@@ -48,6 +53,9 @@ internal static class YcsbScenarioResolver
             ? rate
             : throw new YcsbScenarioException($"Option '--rates' holds '{part}', which is not a number.")).ToArray();
 
+    /// <summary>True when the command line sets the option in any form Spectre accepts: "--opt value", "--opt=value" or "--opt:value".</summary>
     internal static bool IsExplicit(string[] args, string optionName) =>
-        args.Any(a => a == optionName || a.StartsWith(optionName + "=", StringComparison.Ordinal));
+        args.Any(a => a == optionName
+            || a.StartsWith(optionName + "=", StringComparison.Ordinal)
+            || a.StartsWith(optionName + ":", StringComparison.Ordinal));
 }
