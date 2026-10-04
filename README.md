@@ -118,6 +118,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `uniform`: equal probability across existing keys.
   - `zipfian`: YCSB zipfian popularity (theta 0.99) over ranks, with each rank mapped to a key by a fixed permutation of the keyspace. The hottest keys are spread over the keyspace, not packed onto ids 1, 2, 3; the k-th hottest key keeps the k-th rank's frequency, and a seed reproduces the key stream.
   - `latest`: favors the most recently inserted portion of the keyspace.
+- The StackOverflow profiles cache their sampled ids in a metadata document keyed by the sampling inputs (seed, sample size, maximum ids), so a run with other inputs draws its own sample. An incomplete cached document is rediscovered and replaced.
 - The ycsb parity check deletes only the documents its own inserts created. A sample id that already holds a document fails the check and the document is left in place.
 
 - Profiles:
