@@ -65,13 +65,18 @@ This is the **root AGENTS.md** containing universal guidelines that apply to the
 - **SNMP Data Priority:** When conflicting or overlapping data sources exist (e.g., SNMP vs. other fallback metrics), prioritize SNMP information. SNMP data is generally considered more reliable for system-level metrics, and fallback methods should be treated as less reliable.
 
 ## Project Structure & Module Organization
-- `src/RavenBench/`: The main benchmark project.
+- `src/RavenBench.Core/`: The benchmark library.
+  - `Workload/`: Benchmark workloads and key distributions.
+  - `Transport/`: Database transports (RavenDB, PostgreSQL, MongoDB and others).
+  - `Metrics/`: Metrics collection, SNMP and server metrics.
+  - `Reporting/`: Result models and comparison checks.
+  - `Ycsb/`, `Vector/`, `Aggregate/`, `Diagnostics/`, `Util/`: Scenario models and shared helpers.
+- `src/RavenBench/`: The CLI.
   - `Cli/`: Command-line parsing and handling.
-  - `Workload/`: Defines different benchmark workloads.
-  - `Transport/`: Communication with RavenDB.
-  - `Metrics/`: Metrics collection and recording.
-  - `Reporting/`: Results reporting (e.g., CSV, JSON).
-- `tests/RavenBench.Tests/`: The test project for `RavenBench`.
+  - `Ycsb/`, `Vector/`, `Aggregate/`, `Dataset/`: Runners and dataset import.
+  - `Reporting/`: CSV and JSON result writers.
+- `src/RavenBench.Reporter/`: HTML reports and run comparison.
+- `tests/RavenBench.Tests/`: The test project for every project above.
 
 ## Build, Test, and Development Commands
 - Build the solution: `dotnet build RavenBench.sln`

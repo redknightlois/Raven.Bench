@@ -32,7 +32,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 
 **Getting Started**
 - Requirements
-  - .NET 8 SDK
+  - .NET 10 SDK (every project targets net10.0)
   - A reachable RavenDB server and database (dev or prod-like). Examples below use `http://localhost:8080` and database `ycsb`.
   - `dotnet build RavenBench.sln -c Release`
 
@@ -183,7 +183,9 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
 
 **Development**
 - Repo structure
-  - App: `src/RavenBench` (CLI in `Cli/`, runner in `BenchmarkRunner.cs`, transports in `Transport/`, metrics in `Metrics/`).
+  - Library: `src/RavenBench.Core` (load generators and `Workload/`, `Transport/`, `Metrics/`, `Reporting/`, `Ycsb/`, `Vector/`, `Aggregate/`, `Diagnostics/`, `Util/`).
+  - CLI: `src/RavenBench` (commands in `Cli/`, runner in `BenchmarkRunner.cs`, plus `Ycsb/`, `Vector/`, `Aggregate/`, `Dataset/`, `Analysis/`, `Reporting/`).
+  - Reporter: `src/RavenBench.Reporter` (HTML reports and run comparison).
   - Tests: `tests/RavenBench.Tests`.
 - Build and test
   - `dotnet build -c Release`
