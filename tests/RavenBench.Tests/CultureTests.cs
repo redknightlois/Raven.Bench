@@ -40,6 +40,16 @@ public class CultureTests
         Under("de-DE", () => ParseServerSample("3.231 GBytes", "00:00:00")).MemoryUsageMB.Should().Be(3308);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("n/a")]
+    [InlineData("3 PBytes")]
+    public void WorkingSet_That_Cannot_Be_Read_Is_Unknown(string? workingSet)
+    {
+        RavenServerMetricsCollector.ExtractMemoryMB(workingSet).Should().BeNull();
+    }
+
     [Fact]
     public void TotalProcessorTime_Parses_Under_A_Comma_Decimal_Culture()
     {
