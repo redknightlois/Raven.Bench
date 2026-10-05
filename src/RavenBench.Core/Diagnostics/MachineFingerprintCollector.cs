@@ -154,7 +154,12 @@ public sealed class NativeMachineFingerprintSource : IMachineFingerprintSource
         throw new MachineFingerprintException("The operating system did not report a CPU model.");
     }
 
-    public int GetPhysicalCoreCount()
+    // Clamped to the logical count, which obeys the process's affinity and cgroup limits.
+    public int GetPhysicalCoreCount() => WithinLogicalLimit(GetMachinePhysicalCoreCount(), GetLogicalCoreCount());
+
+    internal static int WithinLogicalLimit(int machinePhysical, int logical) => Math.Min(machinePhysical, logical);
+
+    private static int GetMachinePhysicalCoreCount()
     {
         if (IsLinux)
         {
