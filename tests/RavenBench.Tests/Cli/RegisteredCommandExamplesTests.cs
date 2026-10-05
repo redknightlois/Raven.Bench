@@ -26,4 +26,20 @@ public class RegisteredCommandExamplesTests
 
         exitCode.Should().Be(0, $"the registered '{command}' example must parse, or ValidateExamples aborts the application");
     }
+
+    [Theory]
+    [InlineData("rate")]
+    [InlineData("recall")]
+    [InlineData("vector")]
+    public void Help_After_An_Unknown_Option_Names_The_Failed_Command(string command)
+    {
+        var args = new[] { command, "--url", "http://localhost:10101", "--no-such-option", "1" };
+
+        var helpArgs = global::RavenBench.Program.HelpArgs(args);
+
+        helpArgs.Should().Equal(command, "--help");
+        var app = new CommandApp();
+        app.Configure(global::RavenBench.Program.Configure);
+        app.Run(helpArgs).Should().Be(0);
+    }
 }

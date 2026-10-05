@@ -93,7 +93,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
         using (var store = HttpHelper.Create(settings.Url, GetDatabaseName(settings), httpVersion: null))
             await HeldOutManifest.EnsureLoadedAsync(store, files, selection);
 
-        AnsiConsole.MarkupLine($"[blue]Measuring recall on {metadata.IndexName} ({metadata.QueryVectorCount} queries)[/]");
+        AnsiConsole.MarkupLine($"[blue]Measuring recall on {Markup.Escape(metadata.IndexName ?? throw new InvalidOperationException("The vector metadata names no index."))} ({metadata.QueryVectorCount} queries)[/]");
 
         var recall = new RecallMeasurement();
 

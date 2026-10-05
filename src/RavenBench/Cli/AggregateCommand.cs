@@ -136,12 +136,12 @@ public sealed class AggregateCommand : AsyncCommand<AggregateSettings>
 
         foreach (var (run, summary) in results)
         {
-            AnsiConsole.MarkupLine($"[bold]{run}[/]: {summary.Steps.Count} step(s), {summary.Verdict}");
+            AnsiConsole.MarkupLine($"[bold]{Markup.Escape(run)}[/]: {summary.Steps.Count} step(s), {Markup.Escape(summary.Verdict)}");
             if (settings.OutputPrefix != null)
             {
                 var path = $"{settings.OutputPrefix}-{run}.json";
                 JsonResultsWriter.Write(path, summary);
-                AnsiConsole.MarkupLine($"[dim]  wrote {path}[/]");
+                AnsiConsole.MarkupLine($"[dim]  wrote {Markup.Escape(path)}[/]");
             }
         }
         return 0;

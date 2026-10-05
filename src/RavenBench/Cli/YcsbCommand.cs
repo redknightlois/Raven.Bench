@@ -44,13 +44,13 @@ public sealed class YcsbCommand : AsyncCommand<YcsbSettings>
             var name = identity.ResultName;
             var throughput = summary.Steps.Count > 0 ? summary.Steps[^1].Throughput : 0.0;
             var median = summary.Ycsb!.IsRowMedian ? " (row median)" : string.Empty;
-            AnsiConsole.MarkupLine($"[bold]{name}[/]{median}: {summary.Steps.Count} step(s), last throughput {throughput:F0}/s");
+            AnsiConsole.MarkupLine($"[bold]{Markup.Escape(name)}[/]{median}: {summary.Steps.Count} step(s), last throughput {throughput:F0}/s");
 
             var outPath = OutputPathFor(settings, name);
             if (outPath != null)
             {
                 JsonResultsWriter.Write(outPath, summary);
-                AnsiConsole.MarkupLine($"[dim]  wrote {outPath}[/]");
+                AnsiConsole.MarkupLine($"[dim]  wrote {Markup.Escape(outPath)}[/]");
             }
         }
 
