@@ -391,4 +391,4 @@ FodyWeavers.xsd
 
 /epics/
 *.parquet
-/datasets/
+/datasets/*/
