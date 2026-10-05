@@ -62,6 +62,9 @@ public sealed class YcsbRunner
         _fingerprintSource = new NativeMachineFingerprintSource();
     }
 
+    /// <summary>Stops a load run that never fills the keyspace; a load that fills it ends sooner.</summary>
+    internal static readonly TimeSpan LoadTimeLimit = TimeSpan.FromHours(24);
+
     public async Task<List<YcsbRunResult>> RunAsync()
     {
         var transportKind = _transportOverride ?? ResolveTransportKind(_scenario.Target, _settings.Transport);
@@ -122,9 +125,9 @@ public sealed class YcsbRunner
                 DocumentSizeBytes = docSizeBytes,
                 Distribution = distributionKind,
                 // A bounded fill has no steady state to warm: it ends once the keyspace holds
-                // every document.
+                // every document, so the scenario duration does not cut it short.
                 Warmup = identity.Kind == YcsbRunKind.Load ? TimeSpan.Zero : warmup,
-                Duration = duration,
+                Duration = identity.Kind == YcsbRunKind.Load ? LoadTimeLimit : duration,
                 Step = StepPlanFor(identity, closedStep),
                 Shape = identity.Shape,
                 Profile = ProfileFor(identity.Kind),

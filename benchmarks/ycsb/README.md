@@ -69,7 +69,7 @@ command-line value wins over the file, and the file wins over nothing.
 One invocation produces: one load run, then for each repetition workload C under every named
 distribution, then A, B and insert-stream under the first named distribution, then one workload C
 run per named rate. The count is `1 + repetitions * (distributions + 3 + rates)`. The keyspace is
-loaded once: a repetition, a second distribution and a rate never reload it. The checked-in
+loaded once: a repetition, a second distribution and a rate never reload it. The load run ends when the keyspace holds `DocumentCount` documents; `Duration` bounds only the workload runs. The checked-in
 scenario names two distributions, one rate and three repetitions, which is
 `1 + 3 * (2 + 3 + 1) = 19` results.
 
