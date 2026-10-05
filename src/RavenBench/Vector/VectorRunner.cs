@@ -86,6 +86,8 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 {
     public const string RavendbTarget = YcsbRunner.RavendbTarget;
     public const string Ravendb7Target = YcsbRunner.Ravendb7Target;
+    /// <summary>The ravendb-7 server with an index that leaves every HNSW build parameter to the server's defaults.</summary>
+    public const string Ravendb7DefaultIndexTarget = "ravendb-7-default-index";
 
     public static readonly IReadOnlyList<string> Runs = ["load", "recall", "readers", "filtered", "under-insert"];
 
@@ -119,11 +121,13 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
     {
         if (string.Equals(target, RavendbTarget, StringComparison.OrdinalIgnoreCase) || string.Equals(target, Ravendb7Target, StringComparison.OrdinalIgnoreCase))
             return new RavenDbVectorTarget(url, database, metric, scenario.RavenDbEmbeddingType, scenario.HnswBuild);
+        if (string.Equals(target, Ravendb7DefaultIndexTarget, StringComparison.OrdinalIgnoreCase))
+            return new RavenDbVectorTarget(url, database, metric, scenario.RavenDbEmbeddingType);
         if (string.Equals(target, PgVectorTransport.Target, StringComparison.OrdinalIgnoreCase))
             return new PgVectorTarget(new PgVectorTransport(url, database, concurrency, metric, dimensions), scenario.HnswBuild);
         if (string.Equals(target, ElasticsearchVectorTransport.Target, StringComparison.OrdinalIgnoreCase))
             return new ElasticsearchVectorTarget(new ElasticsearchVectorTransport(url, database, metric, dimensions, scenario.ElasticsearchIndexKind, scenario.HnswBuild));
-        throw new VectorScenarioException($"Target '{target}' is not a vector target; valid targets are '{RavendbTarget}', '{Ravendb7Target}', '{PgVectorTransport.Target}' and '{ElasticsearchVectorTransport.Target}'.");
+        throw new VectorScenarioException($"Target '{target}' is not a vector target; valid targets are '{RavendbTarget}', '{Ravendb7Target}', '{Ravendb7DefaultIndexTarget}', '{PgVectorTransport.Target}' and '{ElasticsearchVectorTransport.Target}'.");
     }
 
     /// <summary>The five runs, or, with <c>--constrained</c>, the constrained run alone.</summary>
@@ -527,7 +531,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
     }
 
     private static bool IsContainerized(string target) =>
-        new[] { Ravendb7Target, PgVectorTransport.Target, ElasticsearchVectorTransport.Target }.Contains(target, StringComparer.OrdinalIgnoreCase);
+        new[] { Ravendb7Target, Ravendb7DefaultIndexTarget, PgVectorTransport.Target, ElasticsearchVectorTransport.Target }.Contains(target, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The id of the local container that serves the endpoint. Throws <see cref="ConstrainedRunRefusedException"/> for a target

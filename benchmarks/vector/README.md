@@ -13,7 +13,7 @@ RavenDB against PostgreSQL 17 with pgvector 0.8 and Elasticsearch 9.5. The quest
 ## The one command
 
 ```
-./benchmarks/vector/run.sh --target <ravendb|ravendb-7|pgvector|elasticsearch>
+./benchmarks/vector/run.sh --target <ravendb|ravendb-7|ravendb-7-default-index|pgvector|elasticsearch>
 ```
 
 The script is endpoint-driven. It probes the target's endpoint first. It starts a container from this folder's compose file only when no `--url` is given and the default endpoint does not answer. A caller-supplied `--url` is used as given and starts nothing. Every option other than `--target` is forwarded to the `vector` command, and every option that sets a scenario key is recorded in the result under `Vector.Overrides`.
@@ -22,6 +22,7 @@ The script is endpoint-driven. It probes the target's endpoint first. It starts 
 |---|---|---|
 | `ravendb` | http://localhost:8081 | never |
 | `ravendb-7` | http://localhost:8087 (`RAVENDB7_PORT`) | `ravendb-7` |
+| `ravendb-7-default-index` | http://localhost:8087 (`RAVENDB7_PORT`) | `ravendb-7`; the index sets no HNSW build parameter, so the server's defaults apply instead of `HnswBuild` |
 | `pgvector` | postgresql://bench:bench@localhost:5432/bench (`PGVECTOR_PORT`) | `pgvector` |
 | `elasticsearch` | http://localhost:9200 (`ELASTICSEARCH_PORT`) | `elasticsearch`, a fresh cluster on every run without `--url` |
 

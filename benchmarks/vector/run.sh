@@ -36,7 +36,7 @@ READY_TIMEOUT="${VECTOR_READY_TIMEOUT:-120}"
 
 usage() {
   cat <<'EOF'
-Usage: run.sh --target <ravendb|ravendb-7|pgvector|elasticsearch> [--constrained] [options]
+Usage: run.sh --target <ravendb|ravendb-7|ravendb-7-default-index|pgvector|elasticsearch> [--constrained] [options]
 
 Runs load, recall, readers, filtered and under-insert, and writes one result JSON per run under
 benchmarks/vector/results/. Every other option is forwarded to the vector command unchanged.
@@ -56,7 +56,7 @@ EOF
 
 source "$SCRIPT_DIR/../run-common.sh"
 parse_run_options "$@"
-require_target ravendb ravendb-7 pgvector elasticsearch
+require_target ravendb ravendb-7 ravendb-7-default-index pgvector elasticsearch
 
 # The host port of the containerized RavenDB service is overridable, so a database host can move it
 # and a caller can point the script's default endpoint away from a port already in use.
@@ -72,7 +72,7 @@ case "$TARGET" in
     COMPOSE_SERVICE=""
     READY_PATH=/build/version
     ;;
-  ravendb-7)
+  ravendb-7|ravendb-7-default-index)
     DEFAULT_URL="http://localhost:$RAVENDB7_PORT"
     DEFAULT_PORT="$RAVENDB7_PORT"
     PORT_VARIABLE=RAVENDB7_PORT

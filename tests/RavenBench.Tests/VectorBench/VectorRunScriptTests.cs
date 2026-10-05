@@ -52,7 +52,7 @@ public class VectorRunScriptTests
     {
         var (exitCode, output) = RunBash(Path.Combine(Folder("vector"), "run.sh"), ["--target", "postgresql"], null);
         exitCode.Should().NotBe(0);
-        output.Should().Contain("'postgresql'").And.Contain("ravendb, ravendb-7, pgvector");
+        output.Should().Contain("'postgresql'").And.Contain("ravendb, ravendb-7, ravendb-7-default-index, pgvector");
     }
 
     [RequiresBashFact]
