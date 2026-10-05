@@ -5,8 +5,7 @@ using Raven.Client.Documents;
 namespace RavenBench.Core;
 
 /// <summary>
-/// Shared utilities for HTTP version handling across transport implementations.
-/// Provides consistent HTTP version normalization, formatting, and configuration.
+/// HTTP version normalization, formatting, and client configuration.
 /// </summary>
 public static class HttpHelper
 {
@@ -35,8 +34,8 @@ public static class HttpHelper
     };
 
     /// <summary>
-    /// Normalizes various HTTP version string formats to a standard format.
-    /// Combines patterns from both RawHttpTransport and RavenClientTransport.
+    /// Normalizes HTTP version spellings ("http/2", "2.0", ...) to "1.0", "1.1", "2", "3" or "auto";
+    /// unrecognized values pass through lowercased.
     /// </summary>
     public static string NormalizeHttpVersion(string httpVersion) => httpVersion.ToLowerInvariant() switch
     {
@@ -72,8 +71,7 @@ public static class HttpHelper
     };
 
     /// <summary>
-    /// Custom HttpMessageHandler that sets HTTP version and policy on each request for HTTP/2 h2c support.
-    /// Can be used by both RawHttpTransport and RavenClientTransport.
+    /// Sets the HTTP version and policy on each request, which HTTP/2 over cleartext (h2c) requires.
     /// </summary>
     public class HttpVersionHandler : DelegatingHandler
     {
@@ -103,7 +101,6 @@ public static class HttpHelper
                 KeepAlivePingDelay = TimeSpan.FromSeconds(60),
                 KeepAlivePingTimeout = TimeSpan.FromSeconds(30),
 
-                // Cross-platform settings (replaces ServicePointManager which only works on Windows)
                 ConnectTimeout = TimeSpan.FromSeconds(30),
                 ResponseDrainTimeout = TimeSpan.FromSeconds(10),
                 Expect100ContinueTimeout = TimeSpan.Zero // Disable Expect 100-Continue
@@ -115,7 +112,6 @@ public static class HttpHelper
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            // Set HTTP version and policy for proper HTTP/2 h2c support
             request.Version = _versionInfo.version;
             request.VersionPolicy = _versionInfo.policy;
             return base.SendAsync(request, cancellationToken);
@@ -167,8 +163,8 @@ public static class HttpHelper
 
     private static void ConfigureHandlerForHighConcurrency(HttpMessageHandler handler)
     {
-        // RavenDB client typically passes an HttpClientHandler here.
-        // For HTTP/1.1, low MaxConnectionsPerServer can cap throughput even on fast servers.
+        // Lifts the per-server connection cap on the innermost HttpClientHandler or SocketsHttpHandler,
+        // which otherwise limits HTTP/1.1 throughput.
         var current = handler;
         while (true)
         {

@@ -8,8 +8,9 @@ namespace RavenBench.Core.Diagnostics;
 // (HttpClient, System.Text.Json, ...) catch internally and would otherwise be invisible.
 //
 // Per-step usage:
-//   using (var t = FirstChanceExceptionTracker.BeginStep()) { ... measurement ... }
-//   var snap = t.Snapshot;  // counts by type, first-stack sample
+//   using var t = FirstChanceExceptionTracker.BeginStep();
+//   ... measurement ...
+//   var snap = t.Take();  // counts by type, first-stack sample
 // Background work that is not part of the step runs inside Suppress(), across awaits.
 public sealed class FirstChanceExceptionTracker : IDisposable
 {
