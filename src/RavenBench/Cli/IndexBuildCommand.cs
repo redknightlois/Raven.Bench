@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.ComponentModel;
 using System.Diagnostics;
 using Raven.Client.Documents;
@@ -62,6 +63,9 @@ public sealed class IndexBuildSettings : CommandSettings
 public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
 {
     private const string SeededTimeSeriesName = "BenchValues";
+
+    /// <summary>The interval between staleness polls; the measured build time can exceed the real one by up to this much.</summary>
+    internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
 
     public override async Task<int> ExecuteAsync(CommandContext context, IndexBuildSettings settings)
     {
@@ -142,7 +146,7 @@ public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
                 break;
 
             Console.WriteLine($"[IndexBuild] '{indexName}' still indexing... ({sw.Elapsed.TotalSeconds:F0}s elapsed)");
-            await Task.Delay(2000);
+            await Task.Delay(PollInterval);
         }
         sw.Stop();
 
@@ -154,14 +158,15 @@ public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
         }
 
         var indexStats = await store.Maintenance.SendAsync(new GetIndexStatisticsOperation(indexName));
-        var docCount = dbStats.CountOfDocuments;
+        var collectionStats = await store.Maintenance.SendAsync(new GetCollectionStatisticsOperation());
+        var docCount = MappedDocumentCount(indexStats.Collections.Keys, collectionStats.Collections);
         var seconds = sw.Elapsed.TotalSeconds;
 
         var table = new Table().Border(TableBorder.Rounded).Title("[blue]Index build result[/]");
         table.AddColumn("Index");
         table.AddColumn("Engine");
-        table.AddColumn("Build time");
-        table.AddColumn("Docs in DB");
+        table.AddColumn($"Build time (resolution {PollInterval.TotalSeconds.ToString(CultureInfo.InvariantCulture)}s)");
+        table.AddColumn("Docs in mapped collections");
         table.AddColumn("Docs/s");
         table.AddColumn("Index entries");
         table.AddRow(
@@ -175,6 +180,10 @@ public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
 
         return 0;
     }
+
+    /// <summary>The number of documents in the collections the index maps.</summary>
+    internal static long MappedDocumentCount(IEnumerable<string> indexCollections, IReadOnlyDictionary<string, long> collectionCounts) =>
+        indexCollections.Sum(c => collectionCounts.TryGetValue(c, out var count) ? count : 0);
 
     private static StackOverflowIndex ParseIndexKind(string? indexKind)
     {
