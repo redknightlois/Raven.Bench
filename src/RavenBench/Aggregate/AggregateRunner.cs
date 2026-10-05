@@ -122,18 +122,20 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
             };
 
             // count-by-category, sum-by-region, filtered-group: the closed loop finds the ceiling, the fixed-rate runner runs below it.
-            var queryRuns = new List<(string Shape, BenchmarkRunner.RampResult Closed, BenchmarkRunner.RampResult Fixed, AggregateQueryInfo Info)>();
+            var queryRuns = new List<(string Shape, BenchmarkRunner.RampResult Closed, BenchmarkRunner.RampResult? Fixed, AggregateQueryInfo Info)>();
             foreach (var shape in AggregateShapes.All)
             {
                 var workload = new AggregateQueryWorkload(() => Operation(shape));
                 var closed = await RampAsync(transport, workload, database, LoadShape.Closed, scenario.Concurrency, null, warmup, duration, $"{shape}-closed", nodeExporter);
-                var rate = FixedRate.For(shape, closed.Steps[^1].Throughput);
-                var fixedRate = await RampAsync(transport, workload, database, LoadShape.Rate, rate, scenario.Concurrency, warmup, duration, $"{shape}-rate", nodeExporter);
-                var steps = closed.Steps.Concat(fixedRate.Steps).ToList();
+                var rate = FixedRate.For(closed.Steps[^1].Throughput);
+                var fixedRate = rate is { } r ? await RampAsync(transport, workload, database, LoadShape.Rate, r, scenario.Concurrency, warmup, duration, $"{shape}-rate", nodeExporter) : (BenchmarkRunner.RampResult?)null;
+                var steps = closed.Steps.Concat(fixedRate?.Steps ?? []).ToList();
                 var op = Operation(shape);
                 queryRuns.Add((shape, closed, fixedRate, new AggregateQueryInfo(shape, isRavenDb ? op.IndexName : null, op.TopN, Describe(op.Filter), QueryPolicy,
                     closed.Steps[^1].Throughput, rate, FixedRate.Fraction, steps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)), Answers(steps))));
-                Console.WriteLine($"[Aggregate] {shape}: closed loop {closed.Steps[^1].Throughput:F0} q/s, fixed rate {rate} q/s ({FixedRate.Fraction:P0} of it) p99 {fixedRate.Steps[^1].Raw.P99:F2} ms");
+                Console.WriteLine(fixedRate is null
+                    ? $"[Aggregate] {shape}: closed loop {closed.Steps[^1].Throughput:F2} q/s, too little for a whole fixed rate below it, so no fixed-rate step"
+                    : $"[Aggregate] {shape}: closed loop {closed.Steps[^1].Throughput:F0} q/s, fixed rate {rate} q/s ({FixedRate.Fraction:P0} of it) p99 {fixedRate.Value.Steps[^1].Raw.P99:F2} ms");
             }
 
             // under-write: a quiet step and an under-write step at the same fixed query rate.
@@ -180,7 +182,7 @@ public sealed class AggregateRunner(AggregateScenario scenario, IReadOnlyDiction
 
             var results = new List<AggregateRunResult> { Result("build", [buildStep], null, i => i with { Build = build }) };
             foreach (var (shape, closed, fixedRate, info) in queryRuns)
-                results.Add(Result(shape, closed.Steps.Concat(fixedRate.Steps).ToList(), closed.HistogramArtifacts.Concat(fixedRate.HistogramArtifacts).ToList(), i => i with { Query = info }));
+                results.Add(Result(shape, closed.Steps.Concat(fixedRate?.Steps ?? []).ToList(), closed.HistogramArtifacts.Concat(fixedRate?.HistogramArtifacts ?? []).ToList(), i => i with { Query = info }));
             results.Add(Result("under-write", underWriteSteps, quiet.HistogramArtifacts.Concat(underWrite.HistogramArtifacts).ToList(), i => i with { UnderWrite = underWriteInfo }));
             return results;
         });

@@ -17,7 +17,7 @@ public class VectorReadersRateTests
         var info = VectorRunner.ReadersInfo(readers: 8, closed);
 
         info.FixedRate.Should().BeGreaterThan(0).And.BeLessThan(closed);
-        info.FixedRate.Should().Be(FixedRate.For("readers", closed), "the vector and aggregate runners share one fraction");
+        info.FixedRate.Should().Be(FixedRate.For(closed), "the vector and aggregate runners share one fraction");
         info.FixedRateFraction.Should().Be(FixedRate.Fraction);
         JsonSerializer.Serialize(info).Should().Contain("\"FixedRateFraction\"");
     }

@@ -330,18 +330,17 @@ public class AggregateRunTests
     {
         FixedRate.Fraction.Should().BeGreaterThan(0).And.BeLessThan(1);
 
-        var rate = FixedRate.For(AggregateShapes.CountByCategory, closed);
+        var rate = FixedRate.For(closed);
 
         rate.Should().BeGreaterThan(0);
-        ((double)rate).Should().BeLessThan(closed).And.BeLessThanOrEqualTo(closed * FixedRate.Fraction);
+        ((double)rate!).Should().BeLessThan(closed).And.BeLessThanOrEqualTo(closed * FixedRate.Fraction);
     }
 
     [Fact]
-    public void A_Closed_Loop_Too_Slow_For_A_Whole_Rate_Below_It_Fails_Fast()
+    public void A_Closed_Loop_Too_Slow_For_A_Whole_Rate_Below_It_Has_No_Fixed_Rate()
     {
-        var act = () => FixedRate.For(AggregateShapes.CountByCategory, 1.0);
-
-        act.Should().Throw<InvalidOperationException>().WithMessage("*count-by-category*");
+        FixedRate.For(1.0).Should().BeNull();
+        FixedRate.For(1.25).Should().Be(1);
     }
 
     [Fact]

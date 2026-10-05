@@ -25,7 +25,11 @@ public sealed record AggregateStepAnswers(int StepIndex, long Answers, long Stal
     public static AggregateStepAnswers From(int stepIndex, StepResult step) => new(stepIndex, step.QueryOperations ?? 0, step.StaleQueryCount ?? 0);
 }
 
-/// <summary>One query run: the shape, the ceiling the closed loop found, and the fixed rate that ran at <see cref="FixedRateFraction"/> of it. The index name is null on a product that serves the shape without a per-shape index.</summary>
+/// <summary>
+/// One query run: the shape, the ceiling the closed loop found, and the fixed rate that ran at <see cref="FixedRateFraction"/> of it.
+/// The fixed rate is null when the ceiling leaves no whole rate below it, and the run then has no fixed-rate step. The index name is
+/// null on a product that serves the shape without a per-shape index.
+/// </summary>
 public sealed record AggregateQueryInfo(
     string Shape,
     string? IndexName,
@@ -33,7 +37,7 @@ public sealed record AggregateQueryInfo(
     string? Filter,
     string QueryPolicy,
     double ClosedLoopRate,
-    int FixedRate,
+    int? FixedRate,
     double FixedRateFraction,
     bool ClientBound,
     IReadOnlyList<AggregateStepAnswers> StepAnswers);

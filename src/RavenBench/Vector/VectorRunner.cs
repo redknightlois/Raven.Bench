@@ -93,7 +93,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
 
     /// <summary>The readers run after its closed loop: the fixed-rate step targets <see cref="FixedRate.Fraction"/> of the closed-loop ceiling.</summary>
     internal static VectorReadersInfo ReadersInfo(int readers, double closedThroughput) =>
-        new(readers, closedThroughput, FixedRate.For("readers", closedThroughput), FixedRate.Fraction, ClientBound: false);
+        new(readers, closedThroughput, FixedRate.For(closedThroughput), FixedRate.Fraction, ClientBound: false);
 
     /// <summary>The set the name selects. The vector runner takes no operator pin, so a set with an unpinned file is refused here.</summary>
     public static IVectorDataset ResolveSet(string name)
@@ -287,8 +287,10 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             var readersWorkload = new VectorQueryWorkload(queries.Queries, target, k, effort);
             var closed = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Closed, scenario.Readers, rateWorkers: null, warmup, duration, "readers-closed", nodeExporter);
             var readersInfo = ReadersInfo(scenario.Readers, closed.Steps[^1].Throughput);
-            var fixedRate = await RampAsync(target.Transport, readersWorkload, database, LoadShape.Rate, (int)readersInfo.FixedRate, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter);
-            var readerSteps = closed.Steps.Concat(fixedRate.Steps).ToList();
+            var fixedRate = readersInfo.FixedRate is { } rate
+                ? await RampAsync(target.Transport, readersWorkload, database, LoadShape.Rate, (int)rate, rateWorkers: scenario.Readers, warmup, duration, "readers-rate", nodeExporter)
+                : (BenchmarkRunner.RampResult?)null;
+            var readerSteps = closed.Steps.Concat(fixedRate?.Steps ?? []).ToList();
             readersInfo = readersInfo with { ClientBound = readerSteps.Any(s => ClientSaturation.IsSaturated(s.ClientCpu)) };
 
             // filtered
@@ -312,7 +314,7 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
             [
                 Result("load", [loadStep.Step], null, i => i with { Load = loadInfo }),
                 Result("recall", recallSteps, null, i => i with { Recall = recallInfo, CrossCheck = crossCheck }),
-                Result("readers", readerSteps, closed.HistogramArtifacts.Concat(fixedRate.HistogramArtifacts).ToList(), i => i with { Readers = readersInfo }),
+                Result("readers", readerSteps, closed.HistogramArtifacts.Concat(fixedRate?.HistogramArtifacts ?? []).ToList(), i => i with { Readers = readersInfo }),
                 Result("filtered", [filteredStep], null, i => i with { Filtered = filteredInfo }),
                 Result("under-insert", underInsertRamp.Steps, underInsertRamp.HistogramArtifacts, i => i with { UnderInsert = underInsertInfo })
             ];
