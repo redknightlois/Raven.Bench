@@ -61,6 +61,16 @@ public class RecallKsParsingTests
             CreateOptions(vectorRecallKs: "-1,5", vectorTopK: 10));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(" , ")]
+    public void Recall_Command_Ks_Blank_Is_A_Validation_Error(string recallKs)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => CliParsing.ParseRecallKsRaw(recallKs));
+        Assert.Contains("--vector-recall-ks", ex.Message);
+    }
+
     private static Core.RunOptions CreateOptions(string? vectorRecallKs, int vectorTopK)
     {
         var settings = new ClosedSettings

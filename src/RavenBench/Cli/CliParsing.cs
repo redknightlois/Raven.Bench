@@ -29,14 +29,10 @@ internal static class CliParsing
         int? rateWorkers = null)
     {
         var transport = ParseTransport(settings.Transport);
-        var database = string.IsNullOrEmpty(settings.DatasetProfile) == false || string.IsNullOrEmpty(settings.Dataset) == false
-            ? (settings.Database ?? "temp-placeholder")
-            : RequiredString(settings.Database!, "--database");
-
         return new RunOptions
         {
             Url = RequiredString(settings.Url!, "--url"),
-            Database = database,
+            Database = ResolveDatabase(settings.Database, settings.Dataset),
             VectorTopK = settings.VectorTopK,
             VectorQuantization = ParseVectorQuantization(settings.VectorQuantization),
             VectorExactSearch = settings.VectorExactSearch,
@@ -231,6 +227,19 @@ internal static class CliParsing
         };
     }
 
+    /// <summary>
+    /// Returns the --database value, or null when --dataset is set and names the database.
+    /// A dataset profile alone names no dataset, so it does not make --database optional.
+    /// </summary>
+    internal static string ResolveDatabase(string database, string dataset)
+    {
+        if (string.IsNullOrEmpty(database) == false)
+            return database;
+        if (string.IsNullOrEmpty(dataset))
+            throw new ArgumentException("--database is required unless --dataset names the database");
+        return null;
+    }
+
     private static string RequiredString(string value, string paramName)
     {
         if (string.IsNullOrEmpty(value))
@@ -249,18 +258,24 @@ internal static class CliParsing
         var x = right.IndexOf('x');
         var end = x >= 0 ? int.Parse(right.Substring(0, x), CultureInfo.InvariantCulture) : int.Parse(right, CultureInfo.InvariantCulture);
         var factor = x >= 0 ? double.Parse(right.Substring(x + 1), CultureInfo.InvariantCulture) : 2.0;
-        if (factor <= 1.0)
+        if (start <= 0 || end < start)
+            throw new ArgumentException($"Invalid step plan '{s}': the range must satisfy 0 < start <= end");
+        if (double.IsNaN(factor) || factor <= 1.0)
             throw new ArgumentException($"Invalid step plan '{s}': factor must be greater than 1, got {factor}");
         return new StepPlan(start, end, factor);
     }
 
     public static int ParseSize(string s)
     {
-        s = s.Trim().ToUpperInvariant();
-        if (s.EndsWith("KB")) return int.Parse(s.AsSpan(0, s.Length - 2), CultureInfo.InvariantCulture) * 1024;
-        if (s.EndsWith("MB")) return int.Parse(s.AsSpan(0, s.Length - 2), CultureInfo.InvariantCulture) * 1024 * 1024;
-        if (s.EndsWith("B")) return int.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture);
-        return int.Parse(s, CultureInfo.InvariantCulture);
+        var text = s.Trim().ToUpperInvariant();
+        var (digits, unit) = text.EndsWith("KB") ? (text[..^2], 1024L)
+            : text.EndsWith("MB") ? (text[..^2], 1024L * 1024)
+            : text.EndsWith("B") ? (text[..^1], 1L)
+            : (text, 1L);
+        var bytes = long.Parse(digits, CultureInfo.InvariantCulture) * unit;
+        if (bytes <= 0 || bytes > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(s), s, $"Size must be between 1 byte and {int.MaxValue} bytes");
+        return (int)bytes;
     }
 
     public static TimeSpan ParseDuration(string s)
@@ -278,18 +293,16 @@ internal static class CliParsing
         return TimeSpan.FromSeconds(double.Parse(s, CultureInfo.InvariantCulture));
     }
 
+    /// <summary>
+    /// Parses a percentage into a fraction. A bare number and the same number followed by '%' are both percent: "5" and "5%" give 0.05.
+    /// </summary>
     public static double ParsePercent(string s)
     {
-        s = s.Trim();
-        if (s.EndsWith("%"))
-            return double.Parse(s.AsSpan(0, s.Length - 1), CultureInfo.InvariantCulture) / 100.0;
-
-        var value = double.Parse(s, CultureInfo.InvariantCulture);
-        if (value <= 1.0)
-            return value;
-        if (value > 100.0)
-            throw new ArgumentException($"Invalid percentage: {s}. Use a fraction (0.05), a percent (5%), or a bare number up to 100.");
-        return value / 100.0;
+        var text = s.Trim();
+        var percent = double.Parse(text.EndsWith('%') ? text[..^1] : text, NumberStyles.Float, CultureInfo.InvariantCulture);
+        if (percent is >= 0.0 and <= 100.0)
+            return percent / 100.0;
+        throw new ArgumentOutOfRangeException(nameof(s), s, "Percentage must be between 0 and 100, written as 5 or 5%");
     }
 
     private static LatencyDisplayType ParseLatencyDisplayType(string latencies)
@@ -315,7 +328,11 @@ internal static class CliParsing
     }
 
     // Public wrappers for the recall-only command
-    public static int[] ParseRecallKsRaw(string recallKs) => ParseRecallKs(recallKs, int.MaxValue);
+    /// <summary>Parses a required --vector-recall-ks list; a blank or empty list is rejected.</summary>
+    public static int[] ParseRecallKsRaw(string recallKs) =>
+        ParseRecallKs(recallKs, int.MaxValue) is { Length: > 0 } ks
+            ? ks
+            : throw new ArgumentException($"--vector-recall-ks must list at least one positive k, got '{recallKs}'");
     public static int[] ParseEfSweepRaw(string efSweep) => ParseEfSweep(efSweep);
 
     private static int[] ParseRecallKs(string recallKs, int vectorTopK)
@@ -370,7 +387,7 @@ internal static class CliParsing
         };
     }
 
-    private static IndexingEngine ParseSearchEngine(string value)
+    internal static IndexingEngine ParseSearchEngine(string value)
     {
         return value.Trim().ToLowerInvariant() switch
         {

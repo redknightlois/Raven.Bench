@@ -65,7 +65,7 @@ Note: v0 implements closed-loop only and very limited read scenarios (it was des
   - `--out <file.json>` and `--out-csv <file.csv>`: write structured results.
     - `--verbose`: aggregate and print a summary of top error messages.
 - Expert options
-  - `--max-errors <percent>`: stop early if error rate exceeds this per step (default: `0.5%`).
+  - `--max-errors <percent>`: stop early if error rate exceeds this per step (default: `0.5%`). A bare number is a percent: `0.5` and `0.5%` are equal.
   - `--latencies <normalized|raw|both>`: which latencies to print to console.
   - SNMP telemetry (opt-in server monitoring):
     - `--snmp-enabled`: enable SNMP collection (default: false)

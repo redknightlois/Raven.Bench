@@ -38,7 +38,7 @@ public sealed class RecallSettings : CommandSettings
 
     [CommandOption("--engine")]
     [Description("Search engine: corax or lucene (default: corax)")]
-    public IndexingEngine SearchEngine { get; init; } = IndexingEngine.Corax;
+    public string SearchEngine { get; init; } = "corax";
 
     [CommandOption("--seed")]
     [Description("Seed that draws the query vectors held out of the load (default: 42, the run default)")]
@@ -73,18 +73,23 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             return -1;
         }
 
-        var recallKs = CliParsing.ParseRecallKsRaw(settings.VectorRecallKs ?? "1,5,10");
-        if (recallKs.Length == 0)
+        int[] recallKs;
+        IndexingEngine engine;
+        int[]? efSweep = null;
+        try
         {
-            AnsiConsole.MarkupLine("[red]Invalid --vector-recall-ks.[/]");
+            recallKs = CliParsing.ParseRecallKsRaw(settings.VectorRecallKs ?? "1,5,10");
+            engine = CliParsing.ParseSearchEngine(settings.SearchEngine);
+            if (string.IsNullOrWhiteSpace(settings.VectorRecallEfSweep) == false)
+                efSweep = CliParsing.ParseEfSweepRaw(settings.VectorRecallEfSweep);
+        }
+        catch (ArgumentException ex)
+        {
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]");
             return -1;
         }
 
-        int[]? efSweep = null;
-        if (string.IsNullOrWhiteSpace(settings.VectorRecallEfSweep) == false)
-            efSweep = CliParsing.ParseEfSweepRaw(settings.VectorRecallEfSweep);
-
-        if (await LoadVectorMetadataAsync(settings) is not var (metadata, files, selection))
+        if (await LoadVectorMetadataAsync(settings, engine, recallKs.Max()) is not var (metadata, files, selection))
         {
             AnsiConsole.MarkupLine("[red]Failed to load vector metadata.[/]");
             return -1;
@@ -106,7 +111,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
                 recallKs,
                 efSweep,
                 settings.VectorQuantization,
-                settings.SearchEngine,
+                engine,
                 nodeExporterUrl: CliParsing.ParseNodeExporterUrl(settings.NodeExporterUrl));
 
             var table = new Table().Border(TableBorder.Rounded).Title("[blue]Recall@K by efSearch[/]");
@@ -137,7 +142,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
                 metadata,
                 recallKs,
                 settings.VectorQuantization,
-                settings.SearchEngine,
+                engine,
                 nodeExporterUrl: CliParsing.ParseNodeExporterUrl(settings.NodeExporterUrl));
 
             var lines = result.RecallAtK
@@ -163,18 +168,17 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
     }
 
     /// <summary>The query metadata, with the files and the held-out selection the database must have been loaded under.</summary>
-    private static async Task<(VectorWorkloadMetadata Metadata, VerifiedFiles Files, QuerySelection? Selection)?> LoadVectorMetadataAsync(RecallSettings settings)
+    private static async Task<(VectorWorkloadMetadata Metadata, VerifiedFiles Files, QuerySelection? Selection)?> LoadVectorMetadataAsync(RecallSettings settings, IndexingEngine engine, int depth)
     {
-        var engineSuffix = VectorIndexMapping.GetEngineSuffix(settings.SearchEngine);
+        var engineSuffix = VectorIndexMapping.GetEngineSuffix(engine);
         var dataDirectory = settings.DatasetCacheDir ?? Path.Combine(Directory.GetCurrentDirectory(), "datasets");
         var selection = new QuerySelection(settings.Seed, DatasetImportCoordinator.VectorQueryCount);
-        var depth = CliParsing.ParseRecallKsRaw(settings.VectorRecallKs ?? "1,5,10").Max();
 
         if (VectorSets.FindPublished(settings.Dataset!) is { } published)
         {
             UnsupportedVectorMetricException.ThrowIfUnsupported(RawHttpTransport.RavenDbProductName, RavenDbVectorMetrics.Supported, published.Metric);
             var files = await PinnedFiles.EnsureAsync(published, dataDirectory);
-            var metadata = await PublishedSetImport.MetadataAsync(published, files, selection, depth, settings.VectorQuantization, settings.SearchEngine, null, null);
+            var metadata = await PublishedSetImport.MetadataAsync(published, files, selection, depth, settings.VectorQuantization, engine, null, null);
             if (string.IsNullOrWhiteSpace(settings.IndexNameOverride) == false)
                 metadata.IndexName = settings.IndexNameOverride;
             return (metadata, files, null);
@@ -196,7 +200,7 @@ public sealed class RecallCommand : AsyncCommand<RecallSettings>
             {
                 var s = (Raven.Client.Documents.IDocumentStore)storeObj;
                 await SphereDatasetProvider.CreateVectorIndexAsync(
-                    s, settings.VectorQuantization, false, settings.SearchEngine);
+                    s, settings.VectorQuantization, false, engine);
             };
             return (metadata, files, selection);
         }

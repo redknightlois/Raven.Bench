@@ -136,7 +136,7 @@ public abstract class BaseRunSettings : CommandSettings
     public string Duration { get; init; } = "60s";
 
     [CommandOption("--max-errors")]
-    [Description("Maximum error rate before stopping (e.g., 0.5%, 0.005, 5) (default: 0.5%)")]
+    [Description("Maximum error rate in percent before stopping; a bare number is a percent, so 0.5 and 0.5% are equal (default: 0.5%)")]
     public string MaxErrors { get; init; } = "0.5%";
 
     [CommandOption("--output-prefix")]
