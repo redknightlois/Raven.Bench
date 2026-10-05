@@ -128,7 +128,8 @@ public static class CompressionModes
 public sealed record RunOptions
 {
     public required string Url { get; init; }
-    public required string Database { get; init; }
+    /// <summary>Null when the dataset names the database; the runner resolves it before any server call.</summary>
+    public required string? Database { get; init; }
 
     // Step plan and load shape
     public StepPlan Step { get; init; } = new StepPlan(8, 512, 2.0);

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -206,21 +207,79 @@ public class CliParsingTests
     }
 
     [Theory]
-    [InlineData("0.5%", 0.005)]
-    [InlineData("0.5", 0.5)]
-    [InlineData("5", 0.05)]
-    [InlineData("100", 1.0)]
-    public void ParsePercent_Normalizes_To_Fraction(string input, double expected)
+    [InlineData("0.5")]
+    [InlineData("1")]
+    [InlineData("2")]
+    [InlineData("100")]
+    public void ParsePercent_Bare_And_Percent_Forms_Are_One_Value(string bare)
     {
-        CliParsing.ParsePercent(input).Should().BeApproximately(expected, 1e-9);
+        var value = CliParsing.ParsePercent(bare);
+
+        value.Should().Be(CliParsing.ParsePercent(bare + "%"));
+        (value * 100).Should().BeApproximately(double.Parse(bare, CultureInfo.InvariantCulture), 1e-9);
+    }
+
+    [Theory]
+    [InlineData("150")]
+    [InlineData("500%")]
+    [InlineData("-5")]
+    [InlineData("-5%")]
+    [InlineData("NaN")]
+    [InlineData("NaN%")]
+    public void ParsePercent_Rejects_Out_Of_Range_In_Both_Forms(string input)
+    {
+        var act = () => CliParsing.ParsePercent(input);
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Theory]
+    [InlineData("512..8")]
+    [InlineData("0..100")]
+    [InlineData("-4..100")]
+    public void Rejects_Step_Plan_With_Reversed_Or_Non_Positive_Range(string plan)
+    {
+        var act = () => CliParsing.ParseStepPlan(plan);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*range*");
+    }
+
+    [Theory]
+    [InlineData("2048MB")]
+    [InlineData("0")]
+    [InlineData("-5")]
+    [InlineData("0KB")]
+    public void ParseSize_Rejects_Overflowing_And_Non_Positive_Sizes(string size)
+    {
+        var act = () => CliParsing.ParseSize(size);
+
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Theory]
+    [InlineData("1KB", 1)]
+    [InlineData("3MB", 3)]
+    public void ParseSize_Scales_Units_By_1024(string size, int units)
+    {
+        CliParsing.ParseSize(size).Should().Be(CliParsing.ParseSize(units.ToString(CultureInfo.InvariantCulture) + "B") * (size.EndsWith("MB") ? 1024 * 1024 : 1024));
     }
 
     [Fact]
-    public void ParsePercent_Rejects_Values_Above_100()
+    public void Dataset_Profile_Without_Dataset_Or_Database_Is_Rejected()
     {
-        var act = () => CliParsing.ParsePercent("150");
+        var settings = new ClosedSettings { Url = "http://localhost:10101", Profile = "query-by-id", DatasetProfile = "small" };
 
-        act.Should().Throw<ArgumentException>();
+        var act = () => settings.ToRunOptions();
+
+        act.Should().Throw<ArgumentException>().WithMessage("*--database*");
+    }
+
+    [Fact]
+    public void Dataset_Without_Database_Leaves_The_Database_To_The_Dataset()
+    {
+        var settings = new ClosedSettings { Url = "http://localhost:10101", Profile = "query-by-id", Dataset = "stackoverflow" };
+
+        settings.ToRunOptions().Database.Should().BeNull();
     }
 
     [Fact]

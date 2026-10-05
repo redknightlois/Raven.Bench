@@ -75,7 +75,8 @@ public class BenchmarkRunner(RunOptions opts)
             }
         }
 
-        var effectiveDatabase = datasetDatabase ?? opts.Database;
+        var effectiveDatabase = datasetDatabase ?? opts.Database
+            ?? throw new InvalidOperationException("No database: pass --database, or --dataset to name one.");
 
         using var nodeExporter = await NodeExporterClient.ConnectAsync(opts.NodeExporterUrl);
         using var transport = BuildTransport(opts, negotiatedHttpVersion, effectiveDatabase);
@@ -195,7 +196,7 @@ public class BenchmarkRunner(RunOptions opts)
         var histogramArtifacts = new List<HistogramArtifact>();
 
         var cpuTracker = new ProcessCpuTracker();
-        using var serverTracker = new ServerMetricsTracker(transport, opts);
+        using var serverTracker = new ServerMetricsTracker(transport, opts with { Database = effectiveDatabase });
         var maxNetUtil = 0.0;
         StartupCalibration? startupCalibration = null;
         string clientCompression = transport switch
@@ -208,7 +209,7 @@ public class BenchmarkRunner(RunOptions opts)
 
         await ValidateClientAsync(transport);
         await ValidateServerSanityAsync(transport);
-        await ValidateSnmpAsync(transport);
+        await ValidateSnmpAsync(transport, effectiveDatabase);
 
         try
         {
@@ -553,10 +554,8 @@ public class BenchmarkRunner(RunOptions opts)
         }
     }
 
-    private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion, string? databaseOverride = null)
+    private static ITransport BuildTransport(RunOptions opts, Version negotiatedHttpVersion, string database)
     {
-        var database = databaseOverride ?? opts.Database;
-
         switch (opts.Transport)
         {
             case TransportKind.Raw:
@@ -708,7 +707,7 @@ public class BenchmarkRunner(RunOptions opts)
     /// Validates SNMP connectivity if SNMP is enabled in options.
     /// SNMP must work when explicitly enabled; failure aborts the benchmark.
     /// </summary>
-    private async Task ValidateSnmpAsync(ITransport transport)
+    private async Task ValidateSnmpAsync(ITransport transport, string database)
     {
         if (opts.Snmp.Enabled == false)
             return;
@@ -717,7 +716,7 @@ public class BenchmarkRunner(RunOptions opts)
 
         try
         {
-            var snmpSample = await transport.GetSnmpMetricsAsync(opts.Snmp, opts.Database);
+            var snmpSample = await transport.GetSnmpMetricsAsync(opts.Snmp, database);
 
             if (snmpSample.IsEmpty == false)
             {

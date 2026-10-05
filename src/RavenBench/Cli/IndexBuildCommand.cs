@@ -72,9 +72,13 @@ public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
         }
 
         StackOverflowIndex index;
+        IndexingEngine searchEngine;
+        string database;
         try
         {
             index = ParseIndexKind(settings.IndexKind);
+            searchEngine = CliParsing.ParseSearchEngine(settings.SearchEngine);
+            database = CliParsing.ResolveDatabase(settings.Database, settings.Dataset);
         }
         catch (ArgumentException ex)
         {
@@ -82,35 +86,18 @@ public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
             return -1;
         }
 
-        var searchEngine = settings.SearchEngine.Trim().ToLowerInvariant() switch
-        {
-            "lucene" => IndexingEngine.Lucene,
-            "corax" => IndexingEngine.Corax,
-            _ => throw new ArgumentException($"Invalid search engine: {settings.SearchEngine}. Valid options: corax, lucene")
-        };
-
-        string database;
         if (string.IsNullOrEmpty(settings.Dataset) == false)
         {
             var importOptions = new RunOptions
             {
                 Url = settings.Url,
-                Database = settings.Database ?? "temp-placeholder",
+                Database = database,
                 Dataset = settings.Dataset,
                 DatasetProfile = settings.DatasetProfile,
                 DatasetSize = settings.DatasetSize,
                 DatasetCacheDir = settings.DatasetCacheDir
             };
             database = await DatasetImportCoordinator.ImportDatasetAsync(importOptions);
-        }
-        else if (string.IsNullOrEmpty(settings.Database) == false)
-        {
-            database = settings.Database;
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]Either --dataset or --database is required.[/]");
-            return -1;
         }
 
         using var store = HttpHelper.Create(settings.Url, database, httpVersion: null);
