@@ -246,14 +246,13 @@ Then run the client against that host, with no Docker on the client:
 ```
 
 PostgreSQL has no lazy database creation, so the client needs a way to create the per-run database.
-The script tries the client's `psql` first, then a local container that publishes the endpoint's
-port, then fails and tells the user to create the database on the database host and pass
-`--database`. A client without `psql` and without Docker must therefore pass `--database` naming a
-database that already exists on the host.
+The script tries the client's `psql` first, then, only when the `--url` host is local (loopback, this machine's host name, or an address of a local interface), a local container that publishes the endpoint's port, then fails and tells the user to create the database on the database host and pass `--database`. A client without `psql` must therefore pass `--database` naming a database that already exists on a remote host.
+
+When the script started a container, it stops it on exit and leaves the compose file's named volume in place, so the volume keeps the run database; the script prints the `docker compose ... down -v` command that removes it.
 
 ## Rerunning
 
-Each invocation uses a fresh database named `ycsb_<target>_<timestamp>`, so a second invocation
+Each invocation uses a fresh database named `ycsb_<target>_<timestamp>_<pid>` (lowercase, with `-` as `_`), so a second invocation
 never loads into a keyspace that already holds the `bench/` ids. For PostgreSQL the script creates
 that database before the run, because the transport creates the table but does not create the
 database. Pass `--database` to run against a database you manage; that database must start with an
