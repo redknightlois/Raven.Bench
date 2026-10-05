@@ -15,7 +15,11 @@ Output, under the data directory the benchmark reads (default: this directory):
 - clinical-words-300/w2v_300d_oa_cr_embeddings.parquet
 - clinical-words-600/w2v_600d_oa_cr_embeddings.parquet
 
-The script prints each file's SHA-256; a run pins the file with --dataset-sha256.
+Each downloaded archive is checked against its SHA-256 before extraction: the pin in ARCHIVE_SHA256, or
+--archive-sha256 for a model with no pin there. An archive with no pin or a different digest is refused
+before anything is extracted or loaded, because the model loader unpickles the archive's contents.
+
+The script prints each parquet file's SHA-256; a run pins the file with --dataset-sha256.
 
 Usage:
     python prepare_clinical_embeddings.py          # Download all 3 models
@@ -35,19 +39,9 @@ import shutil
 from pathlib import Path
 from typing import Optional, List
 import argparse
+import importlib.util
 
-# Check for required packages
-try:
-    import requests
-    from tqdm import tqdm
-    import pandas as pd
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-    from gensim.models import Word2Vec, KeyedVectors
-except ImportError as e:
-    print(f"Missing required package: {e}")
-    print("Install with: pip install gensim pyarrow pandas requests tqdm")
-    sys.exit(1)
+REQUIRED_PACKAGES = ["requests", "tqdm", "pandas", "pyarrow", "gensim"]
 
 
 # Download URLs from https://github.com/gweissman/clinical_embeddings
@@ -63,6 +57,10 @@ DOWNLOAD_URLS = {
     "w2v_300d_oa_all": "https://upenn.box.com/shared/static/9djgjigsve09a7f9vz6ubtsovqwb40xa.gz",
 }
 
+# SHA-256 of each published archive. None means no digest is pinned yet; such an archive runs only with
+# --archive-sha256, after the operator has verified its digest against a trusted copy.
+ARCHIVE_SHA256 = {key: None for key in DOWNLOAD_URLS}
+
 # Default models to download (all Case Reports dimensions)
 DEFAULT_MODELS = ["w2v_100d_oa_cr", "w2v_300d_oa_cr", "w2v_600d_oa_cr"]
 
@@ -75,8 +73,28 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+class ArchiveIntegrityError(Exception):
+    """The archive has no pinned digest, its digest differs from the pin, or a member leaves the extraction directory."""
+
+
+def verify_archive(archive_path: Path, expected_sha256: Optional[str]) -> None:
+    """Refuses an archive whose SHA-256 is not the pin; a refused archive is deleted, so it is never reused."""
+    actual = sha256_of(archive_path)
+    if expected_sha256 is None:
+        archive_path.unlink()
+        raise ArchiveIntegrityError(
+            f"{archive_path.name} has no pinned SHA-256; its digest is {actual}. "
+            f"Verify that digest against a trusted copy, then rerun with --archive-sha256 {actual}.")
+    if actual != expected_sha256.lower():
+        archive_path.unlink()
+        raise ArchiveIntegrityError(
+            f"{archive_path.name} has SHA-256 {actual}, not the pinned {expected_sha256}; the archive was deleted and nothing was extracted.")
+
+
 def download_file(url: str, dest_path: Path, desc: str = "Downloading") -> None:
     """Download a file with progress bar."""
+    import requests
+    from tqdm import tqdm
     response = requests.get(url, stream=True, allow_redirects=True)
     response.raise_for_status()
     
@@ -95,7 +113,11 @@ def extract_tar_gz(tar_path: Path, extract_dir: Path) -> Path:
     """Extract a tar.gz file and return path to main extracted file."""
     print(f"Extracting {tar_path}...")
     with tarfile.open(tar_path, "r:gz") as tar:
-        tar.extractall(extract_dir)
+        try:
+            # The data filter refuses absolute paths, '..' members, links that leave the directory and device files.
+            tar.extractall(extract_dir, filter="data")
+        except tarfile.FilterError as e:
+            raise ArchiveIntegrityError(f"{tar_path.name} has a member outside the extraction directory: {e}") from e
         # Find the .bin file
         for member in tar.getmembers():
             if member.name.endswith('.bin'):
@@ -111,6 +133,7 @@ def extract_tar_gz(tar_path: Path, extract_dir: Path) -> Path:
 def load_word2vec_model(model_path: Path) -> dict:
     """Load a Word2Vec model and return word -> vector dictionary."""
     print(f"Loading Word2Vec model from {model_path}...")
+    from gensim.models import Word2Vec, KeyedVectors
     
     try:
         # Try loading as full Word2Vec model first
@@ -131,6 +154,7 @@ def load_word2vec_model(model_path: Path) -> dict:
 def embeddings_to_parquet(wv, output_path: Path) -> None:
     """Convert word embeddings to parquet format."""
     print(f"Converting embeddings to parquet format...")
+    import pandas as pd
     
     words = list(wv.key_to_index.keys())
     vectors = [wv[word].tolist() for word in words]
@@ -153,6 +177,7 @@ def prepare_clinical_embeddings(
     model_key: str,
     output_dir: Optional[Path] = None,
     cache_dir: Optional[Path] = None,
+    archive_sha256: Optional[str] = None,
 ) -> Path:
     """
     Download clinical embeddings and convert to parquet format.
@@ -161,6 +186,7 @@ def prepare_clinical_embeddings(
         model_key: Which model to download (e.g., 'w2v_100d_oa_cr')
         output_dir: Data directory; the parquet goes to its clinical-words-<dims> folder
         cache_dir: Directory to cache downloaded files
+        archive_sha256: The archive's SHA-256 when ARCHIVE_SHA256 pins none
     
     Returns:
         Path to the output parquet file
@@ -196,6 +222,8 @@ def prepare_clinical_embeddings(
         download_file(url, archive_path, desc=f"Downloading {model_key}")
     else:
         print(f"Using cached archive: {archive_path}")
+
+    verify_archive(archive_path, ARCHIVE_SHA256[model_key] or archive_sha256)
     
     # Extract the archive
     extract_dir = cache_dir / model_key
@@ -245,6 +273,11 @@ def main():
         help="Cache directory for downloaded files (default: ~/.cache/clinical_embeddings)"
     )
     parser.add_argument(
+        "--archive-sha256",
+        default=None,
+        help="SHA-256 of the --model archive, for a model with no pinned digest"
+    )
+    parser.add_argument(
         "--list-models",
         action="store_true",
         help="List available models and exit"
@@ -264,6 +297,15 @@ def main():
             print(f"  {key:25s} - {model_type.upper()} {dims}, {source.replace('_', ' ').upper()}{default_marker}")
         return
     
+    missing = [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
+    if missing:
+        print(f"Missing required packages: {', '.join(missing)}")
+        print("Install with: pip install gensim pyarrow pandas requests tqdm")
+        sys.exit(1)
+
+    if args.archive_sha256 and not args.model:
+        parser.error("--archive-sha256 pins one archive, so it needs --model")
+
     # Determine which models to download
     if args.model:
         models_to_download = [args.model]
@@ -283,6 +325,7 @@ def main():
                 model_key=model_key,
                 output_dir=args.output_dir,
                 cache_dir=args.cache_dir,
+                archive_sha256=args.archive_sha256,
             )
             print(f"[OK] Created: {output_file}")
             print(f"[OK] SHA-256: {sha256_of(output_file)} (pass it with --dataset-sha256)")
