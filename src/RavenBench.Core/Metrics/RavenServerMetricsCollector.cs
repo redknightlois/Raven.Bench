@@ -87,10 +87,11 @@ public static class RavenServerMetricsCollector
         return null;
     }
 
-    private static long ExtractMemoryMB(string? workingSetString)
+    // Null when the working set is missing, unparseable or in an unknown unit.
+    internal static long? ExtractMemoryMB(string? workingSetString)
     {
         if (string.IsNullOrEmpty(workingSetString))
-            return 0;
+            return null;
 
         // Parses strings like "3.231 GBytes" or "512.5 MBytes".
         var parts = workingSetString.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -102,10 +103,10 @@ public static class RavenServerMetricsCollector
                 "mbytes" => (long)value,
                 "kbytes" => (long)(value / 1024),
                 "bytes" => (long)(value / (1024 * 1024)),
-                _ => (long)value
+                _ => null
             };
         }
-        return 0;
+        return null;
     }
 
     private static TimeSpan? ParseProcessorTime(string? totalProcessorTime) =>
