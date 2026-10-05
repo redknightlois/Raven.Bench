@@ -254,6 +254,18 @@ public class YcsbRunnerIntegrationTests : EmbeddedRavenTestBase
     }
 
     [Fact]
+    public async Task The_Load_Fills_The_Keyspace_Whatever_The_Scenario_Duration()
+    {
+        using var store = GetDocumentStore();
+
+        var scenario = Scenario("ravendb", 40) with { Duration = "1ms" };
+        var results = await new YcsbRunner(scenario, Settings(store.Urls[0], store.Database), transportOverride: null, include: id => id.Kind == YcsbRunKind.Load).RunAsync();
+
+        // The runner refuses a short keyspace, so a returned load result is a full one.
+        results.Should().ContainSingle(r => r.Kind == YcsbRunKind.Load);
+    }
+
+    [Fact]
     public async Task The_Load_Result_Reports_Throughput_Wall_Time_Cpu_And_The_Size_Ravendb_Names()
     {
         using var store = GetDocumentStore();
