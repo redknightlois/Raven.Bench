@@ -103,21 +103,26 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
             RecallSweep = recallSweep
         };
 
-        if (string.IsNullOrWhiteSpace(opts.OutJson) == false)
-        {
-            AnsiConsole.MarkupLine($"[dim]Attempting to write JSON to: {opts.OutJson}[/]");
-            JsonResultsWriter.Write(opts.OutJson!, summary);
-        }
-
-        if (string.IsNullOrWhiteSpace(opts.OutCsv) == false)
-        {
-            AnsiConsole.MarkupLine($"[dim]Attempting to write CSV to: {opts.OutCsv}[/]");
-            CsvResultsWriter.Write(opts.OutCsv!, summary);
-        }
+        WriteResults(opts, summary);
 
         RenderResults(summary, run.MaxNetworkUtilization, analysis, opts.LatencyDisplay);
 
         return 0;
+    }
+
+    internal static void WriteResults(RunOptions opts, BenchmarkSummary summary)
+    {
+        if (string.IsNullOrWhiteSpace(opts.OutJson) == false)
+        {
+            AnsiConsole.MarkupLine($"[dim]Attempting to write JSON to: {Markup.Escape(opts.OutJson)}[/]");
+            JsonResultsWriter.Write(opts.OutJson, summary);
+        }
+
+        if (string.IsNullOrWhiteSpace(opts.OutCsv) == false)
+        {
+            AnsiConsole.MarkupLine($"[dim]Attempting to write CSV to: {Markup.Escape(opts.OutCsv)}[/]");
+            CsvResultsWriter.Write(opts.OutCsv, summary);
+        }
     }
 
     private static bool ValidateRequiredSettings(BaseRunSettings settings)
@@ -145,10 +150,10 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
             return;
 
         var prefix = opts.OutputDir;
-        AnsiConsole.MarkupLine($"[dim]Output prefix: {prefix}[/]");
-        AnsiConsole.MarkupLine($"[dim]  JSON: {prefix}.json[/]");
-        AnsiConsole.MarkupLine($"[dim]  CSV: {prefix}.csv[/]");
-        AnsiConsole.MarkupLine($"[dim]  Histograms: {prefix}-step-cXXXX.hlog[/]");
+        AnsiConsole.MarkupLine($"[dim]Output prefix: {Markup.Escape(prefix)}[/]");
+        AnsiConsole.MarkupLine($"[dim]  JSON: {Markup.Escape(prefix)}.json[/]");
+        AnsiConsole.MarkupLine($"[dim]  CSV: {Markup.Escape(prefix)}.csv[/]");
+        AnsiConsole.MarkupLine($"[dim]  Histograms: {Markup.Escape(prefix)}-step-cXXXX.hlog[/]");
     }
 
     private static void RenderResults(BenchmarkSummary summary, double maxNetUtil, ResultAnalyzer.Report analysis, LatencyDisplayType latencyDisplay)
@@ -184,7 +189,7 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
             AnsiConsole.Write(panel);
         }
 
-        AnsiConsole.MarkupLine($"[bold]Verdict:[/]\n {summary.Verdict}");
+        AnsiConsole.MarkupLine($"[bold]Verdict:[/]\n {Markup.Escape(summary.Verdict)}");
 
         // Render recall@K results if available
         if (summary.RecallSweep is { Count: > 0 } sweep)
@@ -226,10 +231,10 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
         }
 
         foreach (var warning in analysis.Warnings)
-            AnsiConsole.MarkupLine($"[yellow]WARNING:[/]\n {warning}");
+            AnsiConsole.MarkupLine($"[yellow]WARNING:[/]\n {Markup.Escape(warning)}");
 
         foreach (var warning in CheckForSnmpDiscrepancy(summary))
-            AnsiConsole.MarkupLine($"[yellow]WARNING:[/]\n {warning}");
+            AnsiConsole.MarkupLine($"[yellow]WARNING:[/]\n {Markup.Escape(warning)}");
 
         if (analysis.UnreliableBeyondKnee)
             AnsiConsole.MarkupLine("[italic]Beyond limits = unreliable.[/]");

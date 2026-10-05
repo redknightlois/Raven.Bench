@@ -28,7 +28,7 @@ internal static class Program
                 AnsiConsole.MarkupLine("[yellow]Hint:[/] Use [cyan]--out[/] (not --out-json) for JSON output, [cyan]--out-csv[/] for CSV output");
                 AnsiConsole.WriteLine();
 
-                await app.RunAsync(new[] { "closed", "--help" });
+                await app.RunAsync(HelpArgs(args));
             }
             else if (ex.Message.Contains("concurrency"))
             {
@@ -44,6 +44,12 @@ internal static class Program
             return -1;
         }
     }
+
+    /// <summary>
+    /// Returns the arguments that print the help of the command the user ran: the leading command path, then --help.
+    /// </summary>
+    internal static string[] HelpArgs(string[] args) =>
+        [.. args.TakeWhile(a => a.StartsWith('-') == false), "--help"];
 
     /// <summary>
     /// Registers every command and example. Separated from <see cref="Main"/> so the startup

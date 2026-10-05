@@ -78,7 +78,7 @@ public sealed class IndexBuildCommand : AsyncCommand<IndexBuildSettings>
         }
         catch (ArgumentException ex)
         {
-            AnsiConsole.MarkupLine($"[red]{ex.Message}[/]");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]");
             return -1;
         }
 

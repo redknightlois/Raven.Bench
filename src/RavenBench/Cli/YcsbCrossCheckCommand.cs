@@ -46,7 +46,7 @@ public sealed class YcsbCrossCheckCommand : AsyncCommand<YcsbSettings>
         if (outPath != null)
         {
             File.WriteAllText(outPath, JsonSerializer.Serialize(comparisons, new JsonSerializerOptions { WriteIndented = true }));
-            AnsiConsole.MarkupLine($"[dim]wrote {outPath}[/]");
+            AnsiConsole.MarkupLine($"[dim]wrote {Markup.Escape(outPath)}[/]");
         }
 
         return 0;
