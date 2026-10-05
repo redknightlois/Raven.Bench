@@ -23,6 +23,12 @@ services:
     volumes:
       - ycsb-postgresql-data:/var/lib/postgresql/data
     shm_size: 1g
+    # Ready means a query over TCP succeeds: the image's init server listens on the socket only.
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=bench psql -h 127.0.0.1 -U bench -d bench -tAc 'SELECT 1'"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
     restart: unless-stopped
 
   mongodb:
