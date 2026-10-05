@@ -352,6 +352,14 @@ public sealed class ElasticsearchVectorTransport : IYcsbTransport, IReportsStora
         return (primaries.GetProperty("store").GetProperty("size_in_bytes").GetInt64(), primaries.GetProperty("segments").GetProperty("count").GetInt64());
     }
 
+    /// <summary>The bytes of the vector field's kNN structures. <c>_disk_usage</c> reads the last commit, so the index is flushed first.</summary>
+    public async Task<long> ReadVectorDiskUsageBytesAsync(CancellationToken ct)
+    {
+        await SendAsync(HttpMethod.Post, $"{Index}/_flush", null, ct).ConfigureAwait(false);
+        using var usage = await SendJsonAsync(HttpMethod.Post, $"{Index}/_disk_usage?run_expensive_tasks=true", null, ct).ConfigureAwait(false);
+        return usage.RootElement.GetProperty(Index).GetProperty("fields").GetProperty(VectorField).GetProperty("knn_vectors_in_bytes").GetInt64();
+    }
+
     /// <summary>The vector field's mapping with defaults included, flattened, as <c>_mapping/field</c> reports it.</summary>
     public Task<Dictionary<string, string>> ReadFieldOptionsAsync(CancellationToken ct) => ReadFieldOptionsAsync(Index, ct);
 

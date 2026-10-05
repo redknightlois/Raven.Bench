@@ -56,7 +56,8 @@ public interface IVectorTarget : IDisposable
 
     OperationBase InsertOperation(LabelledVector vector);
 
-    Task<OnDiskSize> StoredSizeAsync();
+    /// <summary>The used size of the whole store and of the vector index alone, as the product reports them; allocated but free space is not counted.</summary>
+    Task<(OnDiskSize Total, OnDiskSize Index)> StoredSizesAsync();
 
     /// <summary>The index definition and server settings in force, as the product reports them.</summary>
     Task<IReadOnlyDictionary<string, string>> ReportedSettingsAsync(CancellationToken ct);
@@ -67,7 +68,7 @@ public interface IVectorTarget : IDisposable
 
 /// <summary>
 /// RavenDB over the raw HTTP transport, the published path. A search returns ids only, the same payload pgvector returns. The vectors are stored as float32 and the
-/// index holds them in the destination embedding type the scenario names, with the build parameters left at the server defaults.
+/// index holds them in the destination embedding type the scenario names, built with the scenario's HNSW parameters, or the server defaults without them.
 /// </summary>
 public sealed class RavenDbVectorTarget : IVectorTarget
 {
@@ -156,11 +157,25 @@ public sealed class RavenDbVectorTarget : IVectorTarget
         return new InsertOperation<string> { Id = IdPrefix + vector.Id, Payload = json.ToString() };
     }
 
-    public async Task<OnDiskSize> StoredSizeAsync()
+    public async Task<(OnDiskSize Total, OnDiskSize Index)> StoredSizesAsync()
     {
         using var store = HttpHelper.Create(_url, _database, HttpVersion.Version11);
-        var stats = await store.Maintenance.SendAsync(new GetDetailedStatisticsOperation());
-        return OnDiskSize.Reported("database SizeOnDisk (documents and indexes)", stats.SizeOnDisk.SizeInBytes);
+        using var response = await store.GetRequestExecutor().HttpClient.GetAsync($"{_url.TrimEnd('/')}/databases/{Uri.EscapeDataString(_database)}/debug/storage/report");
+        response.EnsureSuccessStatusCode();
+        using var report = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        long total = 0;
+        long? index = null;
+        foreach (var environment in report.RootElement.GetProperty("Results").EnumerateArray())
+        {
+            var used = environment.GetProperty("Report").GetProperty("DataFile").GetProperty("UsedSpaceInBytes").GetInt64();
+            total += used;
+            if (environment.GetProperty("Name").GetString() == _indexName)
+                index = used;
+        }
+        if (index is null)
+            throw new InvalidOperationException($"The storage report of database '{_database}' has no environment for index '{_indexName}'.");
+        return (OnDiskSize.Reported("debug/storage/report DataFile.UsedSpaceInBytes, every environment", total),
+                OnDiskSize.Reported("debug/storage/report DataFile.UsedSpaceInBytes, the vector index environment", index.Value));
     }
 
     public async Task<IReadOnlyDictionary<string, string>> ReportedSettingsAsync(CancellationToken ct)
@@ -325,8 +340,9 @@ public sealed class PgVectorTarget(PgVectorTransport transport, HnswBuild? build
     public OperationBase InsertOperation(LabelledVector vector) =>
         new InsertOperation<VectorRow> { Id = vector.Id, Payload = new VectorRow(vector.Vector, vector.Label) };
 
-    public async Task<OnDiskSize> StoredSizeAsync() =>
-        OnDiskSize.Reported(transport.StorageSizeMetricName, await transport.GetStorageSizeBytesAsync());
+    public async Task<(OnDiskSize Total, OnDiskSize Index)> StoredSizesAsync() =>
+        (OnDiskSize.Reported(transport.StorageSizeMetricName, await transport.GetStorageSizeBytesAsync()),
+         OnDiskSize.Reported($"pg_relation_size of {PgVectorTransport.IndexName}", await transport.GetIndexSizeBytesAsync()));
 
     public async Task<IReadOnlyDictionary<string, string>> ReportedSettingsAsync(CancellationToken ct)
     {
@@ -440,8 +456,9 @@ public sealed class ElasticsearchVectorTarget(ElasticsearchVectorTransport trans
     public OperationBase InsertOperation(LabelledVector vector) =>
         new InsertOperation<VectorRow> { Id = vector.Id, Payload = new VectorRow(vector.Vector, vector.Label) };
 
-    public async Task<OnDiskSize> StoredSizeAsync() =>
-        OnDiskSize.Reported(transport.StorageSizeMetricName, await transport.GetStorageSizeBytesAsync());
+    public async Task<(OnDiskSize Total, OnDiskSize Index)> StoredSizesAsync() =>
+        (OnDiskSize.Reported(transport.StorageSizeMetricName, await transport.GetStorageSizeBytesAsync()),
+         OnDiskSize.Reported($"_disk_usage fields.{ElasticsearchVectorTransport.VectorField}.knn_vectors_in_bytes", await transport.ReadVectorDiskUsageBytesAsync(CancellationToken.None)));
 
     public async Task<IReadOnlyDictionary<string, string>> ReportedSettingsAsync(CancellationToken ct)
     {

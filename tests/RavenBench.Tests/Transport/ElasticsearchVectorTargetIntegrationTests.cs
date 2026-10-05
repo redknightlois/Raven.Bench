@@ -117,9 +117,10 @@ public class ElasticsearchVectorTargetIntegrationTests
         settings["license.type"].Should().Be("trial");
         settings["license.status"].Should().Be("active");
         settings["license.expiry_date"].Should().NotBe("none");
-        var size = await target.StoredSizeAsync();
+        var (size, index) = await target.StoredSizesAsync();
         size.Bytes.Should().BePositive();
         size.Metric.Should().Contain("store.size_in_bytes");
+        index.Bytes.Should().BeInRange(1, size.Bytes!.Value);
     });
 
     private static async Task<IReadOnlyList<string>> Search(ElasticsearchVectorTransport transport, float[] vector, int k)

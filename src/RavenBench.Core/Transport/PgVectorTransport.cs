@@ -216,6 +216,13 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
         return rows[0].Get<long>(0);
     }
 
+    public async Task<long> GetIndexSizeBytesAsync()
+    {
+        await _ready.Value.ConfigureAwait(false);
+        var rows = await _setup!.QueryAsync($"SELECT pg_relation_size('{IndexName}')::int8", CancellationToken.None).ConfigureAwait(false);
+        return rows[0].Get<long>(0);
+    }
+
     /// <summary>
     /// Builds the HNSW index with the operator class of the set's metric and <paramref name="build"/>; no build
     /// leaves <c>m</c> and <c>ef_construction</c> at the vendor defaults. Returns when the index is queryable.

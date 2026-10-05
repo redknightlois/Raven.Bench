@@ -21,13 +21,17 @@ public sealed record VectorEffortPoint(string Label, string Knob, double Value, 
 /// </summary>
 public sealed record VectorConstrainedInfo(double Fraction, long RawSetBytes, long RequestedLimitBytes, long MemoryLimitBytes, long MemorySwapLimitBytes, string LimitSource);
 
-/// <summary>The load row: wall time to a queryable index, peak server memory and the stored size.</summary>
+/// <summary>
+/// The load row: wall time to a queryable index, peak server memory, the used size of the whole store and of the
+/// vector index alone. A product that keeps the vectors both in its records and in the index counts them in each.
+/// </summary>
 public sealed record VectorLoadInfo(
     double WallTimeSeconds,
     long? PeakServerMemoryMB,
     string? PeakServerMemorySource,
     string? PeakServerMemoryUnavailable,
-    OnDiskSize StoredSize);
+    OnDiskSize StoredSize,
+    OnDiskSize IndexSize);
 
 /// <summary>The recall curve and the setting the threshold selected.</summary>
 public sealed record VectorRecallInfo(int K, double Threshold, IReadOnlyList<VectorEffortPoint> Curve, VectorEffortPoint? Selected, string Statement);

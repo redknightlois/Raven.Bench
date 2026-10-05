@@ -42,7 +42,7 @@ public class VectorRunnerCleanupTests
         public SearchEffort Effort(double value) => throw new NotSupportedException();
         public Task LoadAsync(IAsyncEnumerable<LabelledVector> vectors, CancellationToken ct) => Task.CompletedTask;
         public OperationBase InsertOperation(LabelledVector vector) => throw new NotSupportedException();
-        public Task<OnDiskSize> StoredSizeAsync() => throw new NotSupportedException();
+        public Task<(OnDiskSize Total, OnDiskSize Index)> StoredSizesAsync() => throw new NotSupportedException();
         public Task<IReadOnlyDictionary<string, string>> ReportedSettingsAsync(CancellationToken ct) => throw new NotSupportedException();
         public void Dispose() { }
     }

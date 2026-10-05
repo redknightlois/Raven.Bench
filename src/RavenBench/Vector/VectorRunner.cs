@@ -211,7 +211,8 @@ public sealed class VectorRunner(VectorScenario scenario, IReadOnlyDictionary<st
         return await RunCleanup.AfterAsync<List<VectorRunResult>>(settings.KeepData ? null : target.CleanupAsync, "Vector", async () =>
         {
             var peakMemory = loadStep.Peak;
-            var loadInfo = new VectorLoadInfo(loadStep.Step.MeasuredDuration!.Value.TotalSeconds, peakMemory.MemoryMB, peakMemory.Source, peakMemory.Unavailable, await target.StoredSizeAsync());
+            var (storedSize, indexSize) = await target.StoredSizesAsync();
+            var loadInfo = new VectorLoadInfo(loadStep.Step.MeasuredDuration!.Value.TotalSeconds, peakMemory.MemoryMB, peakMemory.Source, peakMemory.Unavailable, storedSize, indexSize);
 
             var productName = target.Transport.ProductName;
             var serverVersion = await target.Transport.GetServerVersionAsync();

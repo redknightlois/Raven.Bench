@@ -113,6 +113,7 @@ public class VectorRunnerIntegrationTests
             settings.Should().ContainKeys("index_kind.vendor_default", "segments.count", "index.refresh_interval", "jvm.mem.heap_max_in_bytes", "license.type", "license.status", "license.expiry_date");
             info["load"].Durability.Value.Should().Be("request");
             info["load"].Load!.StoredSize.Bytes.Should().BePositive();
+        info["load"].Load!.IndexSize.Bytes.Should().BeInRange(1, info["load"].Load!.StoredSize.Bytes!.Value);
             info["recall"].RowLabel.Should().Be($"elasticsearch {kind.Storage}");
             info["under-insert"].UnderInsert!.TruthStatement.Should().Contain($"index.refresh_interval is {settings["index.refresh_interval"]}");
         }
