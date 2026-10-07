@@ -2,7 +2,7 @@ namespace RavenBench;
 
 /// <summary>
 /// Runs a step and then removes what the run created. A step failure still runs the cleanup and reaches the caller;
-/// a cleanup failure after a step failure is reported on the error stream, never in its place.
+/// a cleanup failure is reported on the error stream, never in place of the step failure and never in place of a successful result.
 /// </summary>
 internal static class RunCleanup
 {
@@ -17,21 +17,25 @@ internal static class RunCleanup
         }
         catch
         {
-            if (cleanup is not null)
-            {
-                try
-                {
-                    await cleanup();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[{component}] cleanup after a failed run also failed: {ex.GetType().Name}: {ex.Message}");
-                }
-            }
+            await CleanAsync(cleanup, component, "a failed run");
             throw;
         }
-        if (cleanup is not null)
-            await cleanup();
+        await CleanAsync(cleanup, component, "a successful run");
         return result;
+    }
+
+    private static async Task CleanAsync(Func<Task>? cleanup, string component, string outcome)
+    {
+        if (cleanup is null)
+            return;
+
+        try
+        {
+            await cleanup();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[{component}] cleanup after {outcome} also failed: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 }
