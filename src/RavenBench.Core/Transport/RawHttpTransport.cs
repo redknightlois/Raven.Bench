@@ -17,6 +17,9 @@ namespace RavenBench.Core.Transport;
 public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspectsStoredDocuments
 {
     private const int BufferSize = 32 * 1024;
+    // The longest one request waits for an answer, from the moment it is sent; a request past it fails.
+    private static readonly TimeSpan RequestDeadline = TimeSpan.FromSeconds(30);
+
     private const int PoolCount = 1024;
     private const string JsonContentType = "application/json; charset=utf-8";
     private const string OctetStreamContentType = "application/octet-stream";
@@ -500,7 +503,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
 
     public async Task PutAsync<T>(string id, T document)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var cts = new CancellationTokenSource(RequestDeadline);
         var json = document is string s ? s : JsonSerializer.Serialize(document);
         var result = await ExecuteAsync(new InsertOperation<string> { Id = id, Payload = json }, cts.Token).ConfigureAwait(false);
         if (result.IsSuccess == false)
@@ -584,13 +587,13 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         Capped
     }
 
-    // The 30s cap starts here, after the caller has built the request, so it bounds the round trip
+    // The deadline starts here, after the caller has built the request, so it bounds the round trip
     // and not the payload serialization.
     private async Task<TransportResult> SendCoreAsync(HttpRequestMessage req, CancellationToken ct, ResponseReadDeadline readDeadline,
         Func<HttpResponseMessage, CancellationToken, Task<TransportResult>> handleResponse)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        cts.CancelAfter(RequestDeadline);
 
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         if (resp.IsSuccessStatusCode == false)
@@ -603,23 +606,39 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         return await handleResponse(resp, readToken).ConfigureAwait(false);
     }
 
+    /// <summary>Runs <paramref name="call"/> under <see cref="RequestDeadline"/>; the deadline fails as a <see cref="TimeoutException"/>, the caller's cancellation as cancellation.</summary>
+    private async Task<T> WithDeadlineAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(RequestDeadline);
+        try
+        {
+            return await call(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested == false)
+        {
+            throw new TimeoutException($"The server did not answer within {RequestDeadline}.");
+        }
+    }
+
     public async Task<int?> GetServerMaxCoresAsync()
     {
         try
         {
             var url = $"{_baseUrl}/license/status";
-            using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-            resp.EnsureSuccessStatusCode();
-            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-            if (doc.RootElement.TryGetProperty("MaxCores", out var cores) && cores.TryGetInt32(out var c))
-                return c;
+            return await WithDeadlineAsync(async token =>
+            {
+                using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                await using var stream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+                using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
+                return doc.RootElement.TryGetProperty("MaxCores", out var cores) && cores.TryGetInt32(out var c) ? (int?)c : null;
+            }, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException($"Client validation failed: Unable to retrieve server max cores. {ex.Message}", ex);
         }
-        return null;
     }
 
 
@@ -638,17 +657,20 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         try
         {
             var url = $"{_baseUrl}/build/version";
-            using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-            resp.EnsureSuccessStatusCode();
-            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+            return await WithDeadlineAsync(async token =>
+            {
+                using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                await using var stream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+                using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
 
-            if (doc.RootElement.TryGetProperty("FullVersion", out var fullVersion))
-                return fullVersion.GetString() ?? "unknown";
-            if (doc.RootElement.TryGetProperty("ProductVersion", out var productVersion))
-                return productVersion.GetString() ?? "unknown";
+                if (doc.RootElement.TryGetProperty("FullVersion", out var fullVersion))
+                    return fullVersion.GetString() ?? "unknown";
+                if (doc.RootElement.TryGetProperty("ProductVersion", out var productVersion))
+                    return productVersion.GetString() ?? "unknown";
 
-            return "unknown";
+                return "unknown";
+            }, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -667,12 +689,16 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         try
         {
             var url = $"{_baseUrl}/build/version";
-            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-
-            if (response.IsSuccessStatusCode == false)
+            await WithDeadlineAsync(async token =>
             {
-                throw new HttpRequestException($"Server returned {response.StatusCode}: {response.ReasonPhrase}");
-            }
+                using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+
+                if (response.IsSuccessStatusCode == false)
+                {
+                    throw new HttpRequestException($"Server returned {response.StatusCode}: {response.ReasonPhrase}");
+                }
+                return true;
+            }, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException == false)
         {
@@ -703,38 +729,42 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyDictionary<string, string>?> ReadStoredFieldsAsync(string id, CancellationToken ct)
-    {
-        using var response = await _http.GetAsync(_origin + DocumentTarget(id), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
-
-        response.EnsureSuccessStatusCode();
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var body = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
-        var results = body.RootElement.GetProperty("Results");
-        if (results.GetArrayLength() == 0)
-            return null;
-
-        var stored = results[0];
-        var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
-        for (int i = 0; i < PayloadGenerator.FieldCount; i++)
+    public Task<IReadOnlyDictionary<string, string>?> ReadStoredFieldsAsync(string id, CancellationToken ct) =>
+        WithDeadlineAsync(async token =>
         {
-            var name = PayloadGenerator.FieldName(i);
-            if (stored.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
-                fields[name] = value.GetString()!;
-        }
+            using var response = await _http.GetAsync(_origin + DocumentTarget(id), HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                return null;
 
-        return fields;
-    }
+            response.EnsureSuccessStatusCode();
+
+            await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            using var body = await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
+            var results = body.RootElement.GetProperty("Results");
+            if (results.GetArrayLength() == 0)
+                return null;
+
+            var stored = results[0];
+            var fields = new Dictionary<string, string>(PayloadGenerator.FieldCount);
+            for (int i = 0; i < PayloadGenerator.FieldCount; i++)
+            {
+                var name = PayloadGenerator.FieldName(i);
+                if (stored.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                    fields[name] = value.GetString()!;
+            }
+
+            return (IReadOnlyDictionary<string, string>?)fields;
+        }, ct);
 
     /// <inheritdoc />
-    public async Task DeleteStoredDocumentAsync(string id, CancellationToken ct)
-    {
-        using var response = await _http.DeleteAsync(_origin + DocumentTarget(id), ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-    }
+    public Task DeleteStoredDocumentAsync(string id, CancellationToken ct) =>
+        WithDeadlineAsync(async token =>
+        {
+            using var response = await _http.DeleteAsync(_origin + DocumentTarget(id), token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            return true;
+        }, ct);
+
     private string DocumentTarget(string id)
     {
         if (_customEndpoint is { } e)
@@ -866,7 +896,7 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         var bodyBytes = Encoding.UTF8.GetBytes(body);
         req.Content = CreateJsonContent(bodyBytes);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        cts.CancelAfter(RequestDeadline);
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         if (resp.IsSuccessStatusCode == false)
             throw new HttpRequestException($"HTTP {(int)resp.StatusCode} {resp.StatusCode}: {await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false)}", null, resp.StatusCode);
