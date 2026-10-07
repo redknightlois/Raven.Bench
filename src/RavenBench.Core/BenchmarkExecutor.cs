@@ -79,6 +79,10 @@ namespace RavenBench.Core
                 var (latencyRecorder, metrics) = await loadGenerator.ExecuteMeasurementAsync(
                     measurementTime, cancellationToken);
 
+                // A generator drains and returns its metrics when cancelled, so a cut-short window looks like a
+                // full measurement; the step reports the cancellation instead of building a result from it.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 // The measurement window closes here. The exception dump and the result
                 // construction below run outside it, so neither enters the load-host CPU figure.
                 _cpuTracker.Stop();
