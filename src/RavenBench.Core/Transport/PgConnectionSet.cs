@@ -10,22 +10,22 @@ namespace RavenBench.Core.Transport;
 /// </summary>
 internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposable
 {
-    private readonly Func<Task<TSlot>> _openSlot;
+    private readonly Func<CancellationToken, Task<TSlot>> _openSlot;
     private readonly Channel<TSlot> _slots;
 
-    private PgConnectionSet(int size, Func<Task<TSlot>> openSlot)
+    private PgConnectionSet(int size, Func<CancellationToken, Task<TSlot>> openSlot)
     {
         _openSlot = openSlot;
         _slots = Channel.CreateBounded<TSlot>(size);
     }
 
     /// <summary>Opens one connection and applies <c>synchronous_commit=on</c> to it.</summary>
-    public static async Task<PgConnection> ConnectAsync(PgConnectOptions options)
+    public static async Task<PgConnection> ConnectAsync(PgConnectOptions options, CancellationToken ct = default)
     {
-        var connection = await PgClient.ConnectAsync(options, CancellationToken.None).ConfigureAwait(false);
+        var connection = await PgClient.ConnectAsync(options, ct).ConfigureAwait(false);
         try
         {
-            await connection.ExecuteAsync(PostgresYcsbTransport.SetDurabilitySql, CancellationToken.None).ConfigureAwait(false);
+            await connection.ExecuteAsync(PostgresYcsbTransport.SetDurabilitySql, ct).ConfigureAwait(false);
             return connection;
         }
         catch
@@ -37,9 +37,9 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
 
     /// <summary>Opens <paramref name="size"/> connections; a failure closes the ones already open.</summary>
     public static Task<PgConnectionSet<TSlot>> OpenAsync(PgConnectOptions options, int size, Func<PgConnection, Task<TSlot>> prepare) =>
-        OpenAsync(size, async () =>
+        OpenAsync(size, async ct =>
         {
-            var connection = await ConnectAsync(options).ConfigureAwait(false);
+            var connection = await ConnectAsync(options, ct).ConfigureAwait(false);
             try
             {
                 return await prepare(connection).ConfigureAwait(false);
@@ -52,13 +52,17 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
         });
 
     /// <summary>Opens <paramref name="size"/> slots through <paramref name="openSlot"/>, which owns the slot it returns or disposes what it opened when it throws.</summary>
-    internal static async Task<PgConnectionSet<TSlot>> OpenAsync(int size, Func<Task<TSlot>> openSlot)
+    internal static Task<PgConnectionSet<TSlot>> OpenAsync(int size, Func<Task<TSlot>> openSlot) =>
+        OpenAsync(size, _ => openSlot());
+
+    /// <summary>As <see cref="OpenAsync(int, Func{Task{TSlot}})"/>; <paramref name="openSlot"/> also opens each replacement, under the token of the call that needed it.</summary>
+    internal static async Task<PgConnectionSet<TSlot>> OpenAsync(int size, Func<CancellationToken, Task<TSlot>> openSlot)
     {
         var set = new PgConnectionSet<TSlot>(size, openSlot);
         try
         {
             for (int i = 0; i < size; i++)
-                set._slots.Writer.TryWrite(await openSlot().ConfigureAwait(false));
+                set._slots.Writer.TryWrite(await openSlot(CancellationToken.None).ConfigureAwait(false));
             return set;
         }
         catch
@@ -69,12 +73,17 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
     }
 
     /// <summary>
-    /// Runs one body on a rented slot. A slot the body failed on or was cancelled on is disposed and
-    /// replaced: the driver closes the connection on a protocol-level error, and a cancel can leave an
-    /// unread response, an open transaction or session state the slot does not know. If the server is
-    /// gone, the set is closed so a later rent fails fast instead of blocking on an empty set.
+    /// Runs one body on a rented slot. A failure after the caller's token was cancelled, and a server-side error that leaves the connection
+    /// usable, such as a duplicate key, reach the caller and the slot goes back to the set. Any other
+    /// failure, including a cancel the caller's token does not own, means the connection state is unknown: the slot is disposed and replaced under the caller's token.
+    /// If the server is gone, the set is closed so a later rent fails fast instead of blocking on an empty set.
     /// </summary>
-    public async Task<T> UseAsync<T>(Func<TSlot, Task<T>> body, CancellationToken ct)
+    public Task<T> UseAsync<T>(Func<TSlot, Task<T>> body, CancellationToken ct) => UseAsync(body, ct, keepOnServerError: true);
+
+    /// <summary>As <see cref="UseAsync{T}(Func{TSlot, Task{T}}, CancellationToken)"/> for a COPY: a failed COPY leaves the connection unusable even when the server error is not fatal, so any failure other than cancellation replaces the slot.</summary>
+    public Task<T> UseCopyAsync<T>(Func<TSlot, Task<T>> body, CancellationToken ct) => UseAsync(body, ct, keepOnServerError: false);
+
+    private async Task<T> UseAsync<T>(Func<TSlot, Task<T>> body, CancellationToken ct, bool keepOnServerError)
     {
         var slot = await _slots.Reader.ReadAsync(ct).ConfigureAwait(false);
         try
@@ -83,9 +92,12 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
             await ReturnAsync(slot).ConfigureAwait(false);
             return result;
         }
-        catch
+        catch (Exception ex)
         {
-            await ReplaceAsync(slot).ConfigureAwait(false);
+            if (ct.IsCancellationRequested || (keepOnServerError && ex is PgException { IsFatal: false }))
+                await ReturnAsync(slot).ConfigureAwait(false);
+            else
+                await ReplaceAsync(slot, ct).ConfigureAwait(false);
             throw;
         }
     }
@@ -104,14 +116,14 @@ internal sealed class PgConnectionSet<TSlot> where TSlot : class, IAsyncDisposab
             await slot.DisposeAsync().ConfigureAwait(false);
     }
 
-    private async Task ReplaceAsync(TSlot slot)
+    private async Task ReplaceAsync(TSlot slot, CancellationToken ct)
     {
         // Disposing a connection the driver already closed can itself throw; that must not replace
         // the operation's own error with the teardown failure.
         try { await slot.DisposeAsync().ConfigureAwait(false); } catch (Exception) { }
         try
         {
-            await ReturnAsync(await _openSlot().ConfigureAwait(false)).ConfigureAwait(false);
+            await ReturnAsync(await _openSlot(ct).ConfigureAwait(false)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

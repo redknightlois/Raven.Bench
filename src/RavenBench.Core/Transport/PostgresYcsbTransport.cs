@@ -347,7 +347,7 @@ public sealed class PostgresYcsbTransport : IYcsbTransport, IReportsStorageSize,
     private async Task<TransportResult> BulkInsertAsync(BulkInsertOperation<string> bulk, CancellationToken ct)
     {
         await _ready.Value.ConfigureAwait(false);
-        return await _measured!.UseAsync(async slot =>
+        return await _measured!.UseCopyAsync(async slot =>
         {
             await using var importer = await slot.Connection
                 .BeginBinaryImportAsync(BulkCopySql, ct)
