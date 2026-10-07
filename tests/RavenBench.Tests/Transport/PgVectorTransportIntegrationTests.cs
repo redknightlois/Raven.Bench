@@ -155,6 +155,24 @@ public class PgVectorTransportIntegrationTests
     });
 
     [RequiresPostgreSqlFact]
+    public Task Replacing_The_Index_Leaves_Exactly_One_Vector_Index_Of_The_Requested_Kind() => WithLoadedSet(async (transport, _) =>
+    {
+        var none = new Dictionary<string, int>();
+        var session = new Dictionary<string, string>();
+
+        await transport.ReplaceIndexAsync("ivfflat", none, session);
+        await transport.ReplaceIndexAsync("ivfflat", none, session);
+        Assert.Equal(["vectors_embedding_ivfflat"], await VectorIndexNamesAsync(transport));
+
+        await transport.ReplaceIndexAsync("hnsw", none, session);
+        Assert.Equal([PgVectorTransport.IndexName], await VectorIndexNamesAsync(transport));
+    });
+
+    private static Task<List<string>> VectorIndexNamesAsync(PgVectorTransport transport) => transport.ReadWithWorkerAsync(async (connection, _) =>
+        (await connection.QueryAsync("SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'vectors'::regclass AND c.relname LIKE 'vectors_embedding_%' ORDER BY 1", CancellationToken.None))
+            .Select(row => row.Get<string>(0)).ToList());
+
+    [RequiresPostgreSqlFact]
     public Task Exact_Search_Skips_The_Index_And_Returns_The_Brute_Force_Truth() => WithLoadedSet(async (transport, set) =>
     {
         var queries = Seeded(10, seed: 11);

@@ -47,7 +47,7 @@ public static class PgVectorMetrics
     };
 }
 
-/// <summary>Thrown when the plan of an exact search uses the HNSW index, so the search is not exact.</summary>
+/// <summary>Thrown when the plan of an exact search uses a vector index, so the search is not exact.</summary>
 public sealed class ExactSearchUsedIndexException(string indexName, string plan)
     : InvalidOperationException($"The exact search plan uses index '{indexName}', so it is approximate:\n{plan}")
 {
@@ -78,6 +78,9 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
 
     public const string TableName = "vectors";
     public const string IndexName = "vectors_embedding_hnsw";
+
+    /// <summary>The name of the vector index of <paramref name="kind"/> the transport creates; the hnsw one is <see cref="IndexName"/>.</summary>
+    private static string IndexNameOf(string kind) => $"vectors_embedding_{kind}";
 
     /// <summary>The settings the result records as the server reports them; one the server does not know is recorded as absent.</summary>
     public static readonly IReadOnlyList<string> RecordedSettings =
@@ -250,7 +253,7 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
             throw new ArgumentException($"Index option '{bad}' is not a plain option name.", nameof(options));
 
         await _ready.Value.ConfigureAwait(false);
-        var name = $"vectors_embedding_{kind}";
+        var name = IndexNameOf(kind);
         var with = options.Count == 0 ? "" : $" WITH ({string.Join(", ", options.Select(o => $"{o.Key} = {o.Value.ToString(CultureInfo.InvariantCulture)}"))})";
         if (session.Keys.FirstOrDefault(key => PlainName().IsMatch(key) == false) is { } badSetting)
             throw new ArgumentException($"Session setting '{badSetting}' is not a plain setting name.", nameof(session));
@@ -258,8 +261,9 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
         {
             foreach (var (setting, value) in session)
                 await _setup!.QueryAsync("SELECT set_config($1, $2, true)", SqlParameters.Create(setting, value), ct).ConfigureAwait(false);
-            await _setup!.ExecuteAsync($"DROP INDEX IF EXISTS {IndexName}", ct).ConfigureAwait(false);
-            await _setup.ExecuteAsync($"CREATE INDEX {name} ON {TableName} USING {kind} (embedding {PgVectorMetrics.OperatorClass(_metric)}){with}", ct).ConfigureAwait(false);
+            foreach (var created in SearchKnobs.Keys)
+                await _setup!.ExecuteAsync($"DROP INDEX IF EXISTS {IndexNameOf(created)}", ct).ConfigureAwait(false);
+            await _setup!.ExecuteAsync($"CREATE INDEX {name} ON {TableName} USING {kind} (embedding {PgVectorMetrics.OperatorClass(_metric)}){with}", ct).ConfigureAwait(false);
             return true;
         }, ct).ConfigureAwait(false);
         await _setup!.ExecuteAsync($"ANALYZE {TableName}", ct).ConfigureAwait(false);
@@ -357,7 +361,7 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
 
     /// <summary>
     /// The exact k nearest ids by a sequential scan: index scans are disabled for the transaction, and
-    /// the plan of the same statement is read first and must not name the HNSW index.
+    /// the plan of the same statement is read first and must not name any vector index the transport creates.
     /// </summary>
     public async Task<IReadOnlyList<string>> ExactSearchAsync(float[] query, int k, VectorFilter? filter, CancellationToken ct = default)
     {
@@ -371,7 +375,9 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
             {
                 await slot.Connection.ExecuteAsync("SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = off; SET LOCAL enable_indexonlyscan = off", ct).ConfigureAwait(false);
                 var plan = await slot.Connection.QueryTypedAsync("EXPLAIN (COSTS OFF) " + sql, parameters, ct).ConfigureAwait(false);
-                RequireNoIndex(plan.Select(r => r.Get<string>(0)).ToList(), IndexName);
+                var planLines = plan.Select(r => r.Get<string>(0)).ToList();
+                foreach (var kind in SearchKnobs.Keys)
+                    RequireNoIndex(planLines, IndexNameOf(kind));
                 var rows = await slot.Connection.QueryTypedAsync(sql, parameters, ct).ConfigureAwait(false);
                 await slot.Connection.ExecuteAsync("ROLLBACK", ct).ConfigureAwait(false);
                 return (IReadOnlyList<string>)rows.Select(r => r.Get<string>(0)).ToList();
