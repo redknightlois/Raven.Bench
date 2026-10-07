@@ -21,7 +21,7 @@ public sealed class ProcessCpuTracker
 
     public void Start()
     {
-        var p = Process.GetCurrentProcess();
+        using var p = Process.GetCurrentProcess();
         _startCpu = p.TotalProcessorTime;
         _wall.Restart();
         _running = true;
@@ -37,7 +37,7 @@ public sealed class ProcessCpuTracker
             return;
         _running = false;
 
-        var p = Process.GetCurrentProcess();
+        using var p = Process.GetCurrentProcess();
         var endCpu = p.TotalProcessorTime;
         _wall.Stop();
         var cpuDelta = (endCpu - _startCpu).TotalMilliseconds;
