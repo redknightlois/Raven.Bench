@@ -166,8 +166,13 @@ def embeddings_to_parquet(wv, output_path: Path) -> None:
         'dimension': [wv.vector_size] * len(words)
     })
     
-    # Save to parquet with compression
-    df.to_parquet(output_path, compression='snappy', index=False)
+    # The final name only ever holds a complete file: write beside it, then rename.
+    partial = output_path.with_name(output_path.name + ".partial")
+    try:
+        df.to_parquet(partial, compression='snappy', index=False)
+        os.replace(partial, output_path)
+    finally:
+        partial.unlink(missing_ok=True)
     
     file_size_mb = output_path.stat().st_size / (1024 * 1024)
     print(f"Saved {len(words)} word embeddings to {output_path} ({file_size_mb:.1f} MB)")
