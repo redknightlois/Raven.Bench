@@ -45,6 +45,34 @@ public class SnmpClientTests
     }
 
     [Fact]
+    public async Task GetManyAsync_InvalidOid_ReturnsEmptyAndDisposesItsSocket()
+    {
+        using var agent = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        var log = new StringWriter();
+
+        var result = await new SnmpClient(log).GetManyAsync(new[] { "not-an-oid" }, (IPEndPoint)agent.Client.LocalEndPoint!, socket, timeoutMs: 50);
+
+        result.Should().BeEmpty();
+        socket.SafeHandle.IsClosed.Should().BeTrue();
+        log.ToString().Should().Contain("SNMP query failed");
+    }
+
+    [Fact]
+    public async Task GetManyAsync_UnresolvableHost_ReturnsEmptyAndLogsOncePerOutage()
+    {
+        var log = new StringWriter();
+        var client = new SnmpClient(log);
+
+        var first = await client.GetManyAsync(new[] { "1.3.6.1.2.1.1.1.0" }, "no-such-host.invalid", timeoutMs: 50);
+        var second = await client.GetManyAsync(new[] { "1.3.6.1.2.1.1.1.0" }, "no-such-host.invalid", timeoutMs: 50);
+
+        first.Should().BeEmpty();
+        second.Should().BeEmpty();
+        log.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Should().HaveCount(1);
+    }
+
+    [Fact]
     [Trait("Category", "Unit")]
     public void A_Failure_After_A_Success_Is_Reported_Again()
     {
