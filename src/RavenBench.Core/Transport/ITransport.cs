@@ -43,7 +43,7 @@ public readonly struct TransportResult(long bytesOut, long bytesIn, string? erro
     {
         OperationCanceledException when ct.IsCancellationRequested => CancelledResult,
         TaskCanceledException => new TransportResult(0, 0, "Operation timed out"),
-        HttpRequestException httpEx => new TransportResult(0, 0, $"HTTP {httpEx.Data["StatusCode"] ?? "Error"}: {httpEx.Message}"),
+        HttpRequestException httpEx => new TransportResult(0, 0, $"HTTP {(httpEx.StatusCode is { } status ? (int)status : "Error")}: {httpEx.Message}"),
         _ => new TransportResult(0, 0, ex.Message)
     };
 
