@@ -519,7 +519,7 @@ public sealed partial class PgVectorTransport : IYcsbTransport, IReportsStorageS
     private async Task<TransportResult> BulkInsertAsync(BulkInsertOperation<VectorRow> bulk, CancellationToken ct)
     {
         await _ready.Value.ConfigureAwait(false);
-        return await _workers!.UseAsync(async slot =>
+        return await _workers!.UseCopyAsync(async slot =>
         {
             await using var importer = await slot.Connection.BeginBinaryImportAsync(BulkCopySql, ct).ConfigureAwait(false);
             foreach (var document in bulk.Documents)
