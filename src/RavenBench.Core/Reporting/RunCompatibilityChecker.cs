@@ -6,6 +6,7 @@ namespace RavenBench.Core.Reporting;
 /// <summary>
 /// Checks if multiple benchmark summaries are compatible for comparison.
 /// Compatible runs must have the same workload: profile, dataset and its size, query profile, load shape, key distribution,
+/// document size, attachment operation, bulk batch size, search engine, preload, vector top-k and quantization,
 /// entry point and its resolved scenario, and the machine they ran on.
 /// Transport and HTTP version are ALLOWED to differ - that's the point of comparison!
 /// </summary>
@@ -31,6 +32,13 @@ public static class RunCompatibilityChecker
         ("query profile", s => s.Options.QueryProfile),
         ("load shape", s => s.Options.Shape),
         ("key distribution", s => s.Options.Distribution),
+        ("document size", s => s.Options.DocumentSizeBytes),
+        ("attachment operation", s => s.Options.AttachmentOp),
+        ("bulk batch size", s => s.Options.BulkBatchSize),
+        ("search engine", s => s.Options.SearchEngine),
+        ("preload", s => s.Options.Preload),
+        ("vector top-k", s => s.Options.VectorTopK),
+        ("vector quantization", s => s.Options.VectorQuantization),
         ("entry point", s => s.Ycsb != null ? "ycsb" : s.Vector != null ? "vector" : s.Aggregate != null ? "aggregate" : "raven-bench"),
         ("run", s => s.Ycsb?.Run ?? s.Vector?.Run ?? s.Aggregate?.Run),
         ("scenario", s => Json(s.Ycsb?.ResolvedScenario ?? s.Vector?.ResolvedScenario ?? (object?)s.Aggregate?.ResolvedScenario)),
