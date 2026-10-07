@@ -115,6 +115,18 @@ internal static class HistogramExporter
         };
     }
 
+    /// <summary>The paths, with <c>{step}</c> and <c>{concurrency}</c> standing for the digits, that a step's histogram files take in the given format.</summary>
+    internal static IEnumerable<string> FilePatterns(string outputPrefix, HistogramExportFormat format)
+    {
+        var stem = StepPath(outputPrefix, "{step}", "{concurrency}");
+        if (format is HistogramExportFormat.Hlog or HistogramExportFormat.Both)
+            yield return $"{stem}.hlog";
+        if (format is HistogramExportFormat.Csv or HistogramExportFormat.Both)
+            yield return $"{stem}.csv";
+    }
+
     private static string StepPath(string outputPrefix, int stepIndex, int concurrency) =>
-        string.Create(CultureInfo.InvariantCulture, $"{outputPrefix}-step{stepIndex + 1:D3}-c{concurrency:D4}");
+        StepPath(outputPrefix, string.Create(CultureInfo.InvariantCulture, $"{stepIndex + 1:D3}"), string.Create(CultureInfo.InvariantCulture, $"{concurrency:D4}"));
+
+    private static string StepPath(string outputPrefix, string step, string concurrency) => $"{outputPrefix}-step{step}-c{concurrency}";
 }

@@ -46,4 +46,30 @@ public class HistogramExporterTests
                 Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Theory]
+    [InlineData(HistogramExportFormat.Hlog)]
+    [InlineData(HistogramExportFormat.Csv)]
+    [InlineData(HistogramExportFormat.Both)]
+    public void The_Printed_Patterns_Match_The_Files_Written_For_A_Step(HistogramExportFormat format)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"ravenbench-hlog-{Guid.NewGuid():N}");
+        try
+        {
+            var prefix = Path.Combine(dir, "run");
+            var artifact = HistogramExporter.BuildHistogramArtifact(Snapshot(100, 200), 6, 12, prefix, format)!;
+
+            // The directory name is random, so only the file name is rewritten.
+            var files = new[] { artifact.HlogPath, artifact.CsvPath }.Where(path => path != null).Select(path => path!).ToList();
+            var written = files.Select(path => Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(path).Replace("007", "{step}").Replace("0012", "{concurrency}")));
+
+            HistogramExporter.FilePatterns(prefix, format).Should().BeEquivalentTo(written);
+            files.Should().OnlyContain(path => File.Exists(path));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
 }
