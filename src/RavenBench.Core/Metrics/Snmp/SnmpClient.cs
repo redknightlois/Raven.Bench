@@ -26,22 +26,34 @@ public class SnmpClient
 
     public async Task<Dictionary<string, Variable>> GetManyAsync(IEnumerable<string> oids, string host, int port = 161, string? community = null, int? timeoutMs = null)
     {
-        var endpoint = new IPEndPoint(await ResolveAddressAsync(host), port);
-        return await GetManyAsync(oids, endpoint, new Socket(endpoint.AddressFamily, SocketType.Dgram, ProtocolType.Udp), community, timeoutMs);
+        IPEndPoint endpoint;
+        Socket socket;
+        try
+        {
+            endpoint = new IPEndPoint(await ResolveAddressAsync(host), port);
+            socket = new Socket(endpoint.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
+        }
+        catch (Exception ex)
+        {
+            RecordOutcome(ex);
+            return new Dictionary<string, Variable>();
+        }
+
+        return await GetManyAsync(oids, endpoint, socket, community, timeoutMs);
     }
 
     /// <summary>Sends one GET over the given socket and disposes the socket when the request ends, on success, failure or timeout.</summary>
     internal async Task<Dictionary<string, Variable>> GetManyAsync(IEnumerable<string> oids, IPEndPoint endpoint, Socket socket, string? community = null, int? timeoutMs = null)
     {
         var result = new Dictionary<string, Variable>();
-        var variables = oids.Select(oid => new Variable(new ObjectIdentifier(oid))).ToList();
-        var request = new GetRequestMessage(Messenger.NextRequestId, Version, new OctetString(community ?? DefaultCommunity), variables);
 
         try
         {
             // Disposing the socket ends the pending receive of a timed-out request.
             using (socket)
             {
+                var variables = oids.Select(oid => new Variable(new ObjectIdentifier(oid))).ToList();
+                var request = new GetRequestMessage(Messenger.NextRequestId, Version, new OctetString(community ?? DefaultCommunity), variables);
                 var response = await request.GetResponseAsync(endpoint, socket)
                     .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs ?? DefaultTimeoutMs));
                 var pdu = response.Pdu();
