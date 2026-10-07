@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,9 +27,10 @@ public static class LoadGeneratorExecution
     /// </summary>
     public static Action<string>? OnFirstError { get; set; }
 
-    private static int _firstErrorLogged = 0;
+    // One entry per distinct message reported since the last reset; grows with the distinct messages of a run.
+    private static readonly ConcurrentDictionary<string, byte> ReportedErrors = new(StringComparer.Ordinal);
 
-    public static void ResetErrorTracking() => Interlocked.Exchange(ref _firstErrorLogged, 0);
+    public static void ResetErrorTracking() => ReportedErrors.Clear();
 
     /// <summary>
     /// Executes one operation and records its latency measured from <paramref name="startTimestamp"/>
@@ -60,7 +62,7 @@ public static class LoadGeneratorExecution
             {
                 isError = true;
                 errorDetails = result.ErrorDetails;
-                if (errorDetails != null && Interlocked.Exchange(ref _firstErrorLogged, 1) == 0)
+                if (errorDetails != null && ReportedErrors.TryAdd(errorDetails, 0))
                     OnFirstError?.Invoke(errorDetails);
             }
             else
