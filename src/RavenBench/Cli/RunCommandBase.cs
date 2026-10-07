@@ -153,7 +153,8 @@ public abstract class RunCommandBase<TSettings> : AsyncCommand<TSettings> where 
         AnsiConsole.MarkupLine($"[dim]Output prefix: {Markup.Escape(prefix)}[/]");
         AnsiConsole.MarkupLine($"[dim]  JSON: {Markup.Escape(prefix)}.json[/]");
         AnsiConsole.MarkupLine($"[dim]  CSV: {Markup.Escape(prefix)}.csv[/]");
-        AnsiConsole.MarkupLine($"[dim]  Histograms: {Markup.Escape(prefix)}-step-cXXXX.hlog[/]");
+        foreach (var pattern in HistogramExporter.FilePatterns(prefix, opts.LatencyHistogramsFormat))
+            AnsiConsole.MarkupLine($"[dim]  Histograms: {Markup.Escape(pattern)}[/]");
     }
 
     private static void RenderResults(BenchmarkSummary summary, double maxNetUtil, ResultAnalyzer.Report analysis, LatencyDisplayType latencyDisplay)

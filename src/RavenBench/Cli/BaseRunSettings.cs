@@ -140,7 +140,7 @@ public abstract class BaseRunSettings : CommandSettings
     public string MaxErrors { get; init; } = "0.5%";
 
     [CommandOption("--output-prefix")]
-    [Description("Output path prefix for all artifacts (creates: {prefix}.json, {prefix}.csv, {prefix}-step-cXXXX.hlog)")]
+    [Description("Output path prefix for all artifacts (creates: {prefix}.json, {prefix}.csv and one histogram file per step, {prefix}-stepNNN-cCCCC.hlog or .csv by --histograms-format)")]
     public string? OutputDir { get; init; }
 
     [CommandOption("--out")]
@@ -228,7 +228,7 @@ public abstract class BaseRunSettings : CommandSettings
     public string? NodeExporterUrl { get; init; }
 
     [CommandOption("--histograms-format")]
-    [Description("Histogram export format: hlog, csv, both (default: hlog, auto-enabled when CSV output specified)")]
+    [Description("Format of the per-step histogram files: hlog (HdrHistogram interval log), csv (percentile table), both (default: hlog). Files are written next to --output-prefix, or next to --out-csv when no prefix is given")]
     public string HistogramsFormat { get; init; } = "hlog";
 
     [CommandOption("--search-engine")]
