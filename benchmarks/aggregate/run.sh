@@ -83,30 +83,30 @@ start_endpoint_if_needed
 
 RUN_ARGS=(aggregate --target "$TARGET")
 
-if ! has_option --url "${PASSTHROUGH[@]}"; then
+if ! has_option --url ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
   RUN_ARGS+=(--url "$DEFAULT_URL")
 fi
 
-if ! has_option --database "${PASSTHROUGH[@]}"; then
+if ! has_option --database ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
   # A fresh database per invocation; the harness creates it through the target's own connection.
   RUN_DATABASE="$(run_database_name)"
   RUN_ARGS+=(--database "$RUN_DATABASE")
 fi
 
-if ! has_option --scenario "${PASSTHROUGH[@]}"; then
+if ! has_option --scenario ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
   RUN_ARGS+=(--scenario "$SCENARIO_DEFAULT")
 fi
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-if has_option --output-prefix "${PASSTHROUGH[@]}"; then
-  RESULT_PREFIX="$(value_of --output-prefix "${PASSTHROUGH[@]}")"
+if has_option --output-prefix ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
+  RESULT_PREFIX="$(value_of --output-prefix ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})"
 else
   mkdir -p "$RESULTS_DIR"
   RESULT_PREFIX="$RESULTS_DIR/${TARGET}-${RUN_ID}"
   RUN_ARGS+=(--output-prefix "$RESULT_PREFIX")
 fi
 
-RUN_ARGS+=("${PASSTHROUGH[@]}")
+RUN_ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})
 
 echo "Running the aggregate runs against $TARGET."
 AGGREGATE_STATUS=0

@@ -91,19 +91,32 @@ value_of() {
   return 1
 }
 
-host_of_url() {
-  local host_port="${1#*://}"
-  host_port="${host_port%%/*}"
-  host_port="${host_port##*@}"
-  echo "${host_port%%:*}"
+# The authority of a URL without scheme, path or userinfo, for example "[::1]:8080" or "host".
+authority_of_url() {
+  local authority="${1#*://}"
+  authority="${authority%%/*}"
+  echo "${authority##*@}"
 }
 
+# The host without brackets, so an IPv6 literal is the address /dev/tcp resolves.
+host_of_url() {
+  local authority
+  authority="$(authority_of_url "$1")"
+  if [[ "$authority" == \[* ]]; then
+    authority="${authority#\[}"
+    echo "${authority%%\]*}"
+  else
+    echo "${authority%%:*}"
+  fi
+}
+
+# The port after the host, or the default in $2 when the URL names none.
 port_of_url() {
-  local host_port="${1#*://}"
-  host_port="${host_port%%/*}"
-  host_port="${host_port##*@}"
-  if [[ "$host_port" == *:* ]]; then
-    echo "${host_port##*:}"
+  local authority
+  authority="$(authority_of_url "$1")"
+  [[ "$authority" == \[* ]] && authority="${authority#*\]}"
+  if [[ "$authority" == *:* ]]; then
+    echo "${authority##*:}"
   else
     echo "$2"
   fi
@@ -211,7 +224,7 @@ on_exit() {
   set +e
   stop_started_container
   local directory
-  for directory in "${RUN_DIRS[@]}"; do
+  for directory in ${RUN_DIRS[@]+"${RUN_DIRS[@]}"}; do
     if ! rm -rf "$directory"; then
       echo "warning: could not remove the run directory '$directory'; remove it by hand." >&2
     fi
@@ -223,8 +236,8 @@ on_exit() {
 resolve_endpoint() {
   URL="$DEFAULT_URL"
   URL_WAS_GIVEN=0
-  if has_option --url "${PASSTHROUGH[@]}"; then
-    URL="$(value_of --url "${PASSTHROUGH[@]}")"
+  if has_option --url ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
+    URL="$(value_of --url ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})"
     URL_WAS_GIVEN=1
   fi
   HOST="$(host_of_url "$URL")"

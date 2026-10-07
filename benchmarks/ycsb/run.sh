@@ -57,13 +57,13 @@ parse_run_options "$@"
 require_target ravendb ravendb-6 ravendb-7 postgresql mongodb documentdb
 
 COMMAND="ycsb"
-if has_option --cross-check "${PASSTHROUGH[@]}"; then
+if has_option --cross-check ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
   COMMAND="ycsb-crosscheck"
   FORWARDED=()
-  for argument in "${PASSTHROUGH[@]}"; do
+  for argument in ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; do
     [[ "$argument" == "--cross-check" ]] || FORWARDED+=("$argument")
   done
-  PASSTHROUGH=("${FORWARDED[@]}")
+  PASSTHROUGH=(${FORWARDED[@]+"${FORWARDED[@]}"})
 fi
 
 if [[ "$COMMAND" == "ycsb-crosscheck" && "$TARGET" != "postgresql" ]]; then
@@ -163,8 +163,8 @@ create_postgres_database_with_container() {
 }
 
 # A target without a client mode refuses it before any probe or container start.
-if [[ "$TARGET" == "mongodb" || "$TARGET" == "documentdb" ]] && has_option --transport "${PASSTHROUGH[@]}"; then
-  TRANSPORT="$(value_of --transport "${PASSTHROUGH[@]}")"
+if [[ "$TARGET" == "mongodb" || "$TARGET" == "documentdb" ]] && has_option --transport ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
+  TRANSPORT="$(value_of --transport ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})"
   if [[ "$TRANSPORT" != "raw" ]]; then
     echo "error: target '$TARGET' has no '--transport $TRANSPORT' mode; it runs only '--transport raw'." >&2
     exit 2
@@ -176,11 +176,11 @@ start_endpoint_if_needed
 
 RUN_ARGS=("$COMMAND" --target "$TARGET")
 
-if ! has_option --url "${PASSTHROUGH[@]}"; then
+if ! has_option --url ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
   RUN_ARGS+=(--url "$DEFAULT_URL")
 fi
 
-if ! has_option --database "${PASSTHROUGH[@]}"; then
+if ! has_option --database ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
   # A fresh database per invocation, so a rerun never loads into a keyspace that already holds
   # the bench/ ids and never needs a product-specific cleanup.
   RUN_DATABASE="$(run_database_name)"
@@ -191,20 +191,20 @@ if [[ "$TARGET" == "postgresql" && -n "$RUN_DATABASE" ]]; then
   ensure_postgres_database "$RUN_DATABASE"
 fi
 
-if ! has_option --scenario "${PASSTHROUGH[@]}"; then
+if ! has_option --scenario ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
   RUN_ARGS+=(--scenario "$SCENARIO_DEFAULT")
 fi
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-if has_option --output-prefix "${PASSTHROUGH[@]}"; then
-  RESULT_PREFIX="$(value_of --output-prefix "${PASSTHROUGH[@]}")"
+if has_option --output-prefix ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}; then
+  RESULT_PREFIX="$(value_of --output-prefix ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})"
 else
   mkdir -p "$RESULTS_DIR"
   RESULT_PREFIX="$RESULTS_DIR/${TARGET}-${RUN_ID}"
   RUN_ARGS+=(--output-prefix "$RESULT_PREFIX")
 fi
 
-RUN_ARGS+=("${PASSTHROUGH[@]}")
+RUN_ARGS+=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"})
 
 echo "Running the ycsb sequence against $TARGET."
 PATH="$HOME/.dotnet:$PATH" dotnet run --project "$REPO_ROOT/src/RavenBench/RavenBench.csproj" -c Release -- "${RUN_ARGS[@]}"
