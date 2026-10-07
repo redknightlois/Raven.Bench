@@ -61,4 +61,23 @@ public class CredentialRedactionTests
         redacted.Should().NotContain(head).And.NotContain(tail);
         redacted.Should().EndWith(after);
     }
+
+    [Theory]
+    [InlineData("postgresql://u@h/db?password=s3cret")]
+    [InlineData("host=h user=u sslpassword=s3cret")]
+    [InlineData("mongodb://u:p@h/?tlsCertificateKeyFilePassword=s3cret")]
+    [InlineData("postgresql://u@h/db?sslmode=require&PASSWORD=s3cret&application_name=x")]
+    [InlineData("host=h pwd=s3cret")]
+    public void Every_Password_Like_Value_Is_Redacted(string connectionString)
+    {
+        ConnectionStringRedaction.Redact(connectionString).Should().NotContain("s3cret");
+    }
+
+    [Theory]
+    [InlineData("postgresql://u@h/db?sslmode=require&application_name=x#frag")]
+    [InlineData("host=h user=u sslmode=require")]
+    public void A_Credential_Free_String_Is_Unchanged(string connectionString)
+    {
+        ConnectionStringRedaction.Redact(connectionString).Should().Be(connectionString);
+    }
 }

@@ -6,8 +6,8 @@ namespace RavenBench.Core.Transport;
 /// Replaces the password of a connection-string endpoint with a fixed token, so a result records
 /// where a run addressed its target without carrying the credential. A URI's authority bounds the
 /// search, so a credential-free URI is returned unchanged even when its query carries an <c>@</c>.
-/// A keyword string has its <c>Password</c> or <c>Pwd</c> value replaced and every other key
-/// copied byte for byte.
+/// A URI query option whose name contains "password", and a keyword string key whose name
+/// contains "password" or equals "pwd", have the value replaced; every other key is copied byte for byte.
 /// </summary>
 internal static class ConnectionStringRedaction
 {
@@ -16,7 +16,7 @@ internal static class ConnectionStringRedaction
 
     internal static string Redact(string connectionString) =>
         connectionString.Contains(SchemeSeparator, StringComparison.Ordinal)
-            ? RedactUriPassword(connectionString)
+            ? RedactQueryPasswords(RedactUriPassword(connectionString))
             : RedactKeywordPassword(connectionString);
 
     private static string RedactUriPassword(string connectionString)
@@ -39,6 +39,27 @@ internal static class ConnectionStringRedaction
 
         return string.Concat(connectionString.AsSpan(0, colon + 1), RedactionToken, connectionString.AsSpan(at));
     }
+
+    private static string RedactQueryPasswords(string uri)
+    {
+        var queryStart = uri.IndexOf('?');
+        if (queryStart < 0)
+            return uri;
+
+        var queryEnd = uri.IndexOf('#', queryStart);
+        if (queryEnd < 0)
+            queryEnd = uri.Length;
+
+        var options = uri[(queryStart + 1)..queryEnd].Split('&').Select(option =>
+        {
+            var equals = option.IndexOf('=');
+            return equals >= 0 && IsPasswordKey(option.AsSpan(0, equals)) ? string.Concat(option.AsSpan(0, equals + 1), RedactionToken) : option;
+        });
+        return string.Concat(uri.AsSpan(0, queryStart + 1), string.Join('&', options), uri.AsSpan(queryEnd));
+    }
+
+    private static bool IsPasswordKey(ReadOnlySpan<char> name) =>
+        name.Contains("password", StringComparison.OrdinalIgnoreCase) || name.Equals("pwd", StringComparison.OrdinalIgnoreCase);
 
     private static string RedactKeywordPassword(string connectionString)
     {
@@ -97,7 +118,7 @@ internal static class ConnectionStringRedaction
                 }
             }
 
-            if (name.Equals("Password", StringComparison.OrdinalIgnoreCase) || name.Equals("Pwd", StringComparison.OrdinalIgnoreCase))
+            if (IsPasswordKey(name))
                 builder.Append(isQuoted ? "'***'" : RedactionToken);
             else
                 builder.Append(connectionString, valueStart, i - valueStart);
