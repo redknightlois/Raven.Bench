@@ -706,6 +706,9 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
     public async Task<IReadOnlyDictionary<string, string>?> ReadStoredFieldsAsync(string id, CancellationToken ct)
     {
         using var response = await _http.GetAsync(_origin + DocumentTarget(id), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
