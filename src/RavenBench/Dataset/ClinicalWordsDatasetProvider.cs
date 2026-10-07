@@ -97,7 +97,7 @@ public sealed class ClinicalWordsDatasetProvider : HeldOutVectorDataset
 
             Console.WriteLine($"[ClinicalWords] Loading {_dimensions}D vectors from {path}");
 
-            _wordVectors = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+            _wordVectors = new Dictionary<string, float[]>(StringComparer.Ordinal);
 
             using var stream = File.OpenRead(path);
             using var reader = await ParquetReader.CreateAsync(stream);
