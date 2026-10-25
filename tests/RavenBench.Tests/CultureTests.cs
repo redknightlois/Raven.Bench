@@ -28,16 +28,13 @@ public class CultureTests
         }
     }
 
-    private static ServerMetrics ParseServerSample(string workingSet, string totalProcessorTime) =>
-        RavenServerMetricsCollector.Parse(
-            $$$"""{"MemoryInformation":{"WorkingSet":"{{{workingSet}}}"}}""",
-            $$$"""{"CpuStats":[{"TotalProcessorTime":"{{{totalProcessorTime}}}"}]}""",
-            serverCores: 4);
+    private static ServerMetrics ParseServerSample(string totalProcessorTime) =>
+        RavenServerMetricsCollector.Parse($$$"""{"CpuStats":[{"TotalProcessorTime":"{{{totalProcessorTime}}}"}]}""", serverCores: 4);
 
     [Fact]
     public void WorkingSet_Parses_Under_A_Comma_Decimal_Culture()
     {
-        Under("de-DE", () => ParseServerSample("3.231 GBytes", "00:00:00")).MemoryUsageMB.Should().Be(3308);
+        Under("de-DE", () => RavenServerMetricsCollector.ParseMemoryMB("""{"MemoryInformation":{"WorkingSet":"3.231 GBytes"}}""")).Should().Be(3308);
     }
 
     [Theory]
@@ -53,9 +50,9 @@ public class CultureTests
     [Fact]
     public void TotalProcessorTime_Parses_Under_A_Comma_Decimal_Culture()
     {
-        var start = ParseServerSample("1 MBytes", "00:00:00") with { Timestamp = DateTime.UnixEpoch };
-        var end = Under("de-DE", () => ParseServerSample("1 MBytes", "00:00:01.5000000")) with { Timestamp = DateTime.UnixEpoch.AddSeconds(1) };
-        var invariantEnd = ParseServerSample("1 MBytes", "00:00:01.5000000") with { Timestamp = end.Timestamp };
+        var start = ParseServerSample("00:00:00") with { Timestamp = DateTime.UnixEpoch };
+        var end = Under("de-DE", () => ParseServerSample("00:00:01.5000000")) with { Timestamp = DateTime.UnixEpoch.AddSeconds(1) };
+        var invariantEnd = ParseServerSample("00:00:01.5000000") with { Timestamp = end.Timestamp };
 
         end.ServerProcessorTime.Should().Be(TimeSpan.FromSeconds(1.5));
         ServerMetricsTracker.CpuPercent(start, end).Should().Be(ServerMetricsTracker.CpuPercent(start, invariantEnd));

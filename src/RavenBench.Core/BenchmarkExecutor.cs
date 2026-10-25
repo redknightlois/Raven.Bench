@@ -86,7 +86,10 @@ namespace RavenBench.Core
                 // The measurement window closes here. The exception dump and the result
                 // construction below run outside it, so neither enters the load-host CPU figure.
                 _cpuTracker.Stop();
+                _serverTracker?.Stop();
                 var nodeWindow = nodeStart == null ? null : await _nodeExporter!.EndWindowAsync(nodeStart, cancellationToken);
+                var serverMemoryMB = nodeWindow != null ? nodeWindow.MemoryMB
+                    : _serverTracker != null ? await _serverTracker.ReadMemoryMBAsync() : null;
 
                 var exSnap = exTracker.Take();
                 if (exSnap.Total > 0)
@@ -108,7 +111,7 @@ namespace RavenBench.Core
                 }
 
                 var result = BuildStepResult(
-                    loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics, nodeWindow);
+                    loadGenerator, stepIndex, currentStepValue, latencyRecorder, metrics, nodeWindow, serverMemoryMB);
 
                 if (result.InvalidReason != null)
                     Console.WriteLine(ClientSaturation.ConsoleLine(stepIndex + 1, currentStepValue, _runName, result.InvalidReason));
@@ -131,7 +134,8 @@ namespace RavenBench.Core
             int currentStepValue,
             LatencyRecorder latencyRecorder,
             LoadGeneratorMetrics metrics,
-            NodeExporterWindow? nodeWindow)
+            NodeExporterWindow? nodeWindow,
+            long? serverMemory)
         {
 
             var serverMetrics = _serverTracker?.Current ?? new ServerMetrics();
@@ -156,7 +160,6 @@ namespace RavenBench.Core
             // node_exporter, when the operator configured it, fills both columns for every product;
             // otherwise the RavenDB debug endpoints fill them for a RavenDB target.
             var serverCpu = nodeWindow != null ? nodeWindow.CpuPercent : serverMetrics.CpuUsagePercent;
-            var serverMemory = nodeWindow != null ? nodeWindow.MemoryMB : serverMetrics.MemoryUsageMB;
             var source = nodeWindow != null ? NodeExporterClient.SourceName : RavenDebugSource;
 
             var result = new StepResult

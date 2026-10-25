@@ -20,7 +20,6 @@ public sealed record ServerMetrics
     /// <summary>Core count the server reports for itself; null when the server does not report it.</summary>
     public int? ServerCores { get; init; }
 
-    public long? MemoryUsageMB { get; init; }
     public int? ActiveConnections { get; init; }
     public double? RequestsPerSecond { get; init; }
     public int? QueuedRequests { get; init; }
@@ -112,6 +111,17 @@ public sealed class ServerMetricsTracker : IDisposable
             _isRunning = false;
             _timer.Change(Timeout.Infinite, Timeout.Infinite);
         }
+    }
+
+    /// <summary>
+    /// The server's working set in MB; null when unknown. Reading it stalls the server's requests, so no poll
+    /// reads it and a caller reads it outside a measurement window.
+    /// </summary>
+    public async Task<long?> ReadMemoryMBAsync()
+    {
+        // The read's own exceptions are not the measured step's.
+        using var suppress = RavenBench.Core.Diagnostics.FirstChanceExceptionTracker.Suppress();
+        return await _transport.GetServerMemoryMBAsync();
     }
 
     public ServerMetrics Current

@@ -647,6 +647,9 @@ public sealed class RawHttpTransport : ITransport, IReportsStorageSize, IInspect
         return await RavenServerMetricsCollector.CollectAsync(_baseUrl, _db, HttpHelper.FormatHttpVersion(_httpVersion));
     }
 
+    public Task<long?> GetServerMemoryMBAsync() =>
+        RavenServerMetricsCollector.CollectMemoryMBAsync(_baseUrl, _db, HttpHelper.FormatHttpVersion(_httpVersion));
+
     public Task<SnmpSample> GetSnmpMetricsAsync(SnmpOptions snmpOptions, string? databaseName = null)
     {
         return _admin.GetSnmpMetricsAsync(snmpOptions, databaseName);

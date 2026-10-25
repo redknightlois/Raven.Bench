@@ -400,6 +400,28 @@ public class ServerMetricsTrackerTests
     }
 
     [Fact]
+    public async Task Polls_Never_Read_The_Server_Memory()
+    {
+        var memoryReads = 0;
+        var gate = new PollGate();
+        var transport = new TestTransport
+        {
+            ServerMetricsSource = gate.PollAsync,
+            ServerMemorySource = () => Task.FromResult<long?>(++memoryReads * 1000L)
+        };
+        using var tracker = new ServerMetricsTracker(transport, new RunOptions { Url = "http://localhost", Database = "test" });
+
+        tracker.Start();
+        (await gate.NextAsync()).SetResult(Sample(0, 0, 4));
+        (await gate.NextAsync()).SetResult(Sample(1, 1, 4));
+        await gate.NextAsync();
+        tracker.Stop();
+
+        memoryReads.Should().Be(0);
+        (await tracker.ReadMemoryMBAsync()).Should().Be(1000);
+    }
+
+    [Fact]
     public void Each_Start_Opens_A_Measurement_Window_That_Stop_Closes()
     {
         var (tracker, _) = GatedTracker();
