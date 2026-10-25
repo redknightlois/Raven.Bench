@@ -240,8 +240,7 @@ public class YcsbRunnerIntegrationTests : EmbeddedRavenTestBase
                 "the ycsb path reaches the one attribution its siblings use");
         }
 
-        // The tracker is wired into the ycsb path, so a run long enough for the collector's poll
-        // carries at least the memory column somewhere in the sequence.
+        // The tracker is wired into the ycsb path, so each step reads the server memory once after its window closes.
         results.SelectMany(r => r.Summary.Steps).Should().Contain(s => s.ServerMemoryMB.HasValue,
             "a RavenDB ycsb target drives the server metrics tracker");
 

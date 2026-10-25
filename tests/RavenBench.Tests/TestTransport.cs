@@ -33,7 +33,6 @@ public sealed class TestTransport : ITransport
         _serverMetrics = new ServerMetrics
         {
             CpuUsagePercent = 25.0,
-            MemoryUsageMB = 512,
             ActiveConnections = 10,
             RequestsPerSecond = 100.0,
             QueuedRequests = 2,
@@ -79,6 +78,11 @@ public sealed class TestTransport : ITransport
     public Func<Task<ServerMetrics>>? ServerMetricsSource { get; init; }
 
     public Task<ServerMetrics> GetServerMetricsAsync() => ServerMetricsSource?.Invoke() ?? Task.FromResult(_serverMetrics);
+
+    /// <summary>Replaces the fixed working set, for a test that counts or scripts each memory read.</summary>
+    public Func<Task<long?>>? ServerMemorySource { get; init; }
+
+    public Task<long?> GetServerMemoryMBAsync() => ServerMemorySource?.Invoke() ?? Task.FromResult<long?>(512);
 
     /// <summary>Replaces the fixed SNMP sample, for a test that scripts each poll.</summary>
     public Func<SnmpSample>? SnmpSource { get; init; }

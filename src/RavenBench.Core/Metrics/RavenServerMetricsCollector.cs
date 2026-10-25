@@ -19,7 +19,7 @@ public static class RavenServerMetricsCollector
     private static readonly ConcurrentDictionary<string, int> _serverCores = new();
 
     /// <summary>
-    /// Reads the server's working set, its cumulative process CPU time and its core count.
+    /// Reads the server's cumulative process CPU time and its core count.
     /// The CPU percent is left to the caller, which averages it over a window of its own.
     /// </summary>
     public static async Task<ServerMetrics> CollectAsync(string baseUrl, string database, string? httpVersion = null)
@@ -29,13 +29,12 @@ public static class RavenServerMetricsCollector
             var store = GetStore(baseUrl, database, httpVersion);
             var httpClient = store.GetRequestExecutor().HttpClient;
 
-            var memoryStatsTask = httpClient.GetStringAsync($"{baseUrl}/admin/debug/memory/stats");
             var cpuStatsTask = httpClient.GetStringAsync($"{baseUrl}/admin/debug/cpu/stats");
             var coresTask = GetServerCoresAsync(httpClient, baseUrl);
 
-            await Task.WhenAll(memoryStatsTask, cpuStatsTask, coresTask);
+            await Task.WhenAll(cpuStatsTask, coresTask);
 
-            return Parse(await memoryStatsTask, await cpuStatsTask, await coresTask);
+            return Parse(await cpuStatsTask, await coresTask);
         }
         catch (Exception ex)
         {
@@ -47,18 +46,39 @@ public static class RavenServerMetricsCollector
         }
     }
 
-    /// <summary>Builds a sample from the bodies of the memory and CPU debug endpoints.</summary>
-    internal static ServerMetrics Parse(string memoryStatsJson, string cpuStatsJson, int? serverCores)
+    /// <summary>
+    /// Reads the server's working set; null when the read fails or the server does not report it.
+    /// The memory endpoint walks the page tables of the server process, which stalls the server's
+    /// requests while it runs, so a caller reads it outside a measurement window.
+    /// </summary>
+    public static async Task<long?> CollectMemoryMBAsync(string baseUrl, string database, string? httpVersion = null)
     {
-        var memoryStats = JsonSerializer.Deserialize<MemoryStatsResult>(memoryStatsJson);
+        try
+        {
+            var httpClient = GetStore(baseUrl, database, httpVersion).GetRequestExecutor().HttpClient;
+            return ParseMemoryMB(await httpClient.GetStringAsync($"{baseUrl}/admin/debug/memory/stats"));
+        }
+        catch (Exception)
+        {
+            // Server metrics are supplementary, as for the CPU poll: a failed read leaves the memory figure unknown.
+            return null;
+        }
+    }
+
+    /// <summary>Builds a sample from the body of the CPU debug endpoint.</summary>
+    internal static ServerMetrics Parse(string cpuStatsJson, int? serverCores)
+    {
         var cpuStats = JsonSerializer.Deserialize<CpuStatsResult>(cpuStatsJson);
         return new ServerMetrics
         {
             ServerProcessorTime = ParseProcessorTime(cpuStats?.CpuStats?.FirstOrDefault()?.TotalProcessorTime),
-            ServerCores = serverCores,
-            MemoryUsageMB = ExtractMemoryMB(memoryStats?.MemoryInformation?.WorkingSet)
+            ServerCores = serverCores
         };
     }
+
+    /// <summary>The working set in the body of the memory debug endpoint.</summary>
+    internal static long? ParseMemoryMB(string memoryStatsJson) =>
+        ExtractMemoryMB(JsonSerializer.Deserialize<MemoryStatsResult>(memoryStatsJson)?.MemoryInformation?.WorkingSet);
 
     private static DocumentStore GetStore(string baseUrl, string database, string? httpVersion)
     {
@@ -82,7 +102,7 @@ public static class RavenServerMetricsCollector
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
-            // An unknown core count leaves the server CPU figure unknown; memory is still valid.
+            // An unknown core count leaves the server CPU figure unknown; the CPU time is still valid.
         }
         return null;
     }

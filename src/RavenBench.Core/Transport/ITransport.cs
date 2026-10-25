@@ -146,6 +146,9 @@ public interface ITransport : IYcsbTransport
     Task<int?> GetServerMaxCoresAsync();
     Task<ServerMetrics> GetServerMetricsAsync();
 
+    /// <summary>The server's working set in MB; null when unknown. Reading it stalls the server's requests, so it is read outside a measurement window.</summary>
+    Task<long?> GetServerMemoryMBAsync();
+
     /// <summary>
     /// Returns SNMP metrics as a structured sample.
     /// When databaseName is provided, queries database-specific OIDs; otherwise queries server-wide OIDs.
